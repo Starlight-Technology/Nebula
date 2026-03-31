@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="docker-compose.yml" />
+    <File Path="ollama-start.sh" />
+  </Folder>
+  <Project Path="Nebula.Agent.Test/Nebula.Agent.Test.csproj" />
+  <Project Path="Nebula.Agent/Nebula.Agent.csproj" />
+  <Project Path="Nebula.Cli/Nebula.Cli.csproj" />
+  <Project Path="Nebula.Llama.Client/Nebula.Llama.Client.csproj" />
+  <Project Path="Nebula.Runner/Nebula.Runner.csproj" />
+</Solution>
