@@ -1,4 +1,4 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="Manager.cs" company="Starlight-Technology">
 //     Author:  
 //     Copyright (c) Starlight-Technology. All rights reserved.
@@ -11,38 +11,30 @@ using System.Text.Json;
 
 namespace Nebula.Agent;
 
-public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManager
+public class Manager(ILlamaClient llamaClient, IShellExecutor executor, IJsonExtractor jsonExtractor, ILogger logger) : IManager
 {
-    string lastPrompt = string.Empty;
+    private string lastPrompt = string.Empty;
 
-    async Task<string> ExtractJsonObject(string input)
+    private async Task<string> ExtractJsonObjectAsync(string input)
     {
         try
         {
-            int start = input.IndexOf('{');
-            int end = input.LastIndexOf('}');
-
-            if ((start < 0) || (end < 0) || (end <= start))
-                throw new Exception("No valid JSON object found.");
-
-            return input.Substring(start, (end - start) + 1);
+            return jsonExtractor.ExtractJsonObject(input);
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
-            Console.WriteLine($"Error extracting JSON: {ex.Message}");
-
-            return await GetCommandStep(lastPrompt);
+            logger.LogError($"Error extracting JSON: {ex.Message}");
+            throw;
         }
-
     }
 
-    async Task<string> GetCommandStep(string action)
+    private async Task<string> GetCommandStep(string action)
     {
         lastPrompt = action;
 
         string commandsStr = await GenerateCommandSteps(action);
 
-        string json = await ExtractJsonObject(commandsStr);
+        string json = await ExtractJsonObjectAsync(commandsStr);
 
         CommandSteps? wrapper = JsonSerializer.Deserialize<CommandSteps>(json);
 
@@ -56,21 +48,24 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
         return "Commands executed";
     }
 
-    async Task<string> HandleChat(string message) { return await llamaClient.GetResponseAsync(message); }
+    private async Task<string> HandleChat(string message) 
+    { 
+        return await llamaClient.GetResponseAsync(message); 
+    }
 
-    async Task VerifyCommand(Command command)
+    private async Task VerifyCommand(Command command)
     {
         if ((await VerifyCommandSafetyAsync(command)) && (await VerifyCommandCorrectAsync(command)))
         {
             string result = await executor.RunCommandAsync(command.Run);
-            Console.WriteLine(result);
+            logger.Log(result);
             return;
         }
 
         await GetCommandStep(command.Objective);
     }
 
-    async Task<bool> VerifyCommandCorrectAsync(Command command)
+    public async Task<bool> VerifyCommandCorrectAsync(Command command)
     {
         string response = await llamaClient.GetResponseAsync(
             $$"""
@@ -80,7 +75,7 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
         return response.Trim().Equals("Yes", StringComparison.OrdinalIgnoreCase);
     }
 
-    async Task<bool> VerifyCommandSafetyAsync(Command command)
+    public async Task<bool> VerifyCommandSafetyAsync(Command command)
     {
         string response = await llamaClient.GetResponseAsync(
             $$"""
@@ -92,6 +87,9 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
 
     public async Task<string> GenerateCommandSteps(string userRequest)
     {
+        if (string.IsNullOrWhiteSpace(userRequest))
+            throw new ArgumentException("User request cannot be null or empty.", nameof(userRequest));
+
         string payloadPrompt = $$"""
                         You are a command planner.
 
@@ -122,17 +120,21 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
         {
             if (string.IsNullOrWhiteSpace(prompt))
                 return "The prompt are empty, write something.";
-            ClassificationResult classification = llamaClient.ClassifyPrompt(prompt).GetAwaiter().GetResult();
+
+            ClassificationResult classification = await llamaClient.ClassifyPrompt(prompt);
+
             return classification switch
             {
                 ClassificationResult.Action => await GetCommandStep(prompt),
-                ClassificationResult.Chat =>await HandleChat(prompt),
-                _ => await ManageResponse(prompt)
+                ClassificationResult.Chat => await HandleChat(prompt),
+                _ => "Unable to classify the prompt. Please try again with a clearer request."
             };
         }
         catch (Exception ex)
         {
-            return $"Error managing response: {ex.Message}";
+            logger.LogError($"Error managing response: {ex.Message}");
+            logger.LogError($"Retrying prompt: {prompt}");
+            return await ManageResponse(prompt);
         }
     }
 }

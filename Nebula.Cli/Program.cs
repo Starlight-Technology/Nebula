@@ -10,6 +10,8 @@ var services = new ServiceCollection();
 // registre suas interfaces aqui
 services.AddSingleton<ILlamaClient, LlamaClient>();
 services.AddSingleton<IShellExecutor, ShellExecutor>();
+services.AddSingleton<IJsonExtractor, JsonExtractor>();
+services.AddSingleton<ILogger, ConsoleLogger>();
 services.AddSingleton<IManager, Manager>();
 
 var provider = services.BuildServiceProvider();
@@ -24,7 +26,7 @@ Console.WriteLine(response);
 Console.WriteLine("LLM OK");
 
 Console.WriteLine("Starting LLM");
-response = await manager.ManageResponse("list files on c");
+response = await manager.ManageResponse("list files on driver c:");
 
 Console.WriteLine(response);
 
