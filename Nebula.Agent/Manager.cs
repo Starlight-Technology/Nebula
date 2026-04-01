@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 using Nebula.Llama.Client;
 using Nebula.Runner;
+
 using System.Text.Json;
 
 namespace Nebula.Agent;
@@ -21,11 +22,12 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
             int start = input.IndexOf('{');
             int end = input.LastIndexOf('}');
 
-            if((start < 0) || (end < 0) || (end <= start))
+            if ((start < 0) || (end < 0) || (end <= start))
                 throw new Exception("No valid JSON object found.");
 
             return input.Substring(start, (end - start) + 1);
-        } catch(Exception ex)
+        }
+        catch (Exception ex)
         {
             Console.WriteLine($"Error extracting JSON: {ex.Message}");
 
@@ -46,7 +48,7 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
 
         List<Command> commands = wrapper?.Steps ?? new List<Command>();
 
-        foreach(Command command in commands)
+        foreach (Command command in commands)
         {
             await VerifyCommand(command);
         }
@@ -58,7 +60,7 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
 
     async Task VerifyCommand(Command command)
     {
-        if((await VerifyCommandSafetyAsync(command)) && (await VerifyCommandCorrectAsync(command)))
+        if ((await VerifyCommandSafetyAsync(command)) && (await VerifyCommandCorrectAsync(command)))
         {
             string result = await executor.RunCommandAsync(command.Run);
             Console.WriteLine(result);
@@ -72,7 +74,7 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
     {
         string response = await llamaClient.GetResponseAsync(
             $$"""
-            Response only with "Yes" or "No". This following command {{command.Run}} execute {{command.Objective}} on {{(OperatingSystem.IsWindows() ? "Windows" : "Linux")}}? Command: {{command.Run}}
+            Response only with "Yes" or "No". This following command {{command.Run}} execute EXACTLY {{command.Objective}} on {{(OperatingSystem.IsWindows() ? "Windows" : "Linux")}}? Command: {{command.Run}}
             """);
 
         return response.Trim().Equals("Yes", StringComparison.OrdinalIgnoreCase);
@@ -114,22 +116,23 @@ public class Manager(ILlamaClient llamaClient, IShellExecutor executor) : IManag
         return await llamaClient.GetResponseAsync(payloadPrompt);
     }
 
-    public Task<string> ManageResponse(string prompt)
+    public async Task<string> ManageResponse(string prompt)
     {
         try
         {
-            if(string.IsNullOrWhiteSpace(prompt))
-                return Task.FromResult("The prompt are empty, write something.");
+            if (string.IsNullOrWhiteSpace(prompt))
+                return "The prompt are empty, write something.";
             ClassificationResult classification = llamaClient.ClassifyPrompt(prompt).GetAwaiter().GetResult();
             return classification switch
             {
-                ClassificationResult.Action => GetCommandStep(prompt),
-                ClassificationResult.Chat => HandleChat(prompt),
-                _ => Task.FromResult($"Unknown classification for prompt: {prompt}")
+                ClassificationResult.Action => await GetCommandStep(prompt),
+                ClassificationResult.Chat =>await HandleChat(prompt),
+                _ => await ManageResponse(prompt)
             };
-        } catch(Exception ex)
+        }
+        catch (Exception ex)
         {
-            return Task.FromResult($"Error managing response: {ex.Message}");
+            return $"Error managing response: {ex.Message}";
         }
     }
 }

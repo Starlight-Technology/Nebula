@@ -1,10 +1,5 @@
-﻿using Microsoft.VisualBasic;
-
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
-
-using static System.Net.WebRequestMethods;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Nebula.Llama.Client;
 
