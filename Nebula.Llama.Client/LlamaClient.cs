@@ -44,7 +44,7 @@ public class LlamaClient : ILlamaClient
         {
             "action" => ClassificationResult.Action,
             "chat" => ClassificationResult.Chat,
-            _ => ClassificationResult.Unknown
+            _ => await ClassifyPrompt(prompt)
         };
 
     }

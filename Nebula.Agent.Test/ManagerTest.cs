@@ -152,29 +152,27 @@ public class ManagerTest
     }
 
     [Fact]
-    public async Task ManageResponse_WhenExceptionOccurs_ShouldReturnErrorMessage()
-    {
-        // Arrange
-        var testPrompt = "Test prompt";
-        var testException = new InvalidOperationException("Test error");
+       public async Task ManageResponse_WhenExceptionOccurs_ShouldRethrowException()
+       {
+           // Arrange
+           var testPrompt = "Test prompt";
+           var testException = new InvalidOperationException("Test error");
 
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ThrowsAsync(testException);
+           var llamaClientMock = CreateMockLlamaClient();
+           llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
+               .ThrowsAsync(testException);
 
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
+           var executorMock = CreateMockExecutor();
+           var jsonExtractorMock = CreateMockJsonExtractor();
+           var loggerMock = CreateMockLogger();
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+           var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
 
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
-
-        // Assert
-        Assert.Contains("Error managing response:", result);
-        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.Once);
-    }
+           // Act & Assert
+           var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.ManageResponse(testPrompt));
+           Assert.Equal("Test error", ex.Message);
+           loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.Once);
+       }
 
     #endregion
 
@@ -470,9 +468,12 @@ public class ManagerTest
         var llamaClientMock = CreateMockLlamaClient();
         llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
             .ReturnsAsync(ClassificationResult.Action);
+
+        // Setup sequence for multiple GetResponseAsync calls
         llamaClientMock.SetupSequence(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(commandJson)
-            .ReturnsAsync("No"); // Not safe
+            .ReturnsAsync(commandJson)      // First call: GenerateCommandSteps
+            .ReturnsAsync("No")              // Second call: VerifyCommandSafetyAsync - returns "No" (unsafe)
+            .ReturnsAsync("Yes");            // Third call: VerifyCommandCorrectAsync - would return "Yes" but safety failed first
 
         var executorMock = CreateMockExecutor();
         var jsonExtractorMock = CreateMockJsonExtractor();
@@ -489,6 +490,7 @@ public class ManagerTest
         // Assert
         // Command should not be executed since safety check failed
         executorMock.Verify(x => x.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.AtLeastOnce);
     }
 
     #endregion
@@ -496,7 +498,7 @@ public class ManagerTest
     #region JSON Extraction Error Handling Tests
 
     [Fact]
-    public async Task ManageResponse_WithJsonExtractionError_ShouldHandleGracefully()
+    public async Task ManageResponse_WithJsonExtractionError_ShouldRethrowException()
     {
         // Arrange
         var testPrompt = "Create a file";
@@ -518,9 +520,10 @@ public class ManagerTest
         var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
 
         // Act & Assert
-        // Should handle the error gracefully
-        _ = await manager.ManageResponse(testPrompt);
-        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.Once);
+        // Should re-throw the JSON extraction error
+        _ = await Assert.ThrowsAsync<ArgumentException>(() => manager.ManageResponse(testPrompt));
+        // LogError is called both in ExtractJsonObjectAsync and in ManageResponse catch block
+        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.AtLeastOnce);
     }
 
     #endregion

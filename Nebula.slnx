@@ -8,5 +8,7 @@
   <Project Path="Nebula.Agent/Nebula.Agent.csproj" />
   <Project Path="Nebula.Cli/Nebula.Cli.csproj" />
   <Project Path="Nebula.Llama.Client/Nebula.Llama.Client.csproj" />
+  <Project Path="Nebula.Mongo.Context/Nebula.Mongo.Context.csproj" />
+  <Project Path="Nebula.Postgres.Context/Nebula.Postgres.Context.csproj" />
   <Project Path="Nebula.Runner/Nebula.Runner.csproj" />
 </Solution>
