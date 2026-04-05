@@ -71,10 +71,8 @@ public class Manager(
 
     private async Task VerifyCommand(Command command)
     {
-        bool isSafe = await VerifyCommandSafetyAsync(command);
-        bool isCorrect = await VerifyCommandCorrectAsync(command);
-
-        if (isSafe && isCorrect)
+        if (await VerifyCommandCorrectAsync(command) && 
+            await VerifyCommandSafetyAsync(command))
         {
             // Persist verified command before execution
             if (commandRepository != null)
@@ -94,8 +92,8 @@ public class Manager(
                 var verification = new CommandVerification
                 {
                     CommandId = savedCommand.Id,
-                    IsCorrect = isCorrect,
-                    IsSafe = isSafe,
+                    IsCorrect = true,
+                    IsSafe = true,
                     VerificationNotes = "Command passed correctness and safety verification"
                 };
 
@@ -113,36 +111,12 @@ public class Manager(
                 string result = await executor.RunCommandAsync(command.Run);
                 logger.Log(result);
             }
-            return;
         }
-
-        // Record failed verification
-        if (commandRepository != null)
+        else
         {
-            var storedCommand = new StoredCommand
-            {
-                RequestId = currentRequestId,
-                CommandId = command.Id,
-                Objective = command.Objective,
-                Command = command.Run,
-                OsType = PlatformDetector.GetCurrentOsType(),
-                Executed = false
-            };
-
-            var savedCommand = await commandRepository.SaveAsync(storedCommand);
-
-            var failedVerification = new CommandVerification
-            {
-                CommandId = savedCommand.Id,
-                IsCorrect = isCorrect,
-                IsSafe = isSafe,
-                VerificationNotes = $"Verification failed - Safe: {isSafe}, Correct: {isCorrect}"
-            };
-
-            await commandRepository.SaveVerificationAsync(failedVerification);
+            await ManageResponse(command.Objective);
         }
 
-        logger.LogError($"Command verification failed for objective: {command.Objective}. Safe: {isSafe}, Correct: {isCorrect}");
     }
 
     public async Task<bool> VerifyCommandCorrectAsync(Command command)
@@ -201,30 +175,38 @@ public class Manager(
             if (string.IsNullOrWhiteSpace(prompt))
                 return "The prompt are empty, write something.";
 
-            // Create new request context
             currentRequestId = Guid.NewGuid();
 
             ClassificationResult classification = await llamaClient.ClassifyPrompt(prompt);
 
-            // Persist prompt request
+            var promptRequest = new PromptRequest
+            {
+                Id = currentRequestId,
+                Prompt = prompt,
+                Classification = classification.ToString()
+            };
+
             if (promptRepository != null)
             {
-                var promptRequest = new PromptRequest
-                {
-                    Id = currentRequestId,
-                    Prompt = prompt,
-                    Classification = classification.ToString()
-                };
-
                 await promptRepository.SaveAsync(promptRequest);
             }
 
-            return classification switch
+            string response = classification switch
             {
                 ClassificationResult.Action => await GetCommandStep(prompt),
                 ClassificationResult.Chat => await HandleChat(prompt),
                 _ => "Unable to classify the prompt. Please try again with a clearer request."
             };
+
+            promptRequest.Response = response;
+            promptRequest.UpdatedAt = DateTime.UtcNow;
+
+            if (promptRepository != null)
+            {
+                await promptRepository.UpdateResponseAsync(currentRequestId, response);
+            }
+
+            return response;
         }
         catch (Exception ex)
         {

@@ -5,7 +5,7 @@ namespace Nebula.Agent.Test;
 public class ShellExecutorTest
 {
     [Fact]
-    public async Task RunCommandAsync_WithValidCommand_ShouldReturnOutput()
+    public async Task run_command_async_must_return_output_when_command_is_valid()
     {
         // Arrange
         var executor = new ShellExecutor();
@@ -20,7 +20,7 @@ public class ShellExecutorTest
     }
 
     [Fact]
-    public async Task RunCommandAsync_WithInvalidCommand_ShouldReturnError()
+    public async Task run_command_async_must_return_error_output_when_command_is_invalid()
     {
         // Arrange
         var executor = new ShellExecutor();
@@ -37,7 +37,7 @@ public class ShellExecutorTest
     [Theory]
     [InlineData("echo test")]
     [InlineData("echo another test")]
-    public async Task RunCommandAsync_WithDifferentCommands_ShouldProcessEach(string command)
+    public async Task run_command_async_must_return_result_when_command_changes(string command)
     {
         // Arrange
         var executor = new ShellExecutor();

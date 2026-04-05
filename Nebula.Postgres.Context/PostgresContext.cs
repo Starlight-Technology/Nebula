@@ -23,6 +23,7 @@ public class PostgresContext : DbContext
             b.HasKey(x => x.Id);
             b.Property(x => x.Prompt).IsRequired();
             b.Property(x => x.Classification).IsRequired();
+            b.Property(x => x.Response);
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
         });

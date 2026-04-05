@@ -4,13 +4,23 @@ namespace Nebula.Agent.Data;
 /// No-operation implementation of IPromptRequestRepository.
 /// Used when database persistence is not configured.
 /// </summary>
-public class NoOpPromptRequestRepository : IPromptRequestRepository
+public class NoOpPromptRequestRepository : IPromptRequestStore
 {
     public Task<PromptRequest> SaveAsync(PromptRequest request, CancellationToken cancellationToken = default)
     {
         request.CreatedAt = DateTime.UtcNow;
         request.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult(request);
+    }
+
+    public Task<PromptRequest?> UpdateResponseAsync(Guid id, string response, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult<PromptRequest?>(new PromptRequest
+        {
+            Id = id,
+            Response = response,
+            UpdatedAt = DateTime.UtcNow
+        });
     }
 
     public Task<PromptRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)

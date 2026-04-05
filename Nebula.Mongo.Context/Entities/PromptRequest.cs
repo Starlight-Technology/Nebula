@@ -16,6 +16,8 @@ public class PromptRequest
 
     public string Classification { get; set; } = string.Empty;
 
+    public string? Response { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

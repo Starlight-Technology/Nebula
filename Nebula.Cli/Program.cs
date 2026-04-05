@@ -23,42 +23,40 @@ services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddSingleton<IJsonExtractor, JsonExtractor>();
 services.AddSingleton<ILogger, ConsoleLogger>();
 
-// Mongo context
 var mongoConn = configuration["MONGO_CONNECTION"] ?? "mongodb://admin:password@localhost:27017/nebula?authSource=admin";
 var mongoDb = configuration["MONGO_DATABASE"] ?? "nebula";
-// Try to verify MongoDB connectivity and authentication. If it fails, fall back to a no-op repository.
 try
 {
     var testClient = new MongoClient(mongoConn);
     var testDb = testClient.GetDatabase(mongoDb);
-    // Ping the server to verify connectivity/auth
     testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
 
     services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
-    services.AddSingleton<IPromptRequestRepository, MongoPromptRequestRepository>();
+    services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
 }
 catch (MongoAuthenticationException ex)
 {
     Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
-    services.AddSingleton<IPromptRequestRepository, NoOpPromptRequestRepository>();
+    services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 catch (Exception ex)
 {
     Console.WriteLine("Warning: Could not connect to MongoDB. Falling back to NoOpPromptRequestRepository. " + ex.Message);
-    services.AddSingleton<IPromptRequestRepository, NoOpPromptRequestRepository>();
+    services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 
-// Postgres EF Core
 var pgConn = configuration["POSTGRES_CONNECTION"] ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
 services.AddDbContext<PostgresContext>(opts => opts.UseNpgsql(pgConn));
 services.AddScoped<ICommandRepository, PostgresCommandRepository>();
+services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
+services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
 
-services.AddSingleton<IManager, Manager>();
+services.AddScoped<IManager, Manager>();
 
 var provider = services.BuildServiceProvider();
+using var scope = provider.CreateScope();
 
-// resolva o serviço principal
-var manager = provider.GetRequiredService<IManager>();
+var manager = scope.ServiceProvider.GetRequiredService<IManager>();
 
 Console.WriteLine("Starting LLM");
 var response = await manager.ManageResponse("Hello");

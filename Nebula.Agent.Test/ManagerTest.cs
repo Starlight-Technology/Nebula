@@ -1,5 +1,5 @@
 using Moq;
-
+using Nebula.Agent.Data;
 using Nebula.Llama.Client;
 using Nebula.Runner;
 
@@ -7,524 +7,369 @@ namespace Nebula.Agent.Test;
 
 public class ManagerTest
 {
-    private Mock<ILlamaClient> CreateMockLlamaClient()
-    {
-        return new Mock<ILlamaClient>();
-    }
-
-    private Mock<IShellExecutor> CreateMockExecutor()
-    {
-        return new Mock<IShellExecutor>();
-    }
-
-    private Mock<IJsonExtractor> CreateMockJsonExtractor()
-    {
-        return new Mock<IJsonExtractor>();
-    }
-
-    private Mock<ILogger> CreateMockLogger()
-    {
-        return new Mock<ILogger>();
-    }
-
-    #region ManageResponse Tests
-
     [Fact]
-    public async Task ManageResponse_WithEmptyPrompt_ShouldReturnEmptyPromptMessage()
+    public async Task manage_response_must_return_empty_prompt_message_when_prompt_is_empty()
     {
-        // Arrange
-        var llamaClientMock = CreateMockLlamaClient();
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
+        var llamaClientMock = create_llama_client_mock();
+        var manager = create_manager(llamaClientMock);
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+        var result = await manager.ManageResponse(string.Empty);
 
-        // Act
-        var result = await manager.ManageResponse("");
-
-        // Assert
         Assert.Equal("The prompt are empty, write something.", result);
-        llamaClientMock.Verify(x => x.ClassifyPrompt(It.IsAny<string>()), Times.Never);
+        llamaClientMock.Verify(client => client.ClassifyPrompt(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
-    public async Task ManageResponse_WithWhitespacePrompt_ShouldReturnEmptyPromptMessage()
+    public async Task manage_response_must_return_response_when_chat()
     {
-        // Arrange
-        var llamaClientMock = CreateMockLlamaClient();
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
+        const string prompt = "Hello, how are you?";
+        const string response = "I'm doing well, thanks for asking!";
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
 
-        // Act
-        var result = await manager.ManageResponse("   ");
+        var manager = create_manager(llamaClientMock);
 
-        // Assert
-        Assert.Equal("The prompt are empty, write something.", result);
+        var result = await manager.ManageResponse(prompt);
+
+        Assert.Equal(response, result);
+        llamaClientMock.Verify(client => client.ClassifyPrompt(prompt), Times.Once);
+        llamaClientMock.Verify(client => client.GetResponseAsync(prompt), Times.Once);
     }
 
     [Fact]
-    public async Task ManageResponse_WithChatClassification_ShouldCallHandleChat()
+    public async Task manage_response_must_return_response_when_action()
     {
-        // Arrange
-        var testPrompt = "Hello, how are you?";
-        var expectedResponse = "I'm doing well, thanks for asking!";
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Chat);
-        llamaClientMock.Setup(x => x.GetResponseAsync(testPrompt))
-            .ReturnsAsync(expectedResponse);
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
-
-        // Assert
-        Assert.Equal(expectedResponse, result);
-        llamaClientMock.Verify(x => x.ClassifyPrompt(testPrompt), Times.Once);
-        llamaClientMock.Verify(x => x.GetResponseAsync(testPrompt), Times.Once);
-    }
-
-    [Fact]
-    public async Task ManageResponse_WithActionClassification_ShouldProcessCommands()
-    {
-        // Arrange
-        var testPrompt = "Create a file";
-        var commandJson = """{"Steps": [{"Id": 1, "Objective": "Create file", "Run": "touch test.txt"}]}""";
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Action);
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(commandJson);
-
-        var executorMock = CreateMockExecutor();
-        executorMock.Setup(x => x.RunCommandAsync(It.IsAny<string>()))
-            .ReturnsAsync("File created");
-
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        jsonExtractorMock.Setup(x => x.ExtractJsonObject(commandJson))
-            .Returns(commandJson);
-
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
-
-        // Assert
-        Assert.Equal("Commands executed", result);
-        llamaClientMock.Verify(x => x.ClassifyPrompt(testPrompt), Times.Once);
-    }
-
-    [Fact]
-    public async Task ManageResponse_WithUnknownClassification_ShouldReturnErrorMessage()
-    {
-        // Arrange
-        var testPrompt = "Test prompt";
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Unknown);
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
-
-        // Assert
-        Assert.Contains("Unable to classify", result);
-        llamaClientMock.Verify(x => x.ClassifyPrompt(testPrompt), Times.Once);
-    }
-
-    [Fact]
-       public async Task ManageResponse_WhenExceptionOccurs_ShouldRethrowException()
-       {
-           // Arrange
-           var testPrompt = "Test prompt";
-           var testException = new InvalidOperationException("Test error");
-
-           var llamaClientMock = CreateMockLlamaClient();
-           llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-               .ThrowsAsync(testException);
-
-           var executorMock = CreateMockExecutor();
-           var jsonExtractorMock = CreateMockJsonExtractor();
-           var loggerMock = CreateMockLogger();
-
-           var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-           // Act & Assert
-           var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.ManageResponse(testPrompt));
-           Assert.Equal("Test error", ex.Message);
-           loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.Once);
-       }
-
-    #endregion
-
-    #region GenerateCommandSteps Tests
-
-    [Fact]
-    public async Task GenerateCommandSteps_WithValidPrompt_ShouldReturnResponse()
-    {
-        // Arrange
-        var userRequest = "Create a file";
-        var expectedResponse = """{"Steps": [{"Id": 1, "Objective": "Create file", "Run": "touch test.txt"}]}""";
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(expectedResponse);
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.GenerateCommandSteps(userRequest);
-
-        // Assert
-        Assert.Equal(expectedResponse, result);
-        llamaClientMock.Verify(x => x.GetResponseAsync(It.IsAny<string>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task GenerateCommandSteps_WithEmptyRequest_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var llamaClientMock = CreateMockLlamaClient();
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => manager.GenerateCommandSteps(""));
-    }
-
-    [Fact]
-    public async Task GenerateCommandSteps_WithNullRequest_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var llamaClientMock = CreateMockLlamaClient();
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => manager.GenerateCommandSteps(null!));
-    }
-
-    [Fact]
-    public async Task GenerateCommandSteps_WithWhitespaceRequest_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var llamaClientMock = CreateMockLlamaClient();
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => manager.GenerateCommandSteps("   "));
-    }
-
-    #endregion
-
-    #region VerifyCommandCorrectAsync Tests
-
-    [Fact]
-    public async Task VerifyCommandCorrectAsync_WithYesResponse_ShouldReturnTrue()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("Yes");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandCorrectAsync(command);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public async Task VerifyCommandCorrectAsync_WithNoResponse_ShouldReturnFalse()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("No");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandCorrectAsync(command);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public async Task VerifyCommandCorrectAsync_WithYesResponseWithWhitespace_ShouldReturnTrue()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("  Yes  ");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandCorrectAsync(command);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public async Task VerifyCommandCorrectAsync_WithLowercaseYes_ShouldReturnTrue()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("yes");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandCorrectAsync(command);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    #endregion
-
-    #region VerifyCommandSafetyAsync Tests
-
-    [Fact]
-    public async Task VerifyCommandSafetyAsync_WithYesResponse_ShouldReturnTrue()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("Yes");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandSafetyAsync(command);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public async Task VerifyCommandSafetyAsync_WithNoResponse_ShouldReturnFalse()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("No");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandSafetyAsync(command);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public async Task VerifyCommandSafetyAsync_WithInvalidResponse_ShouldReturnFalse()
-    {
-        // Arrange
-        var command = new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" };
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync("Maybe");
-
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        var loggerMock = CreateMockLogger();
-
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
-
-        // Act
-        var result = await manager.VerifyCommandSafetyAsync(command);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    #endregion
-
-    #region Command Execution Tests
-
-    [Fact]
-    public async Task ManageResponse_WithValidActionAndSafeCommand_ShouldExecuteCommand()
-    {
-        // Arrange
-        var testPrompt = "Create a file";
-        var commandJson = """{"Steps": [{"Id": 1, "Objective": "Create file", "Run": "touch test.txt"}]}""";
-        var commandOutput = "File created successfully";
-
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Action);
-        llamaClientMock.SetupSequence(x => x.GetResponseAsync(It.IsAny<string>()))
+        const string prompt = "list files on c:";
+        const string commandJson = """{"Steps":[{"Id":1,"Objective":"List files","Run":"dir"}]}""";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
             .ReturnsAsync(commandJson)
-            .ReturnsAsync("Yes") // Safe verification
-            .ReturnsAsync("Yes"); // Correct verification
+            .ReturnsAsync("Yes")
+            .ReturnsAsync("Yes");
 
-        var executorMock = CreateMockExecutor();
-        executorMock.Setup(x => x.RunCommandAsync("touch test.txt"))
-            .ReturnsAsync(commandOutput);
+        var executorMock = create_executor_mock();
+        executorMock.Setup(executor => executor.RunCommandAsync("dir")).ReturnsAsync("Directory listing");
 
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        jsonExtractorMock.Setup(x => x.ExtractJsonObject(commandJson))
-            .Returns(commandJson);
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
 
-        var loggerMock = CreateMockLogger();
+        var commandRepositoryMock = create_command_repository_mock();
+        commandRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((StoredCommand command, CancellationToken _) => command);
+        commandRepositoryMock
+            .Setup(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CommandVerification verification, CancellationToken _) => verification);
+        commandRepositoryMock
+            .Setup(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid commandId, bool executed, string? result, CancellationToken _) => new StoredCommand
+            {
+                Id = commandId,
+                Executed = executed,
+                ExecutionResult = result
+            });
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            commandRepositoryMock: commandRepositoryMock);
 
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
+        var result = await manager.ManageResponse(prompt);
 
-        // Assert
         Assert.Equal("Commands executed", result);
-        executorMock.Verify(x => x.RunCommandAsync("touch test.txt"), Times.Once);
-        loggerMock.Verify(x => x.Log(commandOutput), Times.Once);
+        executorMock.Verify(executor => executor.RunCommandAsync("dir"), Times.Once);
+        commandRepositoryMock.Verify(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()), Times.Once);
+        commandRepositoryMock.Verify(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()), Times.Once);
+        commandRepositoryMock.Verify(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ManageResponse_WithUnsafeCommand_ShouldNotExecute()
+    public async Task manage_response_must_save_prompt_and_response_when_chat()
     {
-        // Arrange
-        var testPrompt = "Delete system files";
-        var commandJson = """{"Steps": [{"Id": 1, "Objective": "Delete files", "Run": "rm -rf /"}]}""";
+        const string prompt = "What is Nebula?";
+        const string response = "Nebula is a terminal agent.";
 
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Action);
+        PromptRequest? savedRequest = null;
+        Guid updatedRequestId = Guid.Empty;
+        string? updatedResponse = null;
 
-        // Setup sequence for multiple GetResponseAsync calls
-        llamaClientMock.SetupSequence(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(commandJson)      // First call: GenerateCommandSteps
-            .ReturnsAsync("No")              // Second call: VerifyCommandSafetyAsync - returns "No" (unsafe)
-            .ReturnsAsync("Yes");            // Third call: VerifyCommandCorrectAsync - would return "Yes" but safety failed first
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
 
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        jsonExtractorMock.Setup(x => x.ExtractJsonObject(commandJson))
-            .Returns(commandJson);
+        var promptRepositoryMock = create_prompt_repository_mock();
+        promptRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<PromptRequest, CancellationToken>((request, _) => savedRequest = clone_prompt_request(request))
+            .ReturnsAsync((PromptRequest request, CancellationToken _) => request);
+        promptRepositoryMock
+            .Setup(repository => repository.UpdateResponseAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, CancellationToken>((id, savedResponse, _) =>
+            {
+                updatedRequestId = id;
+                updatedResponse = savedResponse;
+            })
+            .ReturnsAsync((Guid id, string savedResponse, CancellationToken _) => new PromptRequest
+            {
+                Id = id,
+                Response = savedResponse
+            });
 
-        var loggerMock = CreateMockLogger();
+        var manager = create_manager(llamaClientMock, promptRepositoryMock: promptRepositoryMock);
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+        var result = await manager.ManageResponse(prompt);
 
-        // Act
-        var result = await manager.ManageResponse(testPrompt);
-
-        // Assert
-        // Command should not be executed since safety check failed
-        executorMock.Verify(x => x.RunCommandAsync(It.IsAny<string>()), Times.Never);
-        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.AtLeastOnce);
+        Assert.Equal(response, result);
+        Assert.NotNull(savedRequest);
+        Assert.Equal(prompt, savedRequest!.Prompt);
+        Assert.Equal(ClassificationResult.Chat.ToString(), savedRequest.Classification);
+        Assert.Equal(savedRequest.Id, updatedRequestId);
+        Assert.Equal(response, updatedResponse);
     }
-
-    #endregion
-
-    #region JSON Extraction Error Handling Tests
 
     [Fact]
-    public async Task ManageResponse_WithJsonExtractionError_ShouldRethrowException()
+    public async Task manage_response_must_save_prompt_and_response_when_action()
     {
-        // Arrange
-        var testPrompt = "Create a file";
-        var invalidJson = "This is not JSON";
+        const string prompt = "list files on c:";
+        const string commandJson = """{"Steps":[{"Id":1,"Objective":"List files","Run":"dir"}]}""";
 
-        var llamaClientMock = CreateMockLlamaClient();
-        llamaClientMock.Setup(x => x.ClassifyPrompt(testPrompt))
-            .ReturnsAsync(ClassificationResult.Action);
-        llamaClientMock.Setup(x => x.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(invalidJson);
+        PromptRequest? savedRequest = null;
+        Guid updatedRequestId = Guid.Empty;
+        string? updatedResponse = null;
+        StoredCommand? savedCommand = null;
 
-        var executorMock = CreateMockExecutor();
-        var jsonExtractorMock = CreateMockJsonExtractor();
-        jsonExtractorMock.Setup(x => x.ExtractJsonObject(invalidJson))
-            .Throws<ArgumentException>();
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
+            .ReturnsAsync(commandJson)
+            .ReturnsAsync("Yes")
+            .ReturnsAsync("Yes");
 
-        var loggerMock = CreateMockLogger();
+        var executorMock = create_executor_mock();
+        executorMock.Setup(executor => executor.RunCommandAsync("dir")).ReturnsAsync("Directory listing");
 
-        var manager = new Manager(llamaClientMock.Object, executorMock.Object, jsonExtractorMock.Object, loggerMock.Object);
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
 
-        // Act & Assert
-        // Should re-throw the JSON extraction error
-        _ = await Assert.ThrowsAsync<ArgumentException>(() => manager.ManageResponse(testPrompt));
-        // LogError is called both in ExtractJsonObjectAsync and in ManageResponse catch block
-        loggerMock.Verify(x => x.LogError(It.IsAny<string>()), Times.AtLeastOnce);
+        var promptRepositoryMock = create_prompt_repository_mock();
+        promptRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<PromptRequest, CancellationToken>((request, _) => savedRequest = clone_prompt_request(request))
+            .ReturnsAsync((PromptRequest request, CancellationToken _) => request);
+        promptRepositoryMock
+            .Setup(repository => repository.UpdateResponseAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, CancellationToken>((id, savedResponse, _) =>
+            {
+                updatedRequestId = id;
+                updatedResponse = savedResponse;
+            })
+            .ReturnsAsync((Guid id, string savedResponse, CancellationToken _) => new PromptRequest
+            {
+                Id = id,
+                Response = savedResponse
+            });
+
+        var commandRepositoryMock = create_command_repository_mock();
+        commandRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()))
+            .Callback<StoredCommand, CancellationToken>((command, _) => savedCommand = clone_stored_command(command))
+            .ReturnsAsync((StoredCommand command, CancellationToken _) => command);
+        commandRepositoryMock
+            .Setup(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CommandVerification verification, CancellationToken _) => verification);
+        commandRepositoryMock
+            .Setup(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid commandId, bool executed, string? result, CancellationToken _) => new StoredCommand
+            {
+                Id = commandId,
+                Executed = executed,
+                ExecutionResult = result
+            });
+
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            commandRepositoryMock: commandRepositoryMock,
+            promptRepositoryMock: promptRepositoryMock);
+
+        var result = await manager.ManageResponse(prompt);
+
+        Assert.Equal("Commands executed", result);
+        Assert.NotNull(savedRequest);
+        Assert.NotNull(savedCommand);
+        Assert.Equal(savedRequest!.Id, savedCommand!.RequestId);
+        Assert.Equal(ClassificationResult.Action.ToString(), savedRequest.Classification);
+        Assert.Equal(savedRequest.Id, updatedRequestId);
+        Assert.Equal("Commands executed", updatedResponse);
     }
 
-    #endregion
+    [Fact]
+    public async Task manage_response_must_not_execute_command_when_action_is_not_safe()
+    {
+        const string prompt = "Delete system files";
+        const string commandJson = """{"Steps":[{"Id":1,"Objective":"Delete files","Run":"rm -rf /"}]}""";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
+            .ReturnsAsync(commandJson)
+            .ReturnsAsync("No")
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
+
+        var commandRepositoryMock = create_command_repository_mock();
+        commandRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((StoredCommand command, CancellationToken _) => command);
+        commandRepositoryMock
+            .Setup(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CommandVerification verification, CancellationToken _) => verification);
+
+        var loggerMock = create_logger_mock();
+
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            loggerMock,
+            commandRepositoryMock);
+
+        _ = await manager.ManageResponse(prompt);
+
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Command verification failed"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task manage_response_must_log_and_throw_when_classification_throws()
+    {
+        const string prompt = "Test prompt";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ThrowsAsync(new InvalidOperationException("Test error"));
+
+        var loggerMock = create_logger_mock();
+        var manager = create_manager(llamaClientMock, loggerMock: loggerMock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.ManageResponse(prompt));
+
+        Assert.Equal("Test error", exception.Message);
+        loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Error managing response"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task generate_command_steps_must_return_llm_response_when_request_is_valid()
+    {
+        const string request = "Create a file";
+        const string response = """{"Steps":[{"Id":1,"Objective":"Create file","Run":"touch test.txt"}]}""";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.IsAny<string>())).ReturnsAsync(response);
+
+        var manager = create_manager(llamaClientMock);
+
+        var result = await manager.GenerateCommandSteps(request);
+
+        Assert.Equal(response, result);
+    }
+
+    [Fact]
+    public async Task generate_command_steps_must_throw_argument_exception_when_request_is_empty()
+    {
+        var manager = create_manager(create_llama_client_mock());
+
+        await Assert.ThrowsAsync<ArgumentException>(() => manager.GenerateCommandSteps(string.Empty));
+    }
+
+    [Fact]
+    public async Task verify_command_correct_async_must_return_true_when_llama_returns_yes()
+    {
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.IsAny<string>())).ReturnsAsync("Yes");
+
+        var manager = create_manager(llamaClientMock);
+        var result = await manager.VerifyCommandCorrectAsync(new Command { Id = 1, Objective = "Create file", Run = "touch test.txt" });
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task verify_command_safety_async_must_return_false_when_llama_returns_no()
+    {
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.IsAny<string>())).ReturnsAsync("No");
+
+        var manager = create_manager(llamaClientMock);
+        var result = await manager.VerifyCommandSafetyAsync(new Command { Id = 1, Objective = "Delete file", Run = "rm test.txt" });
+
+        Assert.False(result);
+    }
+
+    private static Manager create_manager(
+        Mock<ILlamaClient> llamaClientMock,
+        Mock<IShellExecutor>? executorMock = null,
+        Mock<IJsonExtractor>? jsonExtractorMock = null,
+        Mock<ILogger>? loggerMock = null,
+        Mock<ICommandRepository>? commandRepositoryMock = null,
+        Mock<IPromptRequestRepository>? promptRepositoryMock = null)
+    {
+        return new Manager(
+            llamaClientMock.Object,
+            (executorMock ?? create_executor_mock()).Object,
+            (jsonExtractorMock ?? create_json_extractor_mock()).Object,
+            (loggerMock ?? create_logger_mock()).Object,
+            commandRepositoryMock?.Object,
+            promptRepositoryMock?.Object);
+    }
+
+    private static Mock<ILlamaClient> create_llama_client_mock() => new();
+
+    private static Mock<IShellExecutor> create_executor_mock() => new();
+
+    private static Mock<IJsonExtractor> create_json_extractor_mock() => new();
+
+    private static Mock<ILogger> create_logger_mock() => new();
+
+    private static Mock<ICommandRepository> create_command_repository_mock() => new();
+
+    private static Mock<IPromptRequestRepository> create_prompt_repository_mock() => new();
+
+    private static PromptRequest clone_prompt_request(PromptRequest request)
+    {
+        return new PromptRequest
+        {
+            Id = request.Id,
+            Prompt = request.Prompt,
+            Classification = request.Classification,
+            Response = request.Response,
+            CreatedAt = request.CreatedAt,
+            UpdatedAt = request.UpdatedAt
+        };
+    }
+
+    private static StoredCommand clone_stored_command(StoredCommand command)
+    {
+        return new StoredCommand
+        {
+            Id = command.Id,
+            RequestId = command.RequestId,
+            CommandId = command.CommandId,
+            Objective = command.Objective,
+            Command = command.Command,
+            OsType = command.OsType,
+            Executed = command.Executed,
+            ExecutionResult = command.ExecutionResult,
+            CreatedAt = command.CreatedAt,
+            UpdatedAt = command.UpdatedAt
+        };
+    }
 }

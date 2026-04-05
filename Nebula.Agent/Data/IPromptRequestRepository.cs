@@ -12,6 +12,11 @@ public interface IPromptRequestRepository
     Task<PromptRequest> SaveAsync(PromptRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Updates the final response for a stored prompt request.
+    /// </summary>
+    Task<PromptRequest?> UpdateResponseAsync(Guid id, string response, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves a prompt request by ID.
     /// </summary>
     Task<PromptRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);

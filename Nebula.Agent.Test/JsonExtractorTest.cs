@@ -3,7 +3,7 @@ namespace Nebula.Agent.Test;
 public class JsonExtractorTest
 {
     [Fact]
-    public void ExtractJsonObject_WithSimpleJson_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_contains_simple_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -18,7 +18,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithNestedJson_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_contains_nested_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -33,7 +33,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithJsonAtStart_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_starts_with_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -48,7 +48,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithJsonAtEnd_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_ends_with_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -63,7 +63,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithOnlyJson_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_only_contains_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -78,7 +78,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithMultipleJsonObjects_ShouldExtractFromFirstToLast()
+    public void extract_json_object_must_return_outermost_json_when_input_contains_multiple_objects()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -93,7 +93,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithNoJson_ShouldThrowArgumentException()
+    public void extract_json_object_must_throw_argument_exception_when_input_contains_no_json()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -105,7 +105,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithOnlyOpenBrace_ShouldThrowArgumentException()
+    public void extract_json_object_must_throw_argument_exception_when_input_contains_only_open_brace()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -117,7 +117,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithOnlyCloseBrace_ShouldThrowArgumentException()
+    public void extract_json_object_must_throw_argument_exception_when_input_contains_only_close_brace()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -129,7 +129,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithCloseBeforeOpen_ShouldThrowArgumentException()
+    public void extract_json_object_must_throw_argument_exception_when_close_brace_comes_before_open_brace()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -141,7 +141,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithEmptyBraces_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_empty_json_when_input_contains_empty_braces()
     {
         // Arrange
         var extractor = new JsonExtractor();
@@ -156,7 +156,7 @@ public class JsonExtractorTest
     }
 
     [Fact]
-    public void ExtractJsonObject_WithComplexNestedStructure_ShouldExtractCorrectly()
+    public void extract_json_object_must_return_json_when_input_contains_complex_nested_structure()
     {
         // Arrange
         var extractor = new JsonExtractor();
