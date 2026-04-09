@@ -1,0 +1,77 @@
+﻿@using Corona.Components
+@using Corona.Components.Enums
+@using Corona.Components.Iconography
+@using Corona.Theming
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject CoronaThemeProvider ThemeProvider
+
+
+<CoronaLayoutShell DrawerTitle="@string.Empty"
+                   HeaderTitle="Wallet"
+                   DrawerWidthPx="300"
+                   DrawerOverlay="false"
+                   ShowMenuButton="true"
+                   MenuIcon="@CoronaIcons.Cogs"
+                   HeaderActions="@HeaderActions"
+                   DrawerOpen="false"
+                   DrawerItens="itemsMenu">
+    @Body
+</CoronaLayoutShell>
+
+@code {
+    private bool _drawerOpen;
+
+    private string DrawerClass => "docs-drawer";
+
+    private RenderFragment HeaderActions =>
+    @<CoronaStack Direction="Corona.Components.Enums.CoronaStackDirection.Row" Spacing=".5rem">
+
+    </CoronaStack>
+    ;
+
+    private RenderFragment BtnToggleTheme => builder =>
+    {
+        builder.OpenComponent<CoronaButton>(0);
+        builder.AddAttribute(1, "Size", CoronaComponentSize.Small);
+        builder.AddAttribute(2, "Variant", CoronaButtonVariant.Outlined);
+        builder.AddAttribute(3, "OnClick", EventCallback.Factory.Create(this, ToggleTheme));
+        builder.AddAttribute(4, "ChildContent", (RenderFragment)(b =>
+        {
+            b.AddContent(0, $"Toggle {(ThemeProvider.CurrentTheme.Mode == CoronaThemeMode.Dark ? "Light" : "Dark")}");
+        }));
+        builder.CloseComponent();
+    };
+
+    private List<CoronaNavItem> itemsMenu = new();
+
+    protected override void OnInitialized()
+    {
+        ThemeProvider.OnChange += HandleThemeChanged;
+
+            itemsMenu = new()
+            {
+                new CoronaNavItem
+                {
+                    Text = string.Empty,
+                    Content = BtnToggleTheme
+                }
+            };
+    }
+
+    private void HandleThemeChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private Task ToggleTheme()
+    {
+        ThemeProvider.ToggleTheme();
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        ThemeProvider.OnChange -= HandleThemeChanged;
+    }
+}
