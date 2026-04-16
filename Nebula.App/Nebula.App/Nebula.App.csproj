@@ -73,7 +73,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\SmartWallet\Corona\Corona\Corona.csproj" />
+    <ProjectReference Include="..\..\Corona\Corona\Corona.csproj" />
     <ProjectReference Include="..\..\Nebula.Agent\Nebula.Agent.csproj" />
     <ProjectReference Include="..\..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
     <ProjectReference Include="..\..\Nebula.Mongo.Context\Nebula.Mongo.Context.csproj" />

@@ -65,7 +65,7 @@ Console.WriteLine(response);
 Console.WriteLine("LLM OK");
 
 Console.WriteLine("Starting LLM");
-response = await manager.ManageResponse("list files on c:");
+response = await manager.ManageResponse("list all files on current directory");
 
 Console.WriteLine(response);
 

@@ -15,7 +15,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\SmartWallet\Corona\Corona\Corona.csproj" />
+    <!-- Reference to agent layer so shared components can resolve interfaces at compile time when used in the app shell -->
+    <ProjectReference Include="..\..\Corona\Corona\Corona.csproj" />
+    <ProjectReference Include="..\..\Nebula.Agent\Nebula.Agent.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Components\" />
   </ItemGroup>
 
 </Project>
