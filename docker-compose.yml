@@ -4,7 +4,15 @@ services:
     container_name: ollama
     restart: unless-stopped
     environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1-distill-qwen-7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:7b}
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-}
+      OLLAMA_ACCELERATION_MODE: ${OLLAMA_ACCELERATION_MODE:-cpu}
+      OLLAMA_GPU_VENDOR: ${OLLAMA_GPU_VENDOR:-CPU}
+      OLLAMA_VULKAN: ${OLLAMA_VULKAN:-0}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
+      ROCR_VISIBLE_DEVICES: ${ROCR_VISIBLE_DEVICES:-}
+      GGML_VK_VISIBLE_DEVICES: ${GGML_VK_VISIBLE_DEVICES:-}
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -30,11 +38,15 @@ services:
     volumes:
       - mongodb-data:/data/db
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh \"mongodb://$$MONGO_INITDB_ROOT_USERNAME:$$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin?authSource=admin&directConnection=true&maxPoolSize=1\" --quiet --eval \"quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)\""
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
 
   postgres:
     image: postgres:15-alpine

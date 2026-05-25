@@ -7,6 +7,7 @@
   <Project Path="Corona/Corona/Corona.csproj" />
   <Project Path="Nebula.Agent.Test/Nebula.Agent.Test.csproj" />
   <Project Path="Nebula.Agent/Nebula.Agent.csproj" />
+  <Project Path="Nebula.App.Test/Nebula.App.Test.csproj" />
   <Project Path="Nebula.App/Nebula.App.Shared/Nebula.App.Shared.csproj" Id="0b88a3c7-12ce-42db-90b8-4e75a52c3b80" />
   <Project Path="Nebula.App/Nebula.App.Web.Client/Nebula.App.Web.Client.csproj" Id="70c51ec9-b20b-490b-9a37-6e34d284709a" />
   <Project Path="Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj" Id="fb6fdf95-7d51-4376-bf57-9c1d92681aec" />

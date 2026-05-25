@@ -1,63 +1,142 @@
-﻿@using Corona.Components
+@using Corona.Components
 @using Corona.Components.Enums
 @using Corona.Components.Iconography
 @using Corona.Components.Models
 @using Corona.Theming
 @inherits LayoutComponentBase
 @implements IDisposable
+@inject ILlamaRuntimeTelemetryService RuntimeTelemetryService
 @inject CoronaThemeProvider ThemeProvider
 
-
-<CoronaLayoutShell DrawerTitle="@string.Empty"
-                   HeaderTitle="Wallet"
-                   DrawerWidthPx="300"
-                   DrawerOverlay="false"
-                   ShowMenuButton="true"
-                   MenuIcon="@CoronaIcons.Cogs"
-                   HeaderActions="@HeaderActions"
-                   DrawerOpen="false"
-                   DrawerItens="itemsMenu">
-    @Body
-</CoronaLayoutShell>
+<CoronaThemeCascadingValue>
+    <CoronaLayoutShell DrawerTitle="Nebula Control"
+                       HeaderTitle="Nebula"
+                       DrawerWidthPx="320"
+                       DrawerOverlay="true"
+                       ShowMenuButton="true"
+                       MenuIcon="@CoronaIcons.Cogs"
+                       HeaderActions="@HeaderActions"
+                       DrawerOpen="false"
+                       DrawerItens="itemsMenu">
+        @Body
+    </CoronaLayoutShell>
+</CoronaThemeCascadingValue>
 
 @code {
-    private bool _drawerOpen;
-
-    private string DrawerClass => "docs-drawer";
+    private List<CoronaNavItem> itemsMenu = [];
+    private readonly CancellationTokenSource telemetryCancellation = new();
+    private LlamaRuntimeTelemetrySnapshot runtimeTelemetry = new();
 
     private RenderFragment HeaderActions =>
-    @<CoronaStack Direction="Corona.Components.Enums.CoronaStackDirection.Row" Spacing=".5rem">
+        @<CoronaStack Direction="CoronaStackDirection.Row"
+                      Wrap="CoronaStackWrap.Wrap"
+                      Align="CoronaStackAlign.Center"
+                      Spacing=".5rem"
+                      Class="nebula-header-actions">
+            <span title="@runtimeTelemetry.StatusDetail" class="nebula-header-metric nebula-header-metric--status">
+                <CoronaBadge Content="@runtimeTelemetry.StatusLabel"
+                             Variant="CoronaBadgeVariant.Soft"
+                             Color="@GetStatusColor()" />
+            </span>
 
-    </CoronaStack>
-    ;
+            <span title="@runtimeTelemetry.RuntimeModeDetail" class="nebula-header-metric nebula-header-metric--mode">
+                <CoronaBadge Content="@runtimeTelemetry.RuntimeModeLabel"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetRuntimeModeColor()" />
+            </span>
 
-    private RenderFragment BtnToggleTheme => builder =>
-    {
-        builder.OpenComponent<CoronaButton>(0);
-        builder.AddAttribute(1, "Size", CoronaComponentSize.Small);
-        builder.AddAttribute(2, "Variant", CoronaButtonVariant.Outlined);
-        builder.AddAttribute(3, "OnClick", EventCallback.Factory.Create(this, ToggleTheme));
-        builder.AddAttribute(4, "ChildContent", (RenderFragment)(b =>
-        {
-            b.AddContent(0, $"Toggle {(ThemeProvider.CurrentTheme.Mode == CoronaThemeMode.Dark ? "Light" : "Dark")}");
-        }));
-        builder.CloseComponent();
-    };
+            <span title="@runtimeTelemetry.Cpu.DetailValue" class="nebula-header-metric">
+                <CoronaBadge Content="@($"CPU {runtimeTelemetry.Cpu.ShortValue}")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetMetricColor(runtimeTelemetry.Cpu)" />
+            </span>
 
-    private List<CoronaNavItem> itemsMenu = new();
+            <span title="@runtimeTelemetry.Memory.DetailValue" class="nebula-header-metric">
+                <CoronaBadge Content="@($"RAM {runtimeTelemetry.Memory.ShortValue}")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetMetricColor(runtimeTelemetry.Memory)" />
+            </span>
+
+            <span title="@runtimeTelemetry.Gpu.DetailValue" class="nebula-header-metric">
+                <CoronaBadge Content="@($"GPU {runtimeTelemetry.Gpu.ShortValue}")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetMetricColor(runtimeTelemetry.Gpu)" />
+            </span>
+
+            <CoronaButton Size="CoronaComponentSize.Small"
+                          Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Class="nebula-header-theme-toggle"
+                          OnClick="ToggleTheme">
+                @(ThemeProvider.CurrentTheme.Mode == CoronaThemeMode.Dark ? "Tema claro" : "Tema escuro")
+            </CoronaButton>
+        </CoronaStack>;
 
     protected override void OnInitialized()
     {
         ThemeProvider.OnChange += HandleThemeChanged;
 
-            itemsMenu = new()
+        itemsMenu =
+        [
+            new CoronaNavItem
             {
-                new CoronaNavItem
-                {
-                    Text = string.Empty,
-                    Content = BtnToggleTheme
-                }
-            };
+                Text = "Central de conversa",
+                Url = "/",
+                Icon = CoronaIcons.House
+            },
+            new CoronaNavItem
+            {
+                Text = "Agente local ativo",
+                Icon = CoronaIcons.Gear
+            },
+            new CoronaNavItem
+            {
+                Text = "Raciocinio visivel",
+                Icon = CoronaIcons.CircleInfo
+            }
+        ];
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ = StartTelemetryLoopAsync(telemetryCancellation.Token);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task StartTelemetryLoopAsync(CancellationToken cancellationToken)
+    {
+        await RefreshTelemetryAsync(cancellationToken);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await RefreshTelemetryAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Encerramento normal do layout.
+        }
+    }
+
+    private async Task RefreshTelemetryAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            runtimeTelemetry = await RuntimeTelemetryService.GetSnapshotAsync(cancellationToken);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Encerramento normal do layout.
+        }
     }
 
     private void HandleThemeChanged()
@@ -71,8 +150,48 @@
         return Task.CompletedTask;
     }
 
+    private CoronaColorSemantic GetStatusColor()
+    {
+        return runtimeTelemetry.IsAvailable
+            ? CoronaColorSemantic.Success
+            : CoronaColorSemantic.Warning;
+    }
+
+    private CoronaColorSemantic GetRuntimeModeColor()
+    {
+        return runtimeTelemetry.RuntimeModeLabel switch
+        {
+            "NVIDIA CUDA" => CoronaColorSemantic.Success,
+            "AMD ROCm" => CoronaColorSemantic.Warning,
+            "Intel Vulkan" => CoronaColorSemantic.Warning,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+
+    private static CoronaColorSemantic GetMetricColor(LlamaRuntimeMetric metric)
+    {
+        if (!metric.IsAvailable)
+        {
+            return CoronaColorSemantic.Neutral;
+        }
+
+        if (metric.Percent is null)
+        {
+            return CoronaColorSemantic.Primary;
+        }
+
+        return metric.Percent.Value switch
+        {
+            >= 85 => CoronaColorSemantic.Danger,
+            >= 65 => CoronaColorSemantic.Warning,
+            _ => CoronaColorSemantic.Success
+        };
+    }
+
     public void Dispose()
     {
+        telemetryCancellation.Cancel();
+        telemetryCancellation.Dispose();
         ThemeProvider.OnChange -= HandleThemeChanged;
     }
 }

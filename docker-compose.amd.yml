@@ -1,0 +1,14 @@
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - render
+      - video
+    environment:
+      OLLAMA_ACCELERATION_MODE: amd-rocm
+      OLLAMA_GPU_VENDOR: AMD
+      ROCR_VISIBLE_DEVICES: ${ROCR_VISIBLE_DEVICES:-}
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}

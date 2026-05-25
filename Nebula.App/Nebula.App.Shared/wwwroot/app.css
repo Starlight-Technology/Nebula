@@ -36,3 +36,878 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+html,
+body {
+    margin: 0;
+    min-height: 100%;
+    background:
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 30%),
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 28%),
+        linear-gradient(180deg, #07111f 0%, #0b1324 45%, #0f172a 100%);
+    color: #e5edf8;
+}
+
+body {
+    font-family: "Segoe UI", "Inter", sans-serif;
+}
+
+#app {
+    min-height: 100vh;
+}
+
+.nebula-home-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding-block: 1.5rem 2rem;
+}
+
+.nebula-home-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1.7fr) minmax(20rem, 1fr);
+}
+
+.nebula-home-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-hero-card,
+.nebula-status-card,
+.nebula-model-card,
+.nebula-empty-card,
+.nebula-message-card,
+.nebula-composer-card {
+    backdrop-filter: blur(18px);
+    background: rgba(8, 15, 28, 0.72) !important;
+    border: 1px solid rgba(148, 163, 184, 0.2) !important;
+    box-shadow: 0 22px 50px rgba(2, 8, 23, 0.28) !important;
+}
+
+.nebula-hero-card__eyebrow,
+.nebula-message-card__meta,
+.nebula-message-card__meta--assistant {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-hero-card__content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.nebula-title {
+    margin: 0;
+    font-size: clamp(1.8rem, 3vw, 2.8rem);
+    line-height: 1.05;
+    color: #f8fbff;
+}
+
+.nebula-copy {
+    margin: 0.85rem 0 0;
+    max-width: 48rem;
+    color: rgba(226, 232, 240, 0.84);
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.nebula-starters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.nebula-status-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.nebula-model-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.nebula-status-card__label {
+    margin: 0 0 0.4rem;
+    color: rgba(148, 163, 184, 0.85);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+}
+
+.nebula-status-card__header h3 {
+    margin: 0;
+    color: #f8fbff;
+    font-size: 1.25rem;
+}
+
+.nebula-model-card__header h3 {
+    margin: 0;
+    color: #f8fbff;
+    font-size: 1.25rem;
+}
+
+.nebula-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.nebula-status-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 0.95rem;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.nebula-status-row span {
+    color: rgba(148, 163, 184, 0.86);
+    font-size: 0.8rem;
+}
+
+.nebula-status-row strong,
+.nebula-status-row code {
+    color: #f8fbff;
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
+}
+
+.nebula-status-row p {
+    margin: 0;
+    color: rgba(226, 232, 240, 0.78);
+    line-height: 1.55;
+}
+
+.nebula-model-current {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-model-current strong {
+    display: block;
+    margin-top: 0.2rem;
+    color: #f8fbff;
+    font-size: 1.05rem;
+}
+
+.nebula-model-current p {
+    margin: 0.45rem 0 0;
+    color: rgba(226, 232, 240, 0.78);
+    line-height: 1.55;
+}
+
+.nebula-model-current__label {
+    color: rgba(148, 163, 184, 0.86);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.nebula-model-current__badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.nebula-model-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    margin-top: 1rem;
+}
+
+.nebula-model-section__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.nebula-model-section__header--inline {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.nebula-model-section__header h4,
+.nebula-model-section__header p {
+    margin: 0;
+}
+
+.nebula-model-section__header h4 {
+    color: #f8fbff;
+    font-size: 1rem;
+}
+
+.nebula-model-section__header p {
+    color: rgba(148, 163, 184, 0.84);
+    line-height: 1.55;
+}
+
+.nebula-model-install {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.nebula-model-install__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.nebula-model-suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-acceleration-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nebula-acceleration-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.56);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-acceleration-card.is-recommended {
+    border-color: rgba(34, 197, 94, 0.4);
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.16);
+}
+
+.nebula-acceleration-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.nebula-acceleration-card__labels {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.nebula-acceleration-card__flag {
+    display: inline-flex;
+    width: fit-content;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.16);
+    color: #dcfce7;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.nebula-acceleration-card strong {
+    color: #f8fbff;
+}
+
+.nebula-acceleration-card p {
+    margin: 0;
+    color: rgba(226, 232, 240, 0.8);
+    line-height: 1.55;
+}
+
+.nebula-acceleration-card code {
+    display: block;
+    padding: 0.8rem 0.9rem;
+    border-radius: 0.9rem;
+    background: rgba(2, 6, 23, 0.82);
+    color: #dbeafe;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    overflow-x: auto;
+}
+
+.nebula-model-suggestion-card,
+.nebula-model-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.56);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-model-suggestion-card strong,
+.nebula-model-item strong {
+    color: #f8fbff;
+}
+
+.nebula-model-suggestion-card p,
+.nebula-model-item p,
+.nebula-model-item span {
+    margin: 0.3rem 0 0;
+    color: rgba(226, 232, 240, 0.8);
+    line-height: 1.5;
+}
+
+.nebula-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-model-item.is-active {
+    border-color: rgba(34, 197, 94, 0.42);
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.16);
+}
+
+.nebula-model-item__meta {
+    display: flex;
+    flex-direction: column;
+}
+
+.nebula-model-item__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.nebula-model-item__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-model-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.nebula-model-progress__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: 0.9rem;
+    background: rgba(15, 23, 42, 0.56);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    color: #e2e8f0;
+}
+
+.nebula-setup-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.1rem;
+    border-radius: 1.1rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.nebula-setup-card.is-gpu {
+    border-color: rgba(56, 189, 248, 0.28);
+    box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.12);
+}
+
+.nebula-setup-card.is-cpu {
+    border-color: rgba(148, 163, 184, 0.2);
+}
+
+.nebula-setup-card__eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-setup-card__content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.nebula-setup-card__content h5,
+.nebula-setup-card__content p {
+    margin: 0;
+}
+
+.nebula-setup-card__content h5 {
+    color: #f8fbff;
+    font-size: 1.05rem;
+}
+
+.nebula-setup-card__content p {
+    color: rgba(226, 232, 240, 0.8);
+    line-height: 1.6;
+}
+
+.nebula-setup-card__command {
+    display: block;
+    padding: 0.9rem 1rem;
+    border-radius: 0.95rem;
+    background: rgba(2, 6, 23, 0.84);
+    color: #dbeafe;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    overflow-x: auto;
+}
+
+.nebula-setup-facts {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nebula-setup-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.9rem 0.95rem;
+    border-radius: 0.95rem;
+    background: rgba(2, 6, 23, 0.42);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.nebula-setup-fact span {
+    color: rgba(148, 163, 184, 0.86);
+    font-size: 0.78rem;
+}
+
+.nebula-setup-fact strong {
+    color: #f8fbff;
+    overflow-wrap: anywhere;
+    line-height: 1.55;
+}
+
+.nebula-setup-fact:nth-child(3),
+.nebula-setup-fact:nth-child(4) {
+    grid-column: 1 / -1;
+}
+
+.nebula-setup-columns {
+    display: grid;
+    gap: 0.85rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nebula-setup-column {
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.46);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-setup-column__title {
+    margin: 0 0 0.75rem;
+    color: #f8fbff;
+    font-weight: 700;
+}
+
+.nebula-setup-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    color: rgba(226, 232, 240, 0.84);
+}
+
+.nebula-setup-list li + li {
+    margin-top: 0.55rem;
+}
+
+.nebula-setup-list--compact li + li {
+    margin-top: 0.4rem;
+}
+
+.nebula-info-panel,
+.nebula-warning-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem 1.05rem;
+    border-radius: 1rem;
+    margin-top: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-info-panel {
+    background: rgba(14, 116, 144, 0.18);
+    border-color: rgba(56, 189, 248, 0.2);
+}
+
+.nebula-warning-panel {
+    background: rgba(120, 53, 15, 0.22);
+    border-color: rgba(245, 158, 11, 0.24);
+}
+
+.nebula-info-panel p,
+.nebula-warning-panel p {
+    margin: 0;
+    color: #ecf3ff;
+    line-height: 1.6;
+}
+
+.nebula-info-panel__title,
+.nebula-warning-panel__title {
+    margin: 0 0 0.35rem !important;
+    color: #f8fbff;
+    font-weight: 700;
+}
+
+.nebula-inline-panel {
+    margin-top: 1rem;
+}
+
+.nebula-empty-inline {
+    padding: 1rem 1.05rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.48);
+    border: 1px dashed rgba(148, 163, 184, 0.18);
+}
+
+.nebula-empty-inline p {
+    margin: 0;
+    color: rgba(226, 232, 240, 0.78);
+}
+
+.nebula-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-empty-card__content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.nebula-empty-card__content h3,
+.nebula-empty-card__content p {
+    margin: 0;
+}
+
+.nebula-empty-card__content h3 {
+    color: #f8fbff;
+    font-size: 1.2rem;
+}
+
+.nebula-empty-card__content p {
+    color: rgba(226, 232, 240, 0.82);
+    line-height: 1.7;
+}
+
+.nebula-turn {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-turn__user {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.nebula-turn__user .nebula-message-card {
+    max-width: min(46rem, 100%);
+    background: linear-gradient(135deg, rgba(14, 116, 144, 0.22), rgba(30, 41, 59, 0.76)) !important;
+}
+
+.nebula-turn__assistant .nebula-message-card {
+    width: 100%;
+}
+
+.nebula-message-card__header {
+    margin-bottom: 1rem;
+}
+
+.nebula-message-card__text,
+.nebula-rich-text,
+.nebula-step-card__notes,
+.nebula-pending-panel p,
+.nebula-error-panel p {
+    white-space: pre-wrap;
+    line-height: 1.75;
+    color: #ecf3ff;
+}
+
+.nebula-rich-text--reasoning {
+    color: #cbd5e1;
+}
+
+.nebula-response-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-panel-section,
+.nebula-think-panel {
+    padding: 1rem 1.05rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-panel-section__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.9rem;
+}
+
+.nebula-think-panel__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    cursor: pointer;
+    list-style: none;
+    color: #f8fbff;
+    font-weight: 600;
+}
+
+.nebula-think-panel__summary::-webkit-details-marker {
+    display: none;
+}
+
+.nebula-think-panel[open] .nebula-think-panel__summary {
+    margin-bottom: 0.9rem;
+}
+
+.nebula-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.nebula-step-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.56);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-step-card__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.nebula-step-card__top strong {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: #f8fbff;
+}
+
+.nebula-step-card__top code,
+.nebula-step-card__output {
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.nebula-step-card__top code {
+    color: #93c5fd;
+    overflow-wrap: anywhere;
+}
+
+.nebula-step-card__checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.nebula-step-card__checks span {
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(30, 41, 59, 0.9);
+    color: #dbeafe;
+    font-size: 0.82rem;
+}
+
+.nebula-step-card__notes {
+    margin: 0;
+    color: #f8fafc;
+}
+
+.nebula-step-card__output {
+    margin: 0;
+    padding: 0.9rem 1rem;
+    border-radius: 0.9rem;
+    background: rgba(2, 6, 23, 0.82);
+    color: #dbeafe;
+    overflow-x: auto;
+}
+
+.nebula-pending-panel,
+.nebula-error-panel {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: 1rem 1.05rem;
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.nebula-pending-panel__title,
+.nebula-error-panel__title {
+    margin: 0 0 0.35rem;
+    color: #f8fbff;
+    font-weight: 700;
+}
+
+.nebula-pending-panel__pulse {
+    width: 0.85rem;
+    height: 0.85rem;
+    margin-top: 0.55rem;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #38bdf8, #22c55e);
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.45);
+    animation: nebula-pulse 1.8s infinite;
+    flex-shrink: 0;
+}
+
+.nebula-error-panel {
+    background: rgba(127, 29, 29, 0.24);
+    border-color: rgba(248, 113, 113, 0.28);
+}
+
+.nebula-composer-card {
+    position: relative;
+    z-index: 5;
+}
+
+.nebula-composer-card--sticky {
+    position: sticky;
+    bottom: 1rem;
+}
+
+.nebula-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-composer__input {
+    width: 100%;
+    min-height: 8rem;
+    max-height: 16rem;
+    resize: vertical;
+    border: none;
+    outline: none;
+    background: rgba(15, 23, 42, 0.58);
+    color: #f8fbff;
+    border-radius: 1.1rem;
+    padding: 1rem 1.1rem;
+    font: inherit;
+    line-height: 1.7;
+    box-sizing: border-box;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.nebula-composer__input::placeholder {
+    color: rgba(148, 163, 184, 0.88);
+}
+
+.nebula-composer__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.nebula-composer__hint {
+    margin: 0;
+    color: rgba(148, 163, 184, 0.88);
+    font-size: 0.9rem;
+}
+
+@keyframes nebula-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.45);
+    }
+
+    70% {
+        box-shadow: 0 0 0 10px rgba(56, 189, 248, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+    }
+}
+
+@media (max-width: 1080px) {
+    .nebula-home-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 720px) {
+    .nebula-home-shell {
+        padding-block: 1rem 1.5rem;
+    }
+
+    .nebula-title {
+        font-size: 1.8rem;
+    }
+
+    .nebula-composer-card--sticky {
+        bottom: 0.5rem;
+    }
+
+    .nebula-composer__footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nebula-model-current,
+    .nebula-model-suggestion-card,
+    .nebula-model-item,
+    .nebula-info-panel,
+    .nebula-warning-panel {
+        flex-direction: column;
+    }
+
+    .nebula-model-section__header--inline {
+        flex-direction: column;
+    }
+
+    .nebula-acceleration-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .nebula-setup-facts,
+    .nebula-setup-columns {
+        grid-template-columns: 1fr;
+    }
+
+    .nebula-step-card__top {
+        flex-direction: column;
+    }
+}

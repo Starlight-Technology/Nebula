@@ -18,3 +18,47 @@
         right: 0.75rem;
         top: 0.5rem;
     }
+
+::deep .nebula-header-actions {
+    flex-wrap: nowrap !important;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+::deep .nebula-header-actions::-webkit-scrollbar {
+    display: none;
+}
+
+::deep .nebula-header-metric {
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+::deep .corona-page-header__actions {
+    display: inline-flex !important;
+    min-width: 0;
+}
+
+@media (max-width: 1140px) {
+    ::deep .nebula-header-metric--mode {
+        display: none;
+    }
+}
+
+@media (max-width: 760px) {
+    ::deep .nebula-header-actions {
+        gap: 0.35rem !important;
+    }
+
+    ::deep .nebula-header-theme-toggle {
+        display: none;
+    }
+}
+
+@media (max-width: 560px) {
+    ::deep .nebula-header-metric--status {
+        display: none;
+    }
+}
