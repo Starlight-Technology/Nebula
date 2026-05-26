@@ -15,7 +15,7 @@
     <ProjectReference Include="..\..\Nebula.Postgres.Context\Nebula.Postgres.Context.csproj" />
     <ProjectReference Include="..\..\Nebula.Runner\Nebula.Runner.csproj" />
     <ProjectReference Include="..\Nebula.App.Web.Client\Nebula.App.Web.Client.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.8" />
   </ItemGroup>
 
 </Project>

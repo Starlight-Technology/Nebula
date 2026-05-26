@@ -84,6 +84,42 @@ public class LlamaClientTest
         Assert.Contains(@"""think"":false", capturedPayload, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task get_response_async_must_retry_without_thinking_when_model_rejects_thinking()
+    {
+        var capturedPayloads = new List<string>();
+
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            capturedPayloads.Add(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+
+            if (capturedPayloads.Count == 1)
+            {
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        """{"error":"\"llama3.2:1b\" does not support thinking"}""",
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"response":"Resposta sem thinking","done":true}""", Encoding.UTF8, "application/json")
+            };
+        });
+
+        var client = new LlamaClient(new HttpClient(handler), defaultModel: "llama3.2:1b");
+
+        var response = await client.GetResponseAsync("Explique o projeto");
+
+        Assert.Equal("Resposta sem thinking", response);
+        Assert.Equal(2, capturedPayloads.Count);
+        Assert.Contains(@"""think"":true", capturedPayloads[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""think"":false", capturedPayloads[1], StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

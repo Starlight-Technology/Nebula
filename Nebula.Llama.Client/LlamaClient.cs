@@ -93,6 +93,23 @@ public class LlamaClient : ILlamaClient
         IProgress<LlamaStreamUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        try
+        {
+            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think, progress, cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (think && IsThinkingUnsupportedError(ex.Message))
+        {
+            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think: false, progress, cancellationToken);
+        }
+    }
+
+    private async Task<string> SendGenerateRequestCoreAsync(
+        string prompt,
+        string? systemPrompt,
+        bool think,
+        IProgress<LlamaStreamUpdate>? progress,
+        CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl)
@@ -382,6 +399,11 @@ public class LlamaClient : ILlamaClient
 
         return normalized.StartsWith("You are a command planner.", StringComparison.Ordinal)
             || normalized.StartsWith("Response only with \"Yes\" or \"No\".", StringComparison.Ordinal);
+    }
+
+    private static bool IsThinkingUnsupportedError(string message)
+    {
+        return message.Contains("does not support thinking", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class LlamaGenerateRequest
