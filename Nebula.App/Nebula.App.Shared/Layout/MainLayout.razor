@@ -9,7 +9,7 @@
 @inject CoronaThemeProvider ThemeProvider
 
 <CoronaThemeCascadingValue>
-    <CoronaLayoutShell DrawerTitle="Nebula Control"
+    <CoronaLayoutShell DrawerTitle="Nebula"
                        HeaderTitle="Nebula"
                        DrawerWidthPx="320"
                        DrawerOverlay="true"
@@ -45,19 +45,19 @@
                              Color="@GetRuntimeModeColor()" />
             </span>
 
-            <span title="@runtimeTelemetry.Cpu.DetailValue" class="nebula-header-metric">
+            <span title="@runtimeTelemetry.Cpu.DetailValue" class="nebula-header-metric nebula-header-metric--cpu">
                 <CoronaBadge Content="@($"CPU {runtimeTelemetry.Cpu.ShortValue}")"
                              Variant="CoronaBadgeVariant.Outlined"
                              Color="@GetMetricColor(runtimeTelemetry.Cpu)" />
             </span>
 
-            <span title="@runtimeTelemetry.Memory.DetailValue" class="nebula-header-metric">
+            <span title="@runtimeTelemetry.Memory.DetailValue" class="nebula-header-metric nebula-header-metric--memory">
                 <CoronaBadge Content="@($"RAM {runtimeTelemetry.Memory.ShortValue}")"
                              Variant="CoronaBadgeVariant.Outlined"
                              Color="@GetMetricColor(runtimeTelemetry.Memory)" />
             </span>
 
-            <span title="@runtimeTelemetry.Gpu.DetailValue" class="nebula-header-metric">
+            <span title="@runtimeTelemetry.Gpu.DetailValue" class="nebula-header-metric nebula-header-metric--gpu">
                 <CoronaBadge Content="@($"GPU {runtimeTelemetry.Gpu.ShortValue}")"
                              Variant="CoronaBadgeVariant.Outlined"
                              Color="@GetMetricColor(runtimeTelemetry.Gpu)" />
@@ -80,19 +80,27 @@
         [
             new CoronaNavItem
             {
-                Text = "Central de conversa",
+                Text = "Painel",
                 Url = "/",
                 Icon = CoronaIcons.House
             },
             new CoronaNavItem
             {
-                Text = "Agente local ativo",
-                Icon = CoronaIcons.Gear
+                Text = "Conversa",
+                Url = "/chat",
+                Icon = "comments"
             },
             new CoronaNavItem
             {
-                Text = "Raciocinio visivel",
-                Icon = CoronaIcons.CircleInfo
+                Text = "Modelos",
+                Url = "/models",
+                Icon = "layer-group"
+            },
+            new CoronaNavItem
+            {
+                Text = "Runtime",
+                Url = "/runtime",
+                Icon = CoronaIcons.Cogs
             }
         ];
     }

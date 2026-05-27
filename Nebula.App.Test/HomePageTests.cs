@@ -31,7 +31,7 @@ public sealed class HomePageTests : HomePageTestContext
 
         RegisterPageServices(manager, new FakeLlamaClient());
 
-        var component = RenderComponent<Home>();
+        var component = Render<Chat>();
 
         component.Find("textarea").Input("Explique a arquitetura");
         FindButton(component, "Enviar").Click();
@@ -70,7 +70,7 @@ public sealed class HomePageTests : HomePageTestContext
 
         RegisterPageServices(manager, new FakeLlamaClient());
 
-        var component = RenderComponent<Home>();
+        var component = Render<Chat>();
 
         component.Find("textarea").Input("Teste com erro");
         FindButton(component, "Enviar").Click();

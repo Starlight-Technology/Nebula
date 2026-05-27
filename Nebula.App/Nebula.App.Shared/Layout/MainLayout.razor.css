@@ -41,8 +41,20 @@
     min-width: 0;
 }
 
-@media (max-width: 1140px) {
+@media (max-width: 1320px) {
     ::deep .nebula-header-metric--mode {
+        display: none;
+    }
+}
+
+@media (max-width: 1160px) {
+    ::deep .nebula-header-metric--gpu {
+        display: none;
+    }
+}
+
+@media (max-width: 960px) {
+    ::deep .nebula-header-metric--memory {
         display: none;
     }
 }

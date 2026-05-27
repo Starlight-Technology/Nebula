@@ -1,1213 +1,179 @@
 @page "/"
-@implements IAsyncDisposable
-@inject IManager Manager
-@inject ILlamaClient LlamaClient
-@inject IRuntimeSetupAdvisor RuntimeSetupAdvisor
-@inject IJSRuntime JS
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
 
-<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-home-shell">
-    <div class="nebula-home-grid">
-        <CoronaCard Class="nebula-hero-card">
-            <div class="nebula-hero-card__eyebrow">
-                <CoronaBadge Content="Central chat" Variant="CoronaBadgeVariant.Soft" />
-                <CoronaBadge Content="Multi-modelo" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-                <CoronaBadge Content="Resposta + raciocinio" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Success" />
-            </div>
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-hero">
+        <div class="nebula-hero__copy">
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Painel operacional" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Runtime online" : "Runtime offline")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+            </CoronaStack>
 
-            <div class="nebula-hero-card__content">
-                <div>
-                    <h2 class="nebula-title">Nebula agora coordena conversa, runtime e modelos em um lugar so.</h2>
-                    <p class="nebula-copy">
-                        Converse com o agente, troque o modelo ativo sem reiniciar a sessao, instale novos modelos do Ollama
-                        e acompanhe o raciocinio e os passos executados quando o pedido virar acao.
-                    </p>
-                </div>
+            <h2>Central Nebula</h2>
+            <p>
+                Supervisao do agente, conversa local, modelos Ollama e setup de aceleracao em telas dedicadas.
+            </p>
 
-                <div class="nebula-starters">
-                    @foreach (var starter in StarterPrompts)
-                    {
-                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                      Size="CoronaComponentSize.Small"
-                                      Color="CoronaColorSemantic.Neutral"
-                                      Disabled="@IsSending"
-                                      OnClick="@(() => SendStarterAsync(starter))">
-                            @starter
-                        </CoronaButton>
-                    }
-                </div>
-            </div>
-        </CoronaCard>
+            <CoronaStack Direction="CoronaStackDirection.Row"
+                         Wrap="CoronaStackWrap.Wrap"
+                         Align="CoronaStackAlign.Center"
+                         Spacing=".75rem">
+                <CoronaButton Icon="@CoronaIcons.ArrowRight" OnClick="NavigateToChat">
+                    Abrir conversa
+                </CoronaButton>
 
-        <div class="nebula-home-side">
-            <CoronaCard Class="nebula-status-card">
-                <div class="nebula-status-card__header">
-                    <div>
-                        <p class="nebula-status-card__label">Runtime local</p>
-                        <h3>Estado da central</h3>
-                    </div>
-
-                    <CoronaBadge Content="@(IsRuntimeOnline ? "Online" : "Offline")"
-                                 Variant="CoronaBadgeVariant.Soft"
-                                 Color="@(IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
-                </div>
-
-                <div class="nebula-status-list">
-                    <div class="nebula-status-row">
-                        <span>Modelo ativo</span>
-                        <strong>@ActiveModelName</strong>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Modelos instalados</span>
-                        <strong>@InstalledModelCount catalogado(s)</strong>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Endpoint do modelo</span>
-                        <code>@LlamaClient.LlamaUrl</code>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Host do agente</span>
-                        <strong>@GetHostSummary()</strong>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Shell da UI</span>
-                        <strong>@GetClientShellSummary()</strong>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Aceleracao recomendada</span>
-                        <strong>@GetAccelerationStatusText()</strong>
-
-                        @if (SetupRecommendation is not null)
-                        {
-                            <p>@SetupRecommendation.Summary</p>
-                        }
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Execucao</span>
-                        <strong>Terminal local com verificacao</strong>
-                    </div>
-                    <div class="nebula-status-row">
-                        <span>Historico atual</span>
-                        <strong>@Turns.Count conversa(s) nesta sessao</strong>
-                    </div>
-                </div>
-            </CoronaCard>
-
-            <CoronaCard Class="nebula-model-card">
-                <div class="nebula-model-card__header">
-                    <div>
-                        <p class="nebula-status-card__label">Ollama</p>
-                        <h3>Hub de modelos</h3>
-                    </div>
-
-                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                  Size="CoronaComponentSize.Small"
-                                  Color="CoronaColorSemantic.Neutral"
-                                  Disabled="@IsModelBusy"
-                                  Loading="@IsRefreshingRuntime"
-                                  OnClick="RefreshRuntimeAsync">
-                        Atualizar
-                    </CoronaButton>
-                </div>
-
-                <div class="nebula-model-current">
-                    <div>
-                        <span class="nebula-model-current__label">Modelo em uso</span>
-                        <strong>@ActiveModelName</strong>
-                        <p>@(RuntimeState?.SelectedModelInstalled == true ? "Pronto para responder agora." : "Ainda nao encontrado no runtime local.")</p>
-                    </div>
-
-                    <div class="nebula-model-current__badges">
-                        <CoronaBadge Content="@(IsRuntimeOnline ? "Runtime pronto" : "Sem conexao")"
-                                     Variant="CoronaBadgeVariant.Soft"
-                                     Color="@(IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
-
-                        @if (RuntimeState?.SelectedModelInstalled == true)
-                        {
-                            <CoronaBadge Content="Instalado" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-                        }
-                    </div>
-                </div>
-
-                @if (!string.IsNullOrWhiteSpace(RuntimeState?.LastError))
-                {
-                    <div class="nebula-error-panel nebula-inline-panel">
-                        <div>
-                            <p class="nebula-error-panel__title">Nao consegui ler o catalogo do Ollama.</p>
-                            <p>@RuntimeState!.LastError</p>
-                        </div>
-                    </div>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(ModelFeedback))
-                {
-                    <div class="nebula-info-panel">
-                        <p class="nebula-info-panel__title">Atualizacao do runtime</p>
-                        <p>@ModelFeedback</p>
-                    </div>
-                }
-
-                <section class="nebula-model-section">
-                    <div class="nebula-model-section__header nebula-model-section__header--inline">
-                        <div>
-                            <h4>Assistente de setup</h4>
-                            <p>Leio o host do agente e, quando possivel, o shell da interface para sugerir o melhor perfil para esta maquina.</p>
-                        </div>
-
-                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                      Size="CoronaComponentSize.Small"
-                                      Color="CoronaColorSemantic.Neutral"
-                                      Disabled="@IsDetectingEnvironment"
-                                      Loading="@IsDetectingEnvironment"
-                                      OnClick="DetectEnvironmentAsync">
-                            Redetectar
-                        </CoronaButton>
-                    </div>
-
-                    @if (IsDetectingEnvironment && SetupRecommendation is null)
-                    {
-                        <div class="nebula-pending-panel nebula-inline-panel">
-                            <div class="nebula-pending-panel__pulse"></div>
-                            <div>
-                                <p class="nebula-pending-panel__title">Analisando o ambiente local...</p>
-                                <p>Assim que a leitura terminar, a central sugere o melhor perfil de aceleracao para esta maquina.</p>
-                            </div>
-                        </div>
-                    }
-                    else if (SetupRecommendation is not null)
-                    {
-                        <div class="nebula-setup-card @(SetupRecommendation.UsesGpu ? "is-gpu" : "is-cpu")">
-                            <div class="nebula-setup-card__eyebrow">
-                                <CoronaBadge Content="Setup guiado" Variant="CoronaBadgeVariant.Soft" />
-                                <CoronaBadge Content="@SetupRecommendation.ProfileName"
-                                             Variant="CoronaBadgeVariant.Outlined"
-                                             Color="@GetRecommendationColor()" />
-                                <CoronaBadge Content="@($"Confianca {SetupRecommendation.ConfidenceLabel}")"
-                                             Variant="CoronaBadgeVariant.Outlined"
-                                             Color="@GetConfidenceColor()" />
-
-                                @if (SetupRecommendation.IsExperimental)
-                                {
-                                    <CoronaBadge Content="Experimental"
-                                                 Variant="CoronaBadgeVariant.Soft"
-                                                 Color="CoronaColorSemantic.Warning" />
-                                }
-                            </div>
-
-                            <div class="nebula-setup-card__content">
-                                <div>
-                                    <h5>@SetupRecommendation.Summary</h5>
-                                    <p>@SetupRecommendation.ModelHint</p>
-                                </div>
-
-                                <code class="nebula-setup-card__command">@SetupRecommendation.Command</code>
-                            </div>
-
-                            <div class="nebula-setup-facts">
-                                <div class="nebula-setup-fact">
-                                    <span>Host do agente</span>
-                                    <strong>@GetHostSummary()</strong>
-                                </div>
-
-                                <div class="nebula-setup-fact">
-                                    <span>Shell da UI</span>
-                                    <strong>@GetClientShellSummary()</strong>
-                                </div>
-
-                                <div class="nebula-setup-fact">
-                                    <span>Pista de GPU</span>
-                                    <strong>@SetupRecommendation.GpuLabel</strong>
-                                </div>
-
-                                <div class="nebula-setup-fact">
-                                    <span>Runtime Ollama</span>
-                                    <strong>@GetRuntimeScopeSummary()</strong>
-                                </div>
-                            </div>
-
-                            <div class="nebula-setup-columns">
-                                <div class="nebula-setup-column">
-                                    <p class="nebula-setup-column__title">Por que essa sugestao</p>
-                                    <ul class="nebula-setup-list">
-                                        @foreach (var reason in SetupRecommendation.Reasons)
-                                        {
-                                            <li>@reason</li>
-                                        }
-                                    </ul>
-                                </div>
-
-                                <div class="nebula-setup-column">
-                                    <p class="nebula-setup-column__title">Proximos passos</p>
-                                    <ul class="nebula-setup-list">
-                                        @foreach (var step in SetupRecommendation.NextSteps)
-                                        {
-                                            <li>@step</li>
-                                        }
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-
-                        @if (!string.IsNullOrWhiteSpace(EnvironmentDetectionError))
-                        {
-                            <div class="nebula-warning-panel">
-                                <div>
-                                    <p class="nebula-warning-panel__title">Leitura parcial do shell</p>
-                                    <p>@EnvironmentDetectionError</p>
-                                </div>
-                            </div>
-                        }
-
-                        @if (SetupRecommendation.Warnings.Count > 0)
-                        {
-                            <div class="nebula-warning-panel">
-                                <div>
-                                    <p class="nebula-warning-panel__title">Alertas do assistente</p>
-                                    <ul class="nebula-setup-list nebula-setup-list--compact">
-                                        @foreach (var warning in SetupRecommendation.Warnings)
-                                        {
-                                            <li>@warning</li>
-                                        }
-                                    </ul>
-                                </div>
-                            </div>
-                        }
-                    }
-                </section>
-
-                @if (IsRuntimeOnline && RuntimeState?.SelectedModelInstalled == false)
-                {
-                    <div class="nebula-warning-panel">
-                        <div>
-                            <p class="nebula-warning-panel__title">O modelo ativo ainda nao esta instalado.</p>
-                            <p>Use a instalacao rapida abaixo para baixar <strong>@ActiveModelName</strong> e ativar a conversa com esse runtime.</p>
-                        </div>
-
-                        <CoronaButton Size="CoronaComponentSize.Small"
-                                      Disabled="@IsModelBusy"
-                                      Loading="@IsInstallingModel"
-                                      OnClick="@(() => InstallSpecificModelAsync(ActiveModelName, true))">
-                            Instalar modelo ativo
-                        </CoronaButton>
-                    </div>
-                }
-
-                <section class="nebula-model-section">
-                    <div class="nebula-model-section__header">
-                        <h4>Perfis de aceleracao</h4>
-                        <p>O backend de GPU e definido no runtime do Ollama. Escolha um perfil de `docker compose` compativel com a sua maquina.</p>
-                    </div>
-
-                    <div class="nebula-acceleration-grid">
-                        @foreach (var profile in AccelerationProfiles)
-                        {
-                            <div class="@GetAccelerationCardClass(profile)">
-                                <div class="nebula-acceleration-card__header">
-                                    <div class="nebula-acceleration-card__labels">
-                                        <strong>@profile.Name</strong>
-
-                                        @if (IsRecommendedProfile(profile))
-                                        {
-                                            <span class="nebula-acceleration-card__flag">Recomendado agora</span>
-                                        }
-                                    </div>
-
-                                    <CoronaBadge Content="@GetAccelerationBadge(profile)"
-                                                 Variant="CoronaBadgeVariant.Outlined"
-                                                 Color="@GetAccelerationBadgeColor(profile)" />
-                                </div>
-
-                                <p>@profile.Description</p>
-                                <code>@profile.Command</code>
-                            </div>
-                        }
-                    </div>
-                </section>
-
-                <section class="nebula-model-section">
-                    <div class="nebula-model-section__header">
-                        <h4>Instalar um novo modelo</h4>
-                        <p>Digite um nome valido da biblioteca do Ollama e escolha se quer apenas baixar ou ja trocar o modelo em uso.</p>
-                    </div>
-
-                    <div class="nebula-model-install">
-                        <CoronaInput Label="Nome do modelo"
-                                     Placeholder="Ex.: qwen3:8b"
-                                     HelperText="Aceita qualquer modelo compativel com o Ollama local."
-                                     Disabled="@IsModelBusy"
-                                     @bind-Value="ModelInstallText" />
-
-                        <div class="nebula-model-install__actions">
-                            <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                          Color="CoronaColorSemantic.Neutral"
-                                          Disabled="@(!CanInstallModel)"
-                                          OnClick="InstallModelAsync">
-                                Instalar
-                            </CoronaButton>
-
-                            <CoronaButton Disabled="@(!CanInstallModel)"
-                                          Loading="@IsInstallingModel"
-                                          OnClick="InstallAndActivateModelAsync">
-                                Instalar e usar
-                            </CoronaButton>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="nebula-model-section">
-                    <div class="nebula-model-section__header">
-                        <h4>Sugestoes prontas</h4>
-                        <p>Atalhos para alguns modelos populares e bem suportados no Ollama.</p>
-                    </div>
-
-                    <div class="nebula-model-suggestions">
-                        @foreach (var suggestion in SuggestedModels)
-                        {
-                            var isInstalled = RuntimeState?.InstalledModels.Any(model => ModelNamesMatch(model.Name, suggestion.Name)) == true;
-                            var isSelected = ModelNamesMatch(ActiveModelName, suggestion.Name);
-
-                            <div class="nebula-model-suggestion-card">
-                                <div>
-                                    <strong>@suggestion.Name</strong>
-                                    <p>@suggestion.Description</p>
-                                </div>
-
-                                <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
-                                              Size="CoronaComponentSize.Small"
-                                              Color="@(isInstalled ? CoronaColorSemantic.Primary : CoronaColorSemantic.Neutral)"
-                                              Disabled="@IsModelBusy"
-                                              OnClick="@(() => HandleSuggestedModelAsync(suggestion))">
-                                    @(isSelected ? "Em uso" : isInstalled ? "Usar agora" : "Instalar e usar")
-                                </CoronaButton>
-                            </div>
-                        }
-                    </div>
-                </section>
-
-                @if (PullUpdates.Count > 0)
-                {
-                    <section class="nebula-model-section">
-                        <div class="nebula-model-section__header">
-                            <h4>Progresso recente</h4>
-                            <p>Ultimos eventos recebidos do `ollama pull`.</p>
-                        </div>
-
-                        <div class="nebula-model-progress">
-                            @foreach (var update in PullUpdates)
-                            {
-                                <div class="nebula-model-progress__row">
-                                    <span>@update.Status</span>
-                                    <strong>@(update.PercentComplete is int percent ? $"{percent}%" : "..." )</strong>
-                                </div>
-                            }
-                        </div>
-                    </section>
-                }
-
-                <section class="nebula-model-section">
-                    <div class="nebula-model-section__header">
-                        <h4>Modelos instalados</h4>
-                        <p>Troque de modelo a qualquer momento sem sair da conversa atual.</p>
-                    </div>
-
-                    @if (RuntimeState is null && IsRefreshingRuntime)
-                    {
-                        <div class="nebula-pending-panel nebula-inline-panel">
-                            <div class="nebula-pending-panel__pulse"></div>
-                            <div>
-                                <p class="nebula-pending-panel__title">Lendo o catalogo do Ollama...</p>
-                                <p>Quando o runtime responder, os modelos instalados aparecem aqui.</p>
-                            </div>
-                        </div>
-                    }
-                    else if (InstalledModelCount == 0)
-                    {
-                        <div class="nebula-empty-inline">
-                            <p>Nenhum modelo instalado foi encontrado ainda.</p>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="nebula-model-list">
-                            @foreach (var model in RuntimeState!.InstalledModels)
-                            {
-                                var isSelected = ModelNamesMatch(model.Name, ActiveModelName);
-
-                                <div class="nebula-model-item @(isSelected ? "is-active" : string.Empty)">
-                                    <div class="nebula-model-item__meta">
-                                        <div class="nebula-model-item__top">
-                                            <strong>@model.Name</strong>
-
-                                            <div class="nebula-model-item__badges">
-                                                <CoronaBadge Content="@model.SizeLabel"
-                                                             Variant="CoronaBadgeVariant.Outlined"
-                                                             Color="CoronaColorSemantic.Neutral" />
-
-                                                @if (isSelected)
-                                                {
-                                                    <CoronaBadge Content="Ativo"
-                                                                 Variant="CoronaBadgeVariant.Soft"
-                                                                 Color="CoronaColorSemantic.Success" />
-                                                }
-                                            </div>
-                                        </div>
-
-                                        <p>@model.Summary</p>
-                                        <span>Atualizado em @model.ModifiedAtLabel</span>
-                                    </div>
-
-                                    <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
-                                                  Size="CoronaComponentSize.Small"
-                                                  Color="@(isSelected ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Primary)"
-                                                  Disabled="@(IsModelBusy || isSelected)"
-                                                  OnClick="@(() => SelectInstalledModelAsync(model.Name))">
-                                        @(isSelected ? "Em uso" : "Usar")
-                                    </CoronaButton>
-                                </div>
-                            }
-                        </div>
-                    }
-                </section>
-            </CoronaCard>
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.Gear"
+                              OnClick="NavigateToModels">
+                    Modelos
+                </CoronaButton>
+            </CoronaStack>
         </div>
-    </div>
 
-    <section class="nebula-transcript" aria-live="polite">
-        @if (Turns.Count == 0)
-        {
-            <CoronaCard Class="nebula-empty-card">
-                <div class="nebula-empty-card__content">
-                    <CoronaBadge Content="Pronto para conversar" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
-                    <h3>Comece com uma pergunta, uma tarefa ou uma troca de modelo.</h3>
-                    <p>
-                        A interface mostra a entrada do usuario, o modelo usado em cada turno, a resposta do agente,
-                        o raciocinio exposto pelo modelo e, quando houver comandos, os passos validados e executados.
-                    </p>
-                </div>
-            </CoronaCard>
-        }
-
-        @foreach (var turn in Turns)
-        {
-            <article class="nebula-turn">
-                <div class="nebula-turn__user">
-                    <CoronaCard Class="nebula-message-card nebula-message-card--user">
-                        <div class="nebula-message-card__meta">
-                            <CoronaBadge Content="Voce" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
-                        </div>
-                        <div class="nebula-message-card__text">@turn.Prompt</div>
-                    </CoronaCard>
-                </div>
-
-                <div class="nebula-turn__assistant">
-                    <CoronaCard Class="nebula-message-card nebula-message-card--assistant">
-                        <div class="nebula-message-card__header">
-                            <div class="nebula-message-card__meta nebula-message-card__meta--assistant">
-                                <CoronaBadge Content="Nebula" Variant="CoronaBadgeVariant.Soft" />
-                                <CoronaBadge Content="@GetTurnModelLabel(turn)" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-
-                                @if (turn.Result is not null)
-                                {
-                                    <CoronaBadge Content="@turn.Result.Classification" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-
-                                    @if (turn.Result.Commands.Count > 0)
-                                    {
-                                        <CoronaBadge Content="@($"{turn.Result.Commands.Count} passo(s)")" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
-                                    }
-                                }
-                                else if (string.IsNullOrWhiteSpace(turn.Error))
-                                {
-                                    <CoronaBadge Content="@(turn.HasStreamingContent ? "Gerando" : "Pensando")" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
-                                }
-                            </div>
-                        </div>
-
-                        @if (!string.IsNullOrWhiteSpace(turn.Error))
-                        {
-                            <div class="nebula-error-panel">
-                                <p class="nebula-error-panel__title">Nao consegui concluir este turno.</p>
-                                <p>@turn.Error</p>
-                            </div>
-                        }
-                        else if (turn.Result is null)
-                        {
-                            <div class="nebula-response-stack">
-                                @if (!string.IsNullOrWhiteSpace(turn.StreamingResponse))
-                                {
-                                    <section class="nebula-panel-section">
-                                        <div class="nebula-panel-section__header">
-                                            <CoronaBadge Content="Resposta parcial" Variant="CoronaBadgeVariant.Soft" />
-                                        </div>
-
-                                        <div class="nebula-rich-text">@turn.StreamingResponse</div>
-                                    </section>
-                                }
-
-                                @if (!string.IsNullOrWhiteSpace(turn.StreamingReasoning))
-                                {
-                                    <details class="nebula-think-panel" open>
-                                        <summary class="nebula-think-panel__summary">
-                                            <span>Raciocinio em andamento</span>
-                                            <CoronaBadge Content="@turn.RequestedModel" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-                                        </summary>
-
-                                        <div class="nebula-rich-text nebula-rich-text--reasoning">@turn.StreamingReasoning</div>
-                                    </details>
-                                }
-
-                                <div class="nebula-pending-panel">
-                                    <div class="nebula-pending-panel__pulse"></div>
-                                    <div>
-                                        <p class="nebula-pending-panel__title">Preparando a resposta do agente...</p>
-                                        <p>O turno atual esta usando o modelo @turn.RequestedModel.</p>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="nebula-response-stack">
-                                <section class="nebula-panel-section">
-                                    <div class="nebula-panel-section__header">
-                                        <CoronaBadge Content="Resposta" Variant="CoronaBadgeVariant.Soft" />
-                                    </div>
-
-                                    <div class="nebula-rich-text">@turn.Result.Response</div>
-                                </section>
-
-                                <details class="nebula-think-panel" open="@turn.ShowReasoning">
-                                    <summary class="nebula-think-panel__summary">
-                                        <span>Raciocinio</span>
-                                        <CoronaBadge Content="@turn.Result.ModelName" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
-                                    </summary>
-
-                                    <div class="nebula-rich-text nebula-rich-text--reasoning">@GetReasoningText(turn.Result)</div>
-                                </details>
-
-                                @if (turn.Result.Commands.Count > 0)
-                                {
-                                    <section class="nebula-panel-section">
-                                        <div class="nebula-panel-section__header">
-                                            <CoronaBadge Content="@($"Passos ({turn.Result.Commands.Count})")"
-                                                         Variant="CoronaBadgeVariant.Soft"
-                                                         Color="CoronaColorSemantic.Success" />
-                                        </div>
-
-                                        <div class="nebula-steps">
-                                            @foreach (var command in turn.Result.Commands)
-                                            {
-                                                <div class="nebula-step-card">
-                                                    <div class="nebula-step-card__top">
-                                                        <div>
-                                                            <strong>@command.Objective</strong>
-                                                            <code>@command.Run</code>
-                                                        </div>
-
-                                                        <CoronaBadge Content="@(command.Executed ? "Executado" : "Bloqueado")"
-                                                                     Variant="CoronaBadgeVariant.Soft"
-                                                                     Color="@(command.Executed ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
-                                                    </div>
-
-                                                    <div class="nebula-step-card__checks">
-                                                        <span>Corretude: @FormatBoolean(command.IsCorrect)</span>
-                                                        <span>Seguranca do modelo: @FormatBoolean(command.IsSafe)</span>
-                                                        <span>Seguranca local: @FormatBoolean(command.PassedLocalSafety)</span>
-                                                    </div>
-
-                                                    @if (!string.IsNullOrWhiteSpace(command.Notes))
-                                                    {
-                                                        <p class="nebula-step-card__notes">@command.Notes</p>
-                                                    }
-
-                                                    @if (!string.IsNullOrWhiteSpace(command.Output))
-                                                    {
-                                                        <pre class="nebula-step-card__output">@command.Output</pre>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                    </section>
-                                }
-                            </div>
-                        }
-                    </CoronaCard>
-                </div>
-            </article>
-        }
+        <div class="nebula-hero__panel">
+            <div>
+                <span>Modelo ativo</span>
+                <strong>@WorkspaceState.ActiveModelName</strong>
+            </div>
+            <div>
+                <span>Endpoint</span>
+                <code>@WorkspaceState.LlamaUrl</code>
+            </div>
+            <div>
+                <span>Aceleracao</span>
+                <strong>@WorkspaceState.GetAccelerationStatusText()</strong>
+            </div>
+        </div>
     </section>
 
-    <CoronaCard Class="@GetComposerCardClass()">
-        <div class="nebula-composer">
-            <textarea class="nebula-composer__input"
-                      placeholder="Descreva uma tarefa, pergunte algo sobre o projeto ou peca uma acao local..."
-                      @bind="ComposerText"
-                      @bind:event="oninput"></textarea>
-
-            <div class="nebula-composer__footer">
-                <p class="nebula-composer__hint">Use o botao para enviar. O historico desta tela fica na sessao atual.</p>
-
-                <CoronaStack Direction="CoronaStackDirection.Row"
-                             Align="CoronaStackAlign.Center"
-                             Justify="CoronaStackJustify.End"
-                             Spacing=".75rem"
-                             FullWidth="true">
-                    <CoronaButton Variant="CoronaButtonVariant.Text"
-                                  Size="CoronaComponentSize.Small"
-                                  Color="CoronaColorSemantic.Neutral"
-                                  Disabled="@(IsSending || Turns.Count == 0)"
-                                  OnClick="ClearConversation">
-                        Nova conversa
-                    </CoronaButton>
-
-                    <CoronaButton Size="CoronaComponentSize.Large"
-                                  Loading="@IsSending"
-                                  Disabled="@(!CanSend)"
-                                  Icon="@CoronaIcons.ArrowRight"
-                                  OnClick="SendAsync">
-                        Enviar
-                    </CoronaButton>
-                </CoronaStack>
+    <section class="nebula-metrics-grid" aria-label="Resumo da central">
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-comments" aria-hidden="true"></span>
             </div>
-        </div>
-    </CoronaCard>
+            <span>Conversas nesta sessao</span>
+            <strong>@WorkspaceState.Turns.Count</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-cubes" aria-hidden="true"></span>
+            </div>
+            <span>Modelos instalados</span>
+            <strong>@WorkspaceState.InstalledModelCount</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-microchip" aria-hidden="true"></span>
+            </div>
+            <span>Host do agente</span>
+            <strong>@WorkspaceState.GetHostSummary()</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-display" aria-hidden="true"></span>
+            </div>
+            <span>Shell da UI</span>
+            <strong>@WorkspaceState.GetClientShellSummary()</strong>
+        </CoronaCard>
+    </section>
+
+    <section class="nebula-workspace-grid" aria-label="Telas da central">
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Conversa" Variant="CoronaBadgeVariant.Soft" />
+                <span class="fa fa-solid fa-message" aria-hidden="true"></span>
+            </div>
+            <h3>Agente local</h3>
+            <p>Historico de turnos, resposta, raciocinio exposto e passos validados ficam juntos no fluxo de conversa.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToChat">
+                Entrar
+            </CoronaButton>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Ollama" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
+                <span class="fa fa-solid fa-layer-group" aria-hidden="true"></span>
+            </div>
+            <h3>Hub de modelos</h3>
+            <p>Instalacao, troca de modelo ativo, sugestoes prontas e catalogo local em uma tela propria.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToModels">
+                Gerenciar
+            </CoronaButton>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Runtime" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+                <span class="fa fa-solid fa-gauge-high" aria-hidden="true"></span>
+            </div>
+            <h3>Setup e aceleracao</h3>
+            <p>Leitura do ambiente, perfil recomendado e comandos Docker para CPU, NVIDIA, AMD e Intel Vulkan.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToRuntime">
+                Ver setup
+            </CoronaButton>
+        </CoronaCard>
+    </section>
 </CoronaContainer>
 
 @code {
-    private static readonly string[] StarterPrompts =
-    [
-        "Resuma este projeto e destaque os modulos principais",
-        "Explique como o agente decide entre chat e acao",
-        "Liste os riscos tecnicos mais importantes desta solucao",
-        "Sugira um modelo melhor para tarefas de codigo neste projeto"
-    ];
-
-    private static readonly SuggestedModelOption[] SuggestedModels =
-    [
-        new("qwen3:8b", "Equilibrado para conversa, codigo e automacao local."),
-        new("deepseek-r1:8b", "Mais foco em raciocinio passo a passo."),
-        new("llama3.1:8b", "Boa opcao geral para chat e tarefas tecnicas."),
-        new("phi4-mini", "Opcao leve para maquinas locais mais modestas.")
-    ];
-
-    private static readonly AccelerationProfileOption[] AccelerationProfiles =
-    [
-        new(
-            "cpu",
-            "CPU",
-            "Modo padrao, sem dependencias extras de driver ou passthrough.",
-            "docker compose up -d",
-            "Seguro",
-            CoronaColorSemantic.Neutral),
-        new(
-            "nvidia",
-            "NVIDIA CUDA",
-            "Perfil recomendado para Linux e Windows com WSL2 quando o host ja usa NVIDIA Container Toolkit.",
-            "docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d",
-            "Estavel",
-            CoronaColorSemantic.Success),
-        new(
-            "amd",
-            "AMD ROCm",
-            "Perfil para Linux com `ollama/ollama:rocm` e dispositivos `/dev/kfd` + `/dev/dri` expostos ao container.",
-            "docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d",
-            "Linux",
-            CoronaColorSemantic.Warning),
-        new(
-            "intel",
-            "Intel Vulkan",
-            "Perfil experimental via Vulkan. Tambem pode servir como fallback para outras GPUs com driver Vulkan funcional.",
-            "docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d",
-            "Experimental",
-            CoronaColorSemantic.Warning)
-    ];
-
-    private readonly List<ConversationEntryViewModel> Turns = [];
-    private readonly List<LlamaPullProgress> PullUpdates = [];
-
-    private LlamaRuntimeState? RuntimeState { get; set; }
-    private RuntimeSetupRecommendation? SetupRecommendation { get; set; }
-    private ClientEnvironmentProbe? EnvironmentProbe { get; set; }
-    private IJSObjectReference? EnvironmentModule { get; set; }
-    private string ComposerText { get; set; } = string.Empty;
-    private string ModelInstallText { get; set; } = string.Empty;
-    private string? ModelFeedback { get; set; }
-    private string? EnvironmentDetectionError { get; set; }
-    private bool IsSending { get; set; }
-    private bool IsRefreshingRuntime { get; set; }
-    private bool IsInstallingModel { get; set; }
-    private bool IsDetectingEnvironment { get; set; }
-    private bool IsDisposed { get; set; }
-    private CancellationTokenSource? ActiveTurnCancellationSource { get; set; }
-
-    private bool IsRuntimeOnline => RuntimeState?.IsAvailable == true;
-    private bool CanSend => !IsSending && !string.IsNullOrWhiteSpace(ComposerText);
-    private bool IsModelBusy => IsRefreshingRuntime || IsInstallingModel || IsSending;
-    private bool CanInstallModel => !IsModelBusy && !string.IsNullOrWhiteSpace(ModelInstallText);
-    private string ActiveModelName => RuntimeState?.SelectedModel ?? LlamaClient.SelectedModel;
-    private int InstalledModelCount => RuntimeState?.InstalledModels.Count ?? 0;
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        await RefreshRuntimeAsync();
+        await WorkspaceState.EnsureRuntimeAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            await DetectEnvironmentAsync();
+            await WorkspaceState.DetectEnvironmentAsync();
         }
     }
 
-    private async Task SendAsync()
+    private void NavigateToChat()
     {
-        await SubmitPromptAsync(ComposerText);
+        NavigationManager.NavigateTo("/chat");
     }
 
-    private async Task SendStarterAsync(string prompt)
+    private void NavigateToModels()
     {
-        await SubmitPromptAsync(prompt);
+        NavigationManager.NavigateTo("/models");
     }
 
-    private async Task SubmitPromptAsync(string prompt)
+    private void NavigateToRuntime()
     {
-        if (IsSending)
-        {
-            return;
-        }
-
-        var normalizedPrompt = prompt.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedPrompt))
-        {
-            return;
-        }
-
-        var turn = new ConversationEntryViewModel
-        {
-            Prompt = normalizedPrompt,
-            RequestedModel = ActiveModelName
-        };
-
-        Turns.Add(turn);
-        ComposerText = string.Empty;
-        IsSending = true;
-
-        await InvokeAsync(StateHasChanged);
-
-        ActiveTurnCancellationSource?.Cancel();
-        ActiveTurnCancellationSource?.Dispose();
-
-        var turnCancellationSource = new CancellationTokenSource();
-        ActiveTurnCancellationSource = turnCancellationSource;
-
-        _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource);
+        NavigationManager.NavigateTo("/runtime");
     }
 
-    private async Task CompleteTurnAsync(
-        ConversationEntryViewModel turn,
-        string normalizedPrompt,
-        CancellationTokenSource turnCancellationSource)
+    private void HandleWorkspaceChanged()
     {
-        try
-        {
-            var progress = new InlineProgress<ConversationTurn>(partialTurn =>
-            {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-
-                if (!IsDisposed)
-                {
-                    _ = InvokeAsync(StateHasChanged);
-                }
-            });
-
-            turn.Result = await Manager.ManageConversationAsync(normalizedPrompt, progress, turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-        }
-        catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && IsDisposed)
-        {
-        }
-        catch (Exception ex)
-        {
-            turn.Error = ex.Message;
-        }
-        finally
-        {
-            IsSending = false;
-
-            if (ReferenceEquals(ActiveTurnCancellationSource, turnCancellationSource))
-            {
-                ActiveTurnCancellationSource.Dispose();
-                ActiveTurnCancellationSource = null;
-            }
-
-            if (!IsDisposed)
-            {
-                await InvokeAsync(StateHasChanged);
-            }
-        }
+        _ = InvokeAsync(StateHasChanged);
     }
 
-    private async Task RefreshRuntimeAsync()
+    public void Dispose()
     {
-        if (IsRefreshingRuntime)
-        {
-            return;
-        }
-
-        IsRefreshingRuntime = true;
-        await InvokeAsync(StateHasChanged);
-
-        try
-        {
-            RuntimeState = await LlamaClient.GetRuntimeStateAsync(forceRefresh: true);
-            ModelFeedback = RuntimeState.IsAvailable
-                ? $"Catalogo atualizado com {RuntimeState.InstalledModels.Count} modelo(s)."
-                : "O runtime nao respondeu. Verifique se o Ollama esta ativo localmente.";
-            UpdateSetupRecommendation();
-        }
-        finally
-        {
-            IsRefreshingRuntime = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task DetectEnvironmentAsync()
-    {
-        if (IsDetectingEnvironment)
-        {
-            return;
-        }
-
-        IsDetectingEnvironment = true;
-        EnvironmentDetectionError = null;
-        await InvokeAsync(StateHasChanged);
-
-        try
-        {
-            EnvironmentModule ??= await JS.InvokeAsync<IJSObjectReference>(
-                "import",
-                "./_content/Nebula.App.Shared/nebula-runtime.js");
-
-            EnvironmentProbe = await EnvironmentModule.InvokeAsync<ClientEnvironmentProbe>("getClientEnvironment");
-        }
-        catch (Exception ex) when (ex is JSException or InvalidOperationException)
-        {
-            EnvironmentProbe = null;
-            EnvironmentDetectionError = "Nao consegui ler todos os detalhes do shell da interface, entao a recomendacao usa apenas os sinais do host do agente.";
-        }
-        finally
-        {
-            UpdateSetupRecommendation();
-            IsDetectingEnvironment = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task SelectInstalledModelAsync(string modelName)
-    {
-        if (IsModelBusy)
-        {
-            return;
-        }
-
-        var changed = await LlamaClient.SelectModelAsync(modelName);
-        if (!changed)
-        {
-            await RefreshRuntimeAsync();
-            ModelFeedback = $"Nao consegui ativar {modelName} porque ele nao aparece como instalado.";
-            return;
-        }
-
-        await RefreshRuntimeAsync();
-        ModelFeedback = $"Modelo ativo alterado para {LlamaClient.SelectedModel}.";
-    }
-
-    private async Task InstallModelAsync()
-    {
-        await InstallSpecificModelAsync(ModelInstallText, false);
-    }
-
-    private async Task InstallAndActivateModelAsync()
-    {
-        await InstallSpecificModelAsync(ModelInstallText, true);
-    }
-
-    private async Task HandleSuggestedModelAsync(SuggestedModelOption suggestion)
-    {
-        if (ModelNamesMatch(ActiveModelName, suggestion.Name))
-        {
-            return;
-        }
-
-        var isInstalled = RuntimeState?.InstalledModels.Any(model => ModelNamesMatch(model.Name, suggestion.Name)) == true;
-        if (isInstalled)
-        {
-            await SelectInstalledModelAsync(suggestion.Name);
-            return;
-        }
-
-        await InstallSpecificModelAsync(suggestion.Name, true);
-    }
-
-    private async Task InstallSpecificModelAsync(string modelName, bool activateAfterInstall)
-    {
-        if (IsModelBusy)
-        {
-            return;
-        }
-
-        var normalizedModel = modelName.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedModel))
-        {
-            return;
-        }
-
-        PullUpdates.Clear();
-        IsInstallingModel = true;
-        ModelFeedback = activateAfterInstall
-            ? $"Instalando {normalizedModel} e preparando a troca do modelo ativo..."
-            : $"Instalando {normalizedModel}...";
-
-        await InvokeAsync(StateHasChanged);
-
-        try
-        {
-            var reporter = new Progress<LlamaPullProgress>(update =>
-            {
-                PullUpdates.Add(update);
-                if (PullUpdates.Count > 6)
-                {
-                    PullUpdates.RemoveAt(0);
-                }
-
-                _ = InvokeAsync(StateHasChanged);
-            });
-
-            var result = await LlamaClient.PullModelAsync(
-                normalizedModel,
-                activateAfterInstall: activateAfterInstall,
-                progress: reporter);
-
-            if (result.Success)
-            {
-                ModelInstallText = string.Empty;
-                await RefreshRuntimeAsync();
-            }
-
-            ModelFeedback = result.Message;
-        }
-        finally
-        {
-            IsInstallingModel = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private Task ClearConversation()
-    {
-        if (IsSending)
-        {
-            return Task.CompletedTask;
-        }
-
-        Turns.Clear();
-        return InvokeAsync(StateHasChanged);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        IsDisposed = true;
-        ActiveTurnCancellationSource?.Cancel();
-        ActiveTurnCancellationSource?.Dispose();
-        ActiveTurnCancellationSource = null;
-
-        if (EnvironmentModule is not null)
-        {
-            try
-            {
-                await EnvironmentModule.DisposeAsync();
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }
-    }
-
-    private static string GetReasoningText(ConversationTurn turn)
-    {
-        return string.IsNullOrWhiteSpace(turn.Reasoning)
-            ? "O modelo nao retornou um bloco explicito de raciocinio neste turno."
-            : turn.Reasoning;
-    }
-
-    private static string GetTurnModelLabel(ConversationEntryViewModel turn)
-    {
-        return turn.Result?.ModelName ?? turn.RequestedModel;
-    }
-
-    private string GetComposerCardClass()
-    {
-        return Turns.Count == 0
-            ? "nebula-composer-card"
-            : "nebula-composer-card nebula-composer-card--sticky";
-    }
-
-    private void UpdateSetupRecommendation()
-    {
-        SetupRecommendation = RuntimeSetupAdvisor.BuildRecommendation(EnvironmentProbe, LlamaClient.LlamaUrl);
-    }
-
-    private string GetHostSummary()
-    {
-        return SetupRecommendation is null
-            ? "Lendo host do agente..."
-            : $"{SetupRecommendation.Host.PlatformLabel} {SetupRecommendation.Host.ArchitectureLabel}";
-    }
-
-    private string GetClientShellSummary()
-    {
-        if (SetupRecommendation?.Client is null)
-        {
-            return IsDetectingEnvironment
-                ? "Lendo shell da interface..."
-                : "Sem leitura detalhada do shell";
-        }
-
-        return $"{SetupRecommendation.Client.BrowserLabel} em {SetupRecommendation.Client.PlatformLabel}";
-    }
-
-    private string GetAccelerationStatusText()
-    {
-        return SetupRecommendation is null
-            ? "Analisando o melhor perfil..."
-            : $"{SetupRecommendation.ProfileName} ({SetupRecommendation.ModeLabel.ToLowerInvariant()})";
-    }
-
-    private string GetRuntimeScopeSummary()
-    {
-        if (SetupRecommendation is null)
-        {
-            return "Lendo endpoint";
-        }
-
-        return SetupRecommendation.Runtime.IsLocal
-            ? $"Local ({LlamaClient.LlamaUrl})"
-            : $"Remoto ({LlamaClient.LlamaUrl})";
-    }
-
-    private CoronaColorSemantic GetRecommendationColor()
-    {
-        if (SetupRecommendation is null)
-        {
-            return CoronaColorSemantic.Neutral;
-        }
-
-        if (!SetupRecommendation.UsesGpu)
-        {
-            return CoronaColorSemantic.Neutral;
-        }
-
-        return SetupRecommendation.IsExperimental
-            ? CoronaColorSemantic.Warning
-            : CoronaColorSemantic.Success;
-    }
-
-    private CoronaColorSemantic GetConfidenceColor()
-    {
-        return SetupRecommendation?.ConfidenceLabel switch
-        {
-            "Alta" => CoronaColorSemantic.Success,
-            "Media" => CoronaColorSemantic.Primary,
-            _ => CoronaColorSemantic.Warning
-        };
-    }
-
-    private bool IsRecommendedProfile(AccelerationProfileOption profile)
-    {
-        return SetupRecommendation?.ProfileKey == profile.Key;
-    }
-
-    private string GetAccelerationCardClass(AccelerationProfileOption profile)
-    {
-        return IsRecommendedProfile(profile)
-            ? "nebula-acceleration-card is-recommended"
-            : "nebula-acceleration-card";
-    }
-
-    private string GetAccelerationBadge(AccelerationProfileOption profile)
-    {
-        return IsRecommendedProfile(profile)
-            ? "Recomendado"
-            : profile.Badge;
-    }
-
-    private CoronaColorSemantic GetAccelerationBadgeColor(AccelerationProfileOption profile)
-    {
-        return IsRecommendedProfile(profile)
-            ? GetRecommendationColor()
-            : profile.Color;
-    }
-
-    private static string FormatBoolean(bool value) => value ? "sim" : "nao";
-
-    private static bool ModelNamesMatch(string left, string right)
-    {
-        return NormalizeModelName(left).Equals(NormalizeModelName(right), StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeModelName(string modelName)
-    {
-        var trimmed = modelName.Trim();
-        return trimmed.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^7]
-            : trimmed;
-    }
-
-    private sealed class ConversationEntryViewModel
-    {
-        public string Prompt { get; set; } = string.Empty;
-
-        public string RequestedModel { get; set; } = string.Empty;
-
-        public ConversationTurn? Result { get; set; }
-
-        public string? Error { get; set; }
-
-        public string? StreamingClassification { get; set; }
-
-        public string? StreamingResponse { get; set; }
-
-        public string? StreamingReasoning { get; set; }
-
-        public bool HasStreamingContent =>
-            !string.IsNullOrWhiteSpace(StreamingResponse) ||
-            !string.IsNullOrWhiteSpace(StreamingReasoning);
-
-        public bool ShowReasoning { get; set; } = true;
-    }
-
-    private sealed record SuggestedModelOption(string Name, string Description);
-
-    private sealed record AccelerationProfileOption(
-        string Key,
-        string Name,
-        string Description,
-        string Command,
-        string Badge,
-        CoronaColorSemantic Color);
-
-    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
-    {
-        public void Report(T value)
-        {
-            handler(value);
-        }
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
     }
 }

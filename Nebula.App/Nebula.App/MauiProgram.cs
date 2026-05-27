@@ -9,6 +9,7 @@ using MongoDB.Driver;
 using Nebula.Agent;
 using Nebula.Agent.Data;
 using Nebula.App.Shared.Setup;
+using Nebula.App.Shared.State;
 using Nebula.Llama.Client;
 using Nebula.Mongo.Context;
 using Nebula.Postgres.Context;
@@ -38,6 +39,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<ILlamaClient, LlamaClient>();
         builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
         builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
+        builder.Services.AddScoped<NebulaWorkspaceState>();
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
         builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
         builder.Services.AddSingleton<Agent.ILogger, ConsoleLogger>();

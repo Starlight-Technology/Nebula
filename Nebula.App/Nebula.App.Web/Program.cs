@@ -7,6 +7,7 @@ using MongoDB.Driver;
 
 using Nebula.Agent;
 using Nebula.Agent.Data;
+using Nebula.App.Shared.State;
 using Nebula.App.Web.Components;
 using Nebula.App.Shared.Setup;
 using Nebula.Llama.Client;
@@ -23,6 +24,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddSingleton<ILlamaClient, LlamaClient>();
 builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
 builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Web app"));
+builder.Services.AddScoped<NebulaWorkspaceState>();
 builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
 builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
 builder.Services.AddSingleton<Nebula.Agent.ILogger, ConsoleLogger>();
