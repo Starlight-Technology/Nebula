@@ -28,6 +28,8 @@ builder.Services.AddScoped<NebulaWorkspaceState>();
 builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
 builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
 builder.Services.AddSingleton<Nebula.Agent.ILogger, ConsoleLogger>();
+builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
+builder.Services.AddScoped<NebulaContextBuilder>();
 
 var mongoConn = builder.Configuration["MONGO_CONNECTION"] ?? "mongodb://admin:password@localhost:27017/nebula?authSource=admin";
 var mongoDb = builder.Configuration["MONGO_DATABASE"] ?? "nebula";
@@ -40,6 +42,7 @@ try
 
     builder.Services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
     builder.Services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
+    builder.Services.AddSingleton<IConversationMemoryStore, MongoConversationMemoryRepository>();
 }
 catch (MongoAuthenticationException ex)
 {
@@ -57,6 +60,8 @@ builder.Services.AddDbContext<PostgresContext>(options => options.UseNpgsql(pgCo
 builder.Services.AddScoped<ICommandRepository, PostgresCommandRepository>();
 builder.Services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
 builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
+builder.Services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
+builder.Services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 builder.Services.AddScoped<IManager, Manager>();
 builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 

@@ -84,6 +84,8 @@ public sealed class HomePageTests : HomePageTestContext
 
     private sealed class FakeManager : IManager
     {
+        public Guid ActiveConversationId { get; private set; } = Guid.NewGuid();
+
         public Func<string, IProgress<ConversationTurn>?, CancellationToken, Task<ConversationTurn>> ManageConversationAsyncHandler { get; set; }
             = (prompt, _, _) => Task.FromResult(new ConversationTurn
             {
@@ -109,6 +111,12 @@ public sealed class HomePageTests : HomePageTestContext
         public Task<string> ManageResponse(string prompt)
         {
             return Task.FromResult(prompt);
+        }
+
+        public Guid StartNewConversation()
+        {
+            ActiveConversationId = Guid.NewGuid();
+            return ActiveConversationId;
         }
 
         public Task<string> GenerateCommandSteps(string userRequest)

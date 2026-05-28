@@ -2,6 +2,8 @@ namespace Nebula.Agent;
 
 public class ConversationTurn
 {
+    public Guid ConversationId { get; set; }
+
     public Guid RequestId { get; set; }
 
     public string Prompt { get; set; } = string.Empty;
@@ -25,6 +27,8 @@ public class CommandExecution
 
     public string Run { get; set; } = string.Empty;
 
+    public bool Required { get; set; } = true;
+
     public bool IsCorrect { get; set; }
 
     public bool IsSafe { get; set; }
@@ -32,6 +36,8 @@ public class CommandExecution
     public bool PassedLocalSafety { get; set; }
 
     public bool Executed { get; set; }
+
+    public bool Skipped { get; set; }
 
     public string? Output { get; set; }
 

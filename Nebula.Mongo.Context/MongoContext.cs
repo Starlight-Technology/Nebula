@@ -6,6 +6,8 @@ namespace Nebula.Mongo.Context;
 public interface IMongoContext
 {
     IMongoCollection<PromptRequest> PromptRequests { get; }
+    IMongoCollection<ConversationMessage> ConversationMessages { get; }
+    IMongoCollection<ConversationState> ConversationStates { get; }
 }
 
 public class MongoContext : IMongoContext
@@ -25,4 +27,6 @@ public class MongoContext : IMongoContext
     }
 
     public IMongoCollection<PromptRequest> PromptRequests => database.GetCollection<PromptRequest>("prompt_requests");
+    public IMongoCollection<ConversationMessage> ConversationMessages => database.GetCollection<ConversationMessage>("conversation_messages");
+    public IMongoCollection<ConversationState> ConversationStates => database.GetCollection<ConversationState>("conversation_states");
 }

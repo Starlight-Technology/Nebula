@@ -375,6 +375,84 @@ public class ManagerTest
     }
 
     [Fact]
+    public async Task manage_conversation_async_must_reuse_conversation_id_and_send_history_to_model()
+    {
+        var capturedPrompts = new List<string>();
+        var memoryRepository = new InMemoryConversationMemoryRepository();
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(It.IsAny<string>()))
+            .Callback<string>(capturedPrompts.Add)
+            .ReturnsAsync("Resposta do mock");
+
+        var manager = create_manager(llamaClientMock, conversationMemoryRepository: memoryRepository);
+
+        var firstTurn = await manager.ManageConversationAsync("Explique Nebula");
+        var secondTurn = await manager.ManageConversationAsync("Agora explique ela em uma linha");
+
+        Assert.Equal(firstTurn.ConversationId, secondTurn.ConversationId);
+        Assert.Equal(manager.ActiveConversationId, secondTurn.ConversationId);
+        Assert.Equal(2, capturedPrompts.Count);
+        Assert.Contains("[conversation_state]", capturedPrompts[1]);
+        Assert.Contains("user: Explique Nebula", capturedPrompts[1]);
+        Assert.Contains("assistant: Resposta do mock", capturedPrompts[1]);
+        Assert.Contains("[current_user_message]", capturedPrompts[1]);
+        Assert.Contains("Agora explique ela em uma linha", capturedPrompts[1]);
+
+        var persistedMessages = await memoryRepository.GetRecentMessagesAsync(secondTurn.ConversationId, 10);
+        var persistedState = await memoryRepository.GetStateAsync(secondTurn.ConversationId);
+
+        Assert.Equal(4, persistedMessages.Count);
+        Assert.NotNull(persistedState);
+        Assert.Contains("Explique Nebula", persistedState!.Summary);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_abort_required_action_chain_after_first_failed_step()
+    {
+        const string prompt = "list files and then create a marker file";
+        const string commandJson = """
+            {
+                "Steps": [
+                    { "Id": 1, "Objective": "List files", "Run": "dir", "Required": true },
+                    { "Id": 2, "Objective": "Create marker", "Run": "echo ok > marker.txt", "Required": true }
+                ]
+            }
+            """;
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
+            .ReturnsAsync(commandJson)
+            .ReturnsAsync("No")
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
+
+        var loggerMock = create_logger_mock();
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            loggerMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Contains("A execucao foi abortada no passo 1", result.Response);
+        Assert.Contains("1 passo(s) dependente(s) nao foram executados", result.Response);
+        Assert.Equal(2, result.Commands.Count);
+        Assert.False(result.Commands[0].Executed);
+        Assert.True(result.Commands[1].Skipped);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        loggerMock.Verify(
+            logger => logger.LogError(It.Is<string>(message => message.Contains("Aborting action chain"))),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task manage_response_must_log_and_throw_when_classification_throws()
     {
         const string prompt = "list files in the current directory";
@@ -491,7 +569,8 @@ public class ManagerTest
         Mock<IJsonExtractor>? jsonExtractorMock = null,
         Mock<ILogger>? loggerMock = null,
         Mock<ICommandRepository>? commandRepositoryMock = null,
-        Mock<IPromptRequestRepository>? promptRepositoryMock = null)
+        Mock<IPromptRequestRepository>? promptRepositoryMock = null,
+        IConversationMemoryRepository? conversationMemoryRepository = null)
     {
         return new Manager(
             llamaClientMock.Object,
@@ -499,7 +578,8 @@ public class ManagerTest
             (jsonExtractorMock ?? create_json_extractor_mock()).Object,
             (loggerMock ?? create_logger_mock()).Object,
             commandRepositoryMock?.Object,
-            promptRepositoryMock?.Object);
+            promptRepositoryMock?.Object,
+            conversationMemoryRepository);
     }
 
     private static Mock<ILlamaClient> create_llama_client_mock() => new();

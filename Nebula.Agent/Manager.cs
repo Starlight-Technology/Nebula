@@ -20,11 +20,18 @@ public class Manager(
     IJsonExtractor jsonExtractor,
     ILogger logger,
     ICommandRepository? commandRepository = null,
-    IPromptRequestRepository? promptRepository = null) : IManager
+    IPromptRequestRepository? promptRepository = null,
+    IConversationMemoryRepository? conversationMemoryRepository = null,
+    NebulaContextBuilder? contextBuilder = null) : IManager
 {
     private static readonly TimeSpan PromptPersistenceTimeout = TimeSpan.FromMilliseconds(800);
+    private static readonly TimeSpan ConversationMemoryTimeout = TimeSpan.FromMilliseconds(1500);
 
+    private readonly NebulaContextBuilder nebulaContextBuilder = contextBuilder ?? new NebulaContextBuilder();
+    private Guid activeConversationId = Guid.NewGuid();
     private Guid currentRequestId = Guid.NewGuid();
+
+    public Guid ActiveConversationId => activeConversationId;
 
     public async Task<string> ManageResponse(string prompt)
     {
@@ -35,6 +42,14 @@ public class Manager(
     public Task<ConversationTurn> ManageConversationAsync(string prompt)
     {
         return ManageConversationAsync(prompt, progress: null, cancellationToken: default);
+    }
+
+    public Guid StartNewConversation()
+    {
+        activeConversationId = Guid.NewGuid();
+        logger.Log($"Started new ConversationId '{activeConversationId}'.");
+
+        return activeConversationId;
     }
 
     public async Task<ConversationTurn> ManageConversationAsync(
@@ -48,6 +63,7 @@ public class Manager(
             {
                 return new ConversationTurn
                 {
+                    ConversationId = activeConversationId,
                     RequestId = Guid.Empty,
                     Prompt = prompt,
                     ModelName = llamaClient.SelectedModel,
@@ -57,6 +73,29 @@ public class Manager(
             }
 
             currentRequestId = Guid.NewGuid();
+            var conversationId = activeConversationId;
+            logger.Log($"Using ConversationId '{conversationId}' for request '{currentRequestId}'.");
+
+            var userMessage = await TryAddConversationMessageAsync(new ConversationMessage
+            {
+                ConversationId = conversationId,
+                Role = ConversationRoles.User,
+                Content = prompt.Trim()
+            }, cancellationToken);
+
+            var recentMessages = await TryGetRecentMessagesAsync(
+                conversationId,
+                NebulaContextBuilder.DefaultRecentMessageLimit,
+                cancellationToken);
+            var conversationState = await TryGetConversationStateAsync(conversationId, cancellationToken);
+
+            logger.Log(
+                $"ConversationId '{conversationId}' loaded {recentMessages.Count} recent message(s). " +
+                $"Conversation state: {(conversationState is null ? "missing" : "loaded")}.");
+
+            var modelPrompt = conversationMemoryRepository is null
+                ? prompt
+                : nebulaContextBuilder.Build(conversationId, conversationState, recentMessages, userMessage);
 
             var looksOperational = LooksLikeComputerOperationPrompt(prompt);
             var classification = looksOperational
@@ -93,10 +132,11 @@ public class Manager(
 
             var turn = classification switch
             {
-                ClassificationResult.Action => await HandleActionAsync(prompt, cancellationToken),
-                ClassificationResult.Chat => await HandleChatAsync(prompt, progress, cancellationToken),
+                ClassificationResult.Action => await HandleActionAsync(prompt, modelPrompt, cancellationToken),
+                ClassificationResult.Chat => await HandleChatAsync(prompt, modelPrompt, progress, cancellationToken),
                 _ => new ConversationTurn
                 {
+                    ConversationId = conversationId,
                     RequestId = currentRequestId,
                     Prompt = prompt,
                     ModelName = llamaClient.SelectedModel,
@@ -105,10 +145,21 @@ public class Manager(
                 }
             };
 
+            turn.ConversationId = conversationId;
+
             promptRequest.Response = turn.Response;
             promptRequest.UpdatedAt = DateTime.UtcNow;
 
             await TryUpdatePromptResponseAsync(currentRequestId, turn.Response, cancellationToken);
+            await TryAddConversationMessageAsync(new ConversationMessage
+            {
+                ConversationId = conversationId,
+                Role = ConversationRoles.Assistant,
+                Content = turn.Response
+            }, cancellationToken);
+            await TryUpsertConversationStateAsync(
+                BuildUpdatedConversationState(conversationId, conversationState, prompt, turn),
+                cancellationToken);
 
             return turn;
         }
@@ -146,6 +197,14 @@ public class Manager(
 
     private async Task<string> GenerateCommandSteps(string userRequest, CancellationToken cancellationToken)
     {
+        return await GenerateCommandSteps(userRequest, userRequest, cancellationToken);
+    }
+
+    private async Task<string> GenerateCommandSteps(
+        string userRequest,
+        string conversationContext,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(userRequest))
         {
             throw new ArgumentException("User request cannot be null or empty.", nameof(userRequest));
@@ -157,16 +216,21 @@ public class Manager(
                         Your job:
                         - Convert the user request into a sequence of shell commands on {{(OperatingSystem.IsWindows() ? "Windows" : "Linux")}}.
                         - Each command must be a step to be executed on terminal only.
+                        - Use the conversation context to resolve references to previous messages.
+                        - Mark Required as true unless a step is optional and later steps do not depend on it.
                         - Respond ONLY in valid JSON.
                         - Do NOT add explanations, comments or extra text.
 
                         Response format:
                         {
                             "Steps": [
-                                { "Id": 1, "Objective": "why this command", "Run": "first shell command here" }
+                                { "Id": 1, "Objective": "why this command", "Run": "first shell command here", "Required": true }
                             ]
                         }
                         Add more steps if needed, but keep the JSON format.
+
+                        Conversation context:
+                        {{conversationContext}}
 
                         User request:
                         {{userRequest}}
@@ -177,6 +241,7 @@ public class Manager(
 
     private async Task<ConversationTurn> HandleChatAsync(
         string prompt,
+        string modelPrompt,
         IProgress<ConversationTurn>? progress,
         CancellationToken cancellationToken)
     {
@@ -186,6 +251,7 @@ public class Manager(
             {
                 progress.Report(new ConversationTurn
                 {
+                    ConversationId = activeConversationId,
                     RequestId = currentRequestId,
                     Prompt = prompt,
                     ModelName = llamaClient.SelectedModel,
@@ -196,12 +262,13 @@ public class Manager(
             });
 
         var rawResponse = progress is null
-            ? await llamaClient.GetResponseAsync(prompt)
-            : await llamaClient.GetResponseAsync(prompt, streamingProgress, cancellationToken);
+            ? await llamaClient.GetResponseAsync(modelPrompt)
+            : await llamaClient.GetResponseAsync(modelPrompt, streamingProgress, cancellationToken);
         var parsedResponse = ModelResponse.Parse(rawResponse);
 
         return new ConversationTurn
         {
+            ConversationId = activeConversationId,
             RequestId = currentRequestId,
             Prompt = prompt,
             ModelName = llamaClient.SelectedModel,
@@ -213,11 +280,11 @@ public class Manager(
         };
     }
 
-    private async Task<ConversationTurn> HandleActionAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<ConversationTurn> HandleActionAsync(string prompt, string modelPrompt, CancellationToken cancellationToken)
     {
         try
         {
-            var commandsResponse = await GenerateCommandSteps(prompt, cancellationToken);
+            var commandsResponse = await GenerateCommandSteps(prompt, modelPrompt, cancellationToken);
             var parsedPlan = ModelResponse.Parse(commandsResponse);
             var responsePayload = string.IsNullOrWhiteSpace(parsedPlan.Response)
                 ? commandsResponse
@@ -227,14 +294,33 @@ public class Manager(
             var wrapper = JsonSerializer.Deserialize<CommandSteps>(json);
             var plannedCommands = wrapper?.Steps ?? [];
             var executedCommands = new List<CommandExecution>();
+            CommandExecution? failedRequiredStep = null;
 
             foreach (var command in plannedCommands)
             {
-                executedCommands.Add(await ExecuteCommandAsync(command));
+                if (failedRequiredStep is not null)
+                {
+                    var skippedExecution = CreateSkippedExecution(command, failedRequiredStep);
+                    executedCommands.Add(skippedExecution);
+                    logger.Log(
+                        $"Skipping step '{command.Id}' because required step '{failedRequiredStep.Id}' failed in ConversationId '{activeConversationId}'.");
+                    continue;
+                }
+
+                var execution = await ExecuteCommandAsync(command);
+                executedCommands.Add(execution);
+
+                if (execution.Required && !execution.Executed)
+                {
+                    failedRequiredStep = execution;
+                    logger.LogError(
+                        $"Aborting action chain for ConversationId '{activeConversationId}' at required step '{execution.Id}': {execution.Notes}");
+                }
             }
 
             return new ConversationTurn
             {
+                ConversationId = activeConversationId,
                 RequestId = currentRequestId,
                 Prompt = prompt,
                 ModelName = llamaClient.SelectedModel,
@@ -248,7 +334,7 @@ public class Manager(
         {
             logger.LogError($"Invalid action plan returned by model '{llamaClient.SelectedModel}': {ex.Message}");
 
-            var fallback = await HandleChatAsync(prompt, progress: null, cancellationToken);
+            var fallback = await HandleChatAsync(prompt, modelPrompt, progress: null, cancellationToken);
             fallback.Reasoning = BuildActionFallbackReasoning(fallback.Reasoning, ex.Message);
             return fallback;
         }
@@ -260,7 +346,8 @@ public class Manager(
         {
             Id = command.Id,
             Objective = command.Objective,
-            Run = command.Run
+            Run = command.Run,
+            Required = command.Required
         };
 
         var storedCommand = await TrySaveCommandAsync(command);
@@ -301,6 +388,19 @@ public class Manager(
         return execution;
     }
 
+    private static CommandExecution CreateSkippedExecution(Command command, CommandExecution failedRequiredStep)
+    {
+        return new CommandExecution
+        {
+            Id = command.Id,
+            Objective = command.Objective,
+            Run = command.Run,
+            Required = command.Required,
+            Skipped = true,
+            Notes = $"Passo nao executado porque o passo obrigatorio {failedRequiredStep.Id} falhou."
+        };
+    }
+
     private string ExtractJsonObject(string input)
     {
         try
@@ -326,6 +426,18 @@ public class Manager(
         if (commands.Count == 0)
         {
             return "Nao consegui gerar passos executaveis para esse pedido.";
+        }
+
+        var failedStep = commands.FirstOrDefault(command => !command.Executed && !command.Skipped);
+        if (failedStep is not null)
+        {
+            var skippedCount = commands.Count(command => command.Skipped);
+            var abortMessage =
+                $"A execucao foi abortada no passo {failedStep.Id} ({failedStep.Objective}). {failedStep.Notes}";
+
+            return skippedCount > 0
+                ? $"{abortMessage} {skippedCount} passo(s) dependente(s) nao foram executados."
+                : abortMessage;
         }
 
         var outputs = commands
@@ -377,10 +489,16 @@ public class Manager(
             builder.AppendLine();
             builder.AppendLine($"{index + 1}. {command.Objective}");
             builder.AppendLine($"   Comando: {command.Run}");
-            builder.AppendLine($"   Corretude: {(command.IsCorrect ? "sim" : "nao")}");
-            builder.AppendLine($"   Seguranca do modelo: {(command.IsSafe ? "sim" : "nao")}");
-            builder.AppendLine($"   Seguranca local: {(command.PassedLocalSafety ? "sim" : "nao")}");
-            builder.AppendLine($"   Status: {(command.Executed ? "executado" : "bloqueado")}");
+            builder.AppendLine($"   Obrigatorio: {(command.Required ? "sim" : "nao")}");
+
+            if (!command.Skipped)
+            {
+                builder.AppendLine($"   Corretude: {(command.IsCorrect ? "sim" : "nao")}");
+                builder.AppendLine($"   Seguranca do modelo: {(command.IsSafe ? "sim" : "nao")}");
+                builder.AppendLine($"   Seguranca local: {(command.PassedLocalSafety ? "sim" : "nao")}");
+            }
+
+            builder.AppendLine($"   Status: {GetCommandStatus(command)}");
 
             if (!string.IsNullOrWhiteSpace(command.Notes))
             {
@@ -389,6 +507,16 @@ public class Manager(
         }
 
         return builder.ToString().Trim();
+    }
+
+    private static string GetCommandStatus(CommandExecution command)
+    {
+        if (command.Skipped)
+        {
+            return "nao executado por dependencia";
+        }
+
+        return command.Executed ? "executado" : "bloqueado";
     }
 
     private static string BuildActionFallbackReasoning(string? chatReasoning, string error)
@@ -451,6 +579,12 @@ public class Manager(
             "renomear",
             "editar",
             "salvar",
+            "alterar",
+            "altere",
+            "atualizar",
+            "atualize",
+            "mudar",
+            "mude",
             "run ",
             "execute",
             "create",
@@ -464,6 +598,8 @@ public class Manager(
             "rename",
             "edit ",
             "save ",
+            "change",
+            "update",
             "file",
             "files",
             "folder",
@@ -498,6 +634,211 @@ public class Manager(
         }
 
         return $"Passo bloqueado porque {string.Join("; ", failures)}.";
+    }
+
+    private async Task<ConversationMessage> TryAddConversationMessageAsync(
+        ConversationMessage message,
+        CancellationToken cancellationToken)
+    {
+        if (conversationMemoryRepository is null)
+        {
+            return message;
+        }
+
+        try
+        {
+            using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cancellationSource.CancelAfter(ConversationMemoryTimeout);
+            var savedMessage = await conversationMemoryRepository.AddMessageAsync(message, cancellationSource.Token);
+            logger.Log(
+                $"Saved {savedMessage.Role} conversation message '{savedMessage.Id}' " +
+                $"for ConversationId '{savedMessage.ConversationId}'.");
+
+            return savedMessage;
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger.Log($"Conversation message persistence for '{message.ConversationId}' was cancelled with the active conversation.");
+                return message;
+            }
+
+            logger.LogError($"Timed out while persisting conversation message for ConversationId '{message.ConversationId}'.");
+            return message;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError($"Unable to persist conversation message for ConversationId '{message.ConversationId}': {ex.Message}");
+            return message;
+        }
+    }
+
+    private async Task<IReadOnlyList<ConversationMessage>> TryGetRecentMessagesAsync(
+        Guid conversationId,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (conversationMemoryRepository is null)
+        {
+            return [];
+        }
+
+        try
+        {
+            using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cancellationSource.CancelAfter(ConversationMemoryTimeout);
+            return await conversationMemoryRepository.GetRecentMessagesAsync(conversationId, limit, cancellationSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger.Log($"Conversation history load for '{conversationId}' was cancelled with the active conversation.");
+                return [];
+            }
+
+            logger.LogError($"Timed out while loading recent messages for ConversationId '{conversationId}'.");
+            return [];
+        }
+        catch (Exception ex)
+        {
+            logger.LogError($"Unable to load recent messages for ConversationId '{conversationId}': {ex.Message}");
+            return [];
+        }
+    }
+
+    private async Task<ConversationState?> TryGetConversationStateAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        if (conversationMemoryRepository is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cancellationSource.CancelAfter(ConversationMemoryTimeout);
+            return await conversationMemoryRepository.GetStateAsync(conversationId, cancellationSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger.Log($"Conversation state load for '{conversationId}' was cancelled with the active conversation.");
+                return null;
+            }
+
+            logger.LogError($"Timed out while loading state for ConversationId '{conversationId}'.");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError($"Unable to load state for ConversationId '{conversationId}': {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task TryUpsertConversationStateAsync(ConversationState state, CancellationToken cancellationToken)
+    {
+        if (conversationMemoryRepository is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cancellationSource.CancelAfter(ConversationMemoryTimeout);
+            await conversationMemoryRepository.UpsertStateAsync(state, cancellationSource.Token);
+            logger.Log($"Saved conversation state for ConversationId '{state.ConversationId}'.");
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger.Log($"Conversation state update for '{state.ConversationId}' was cancelled with the active conversation.");
+                return;
+            }
+
+            logger.LogError($"Timed out while saving state for ConversationId '{state.ConversationId}'.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError($"Unable to save state for ConversationId '{state.ConversationId}': {ex.Message}");
+        }
+    }
+
+    private static ConversationState BuildUpdatedConversationState(
+        Guid conversationId,
+        ConversationState? previousState,
+        string prompt,
+        ConversationTurn turn)
+    {
+        return new ConversationState
+        {
+            ConversationId = conversationId,
+            Summary = BuildUpdatedSummary(previousState?.Summary, prompt, turn.Response),
+            CurrentGoal = Truncate(prompt.Trim(), 1000),
+            CurrentPlan = BuildCurrentPlan(turn) ?? previousState?.CurrentPlan,
+            UpdatedAt = DateTime.UtcNow
+        };
+    }
+
+    private static string BuildUpdatedSummary(string? previousSummary, string prompt, string response)
+    {
+        var builder = new StringBuilder();
+
+        if (!string.IsNullOrWhiteSpace(previousSummary))
+        {
+            builder.AppendLine(previousSummary.Trim());
+        }
+
+        builder.AppendLine($"User: {Truncate(prompt.Trim(), 500)}");
+        builder.AppendLine($"Assistant: {Truncate(response.Trim(), 500)}");
+
+        return TruncateFromStart(builder.ToString().Trim(), 4000);
+    }
+
+    private static string? BuildCurrentPlan(ConversationTurn turn)
+    {
+        if (turn.Commands.Count == 0)
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder();
+
+        foreach (var command in turn.Commands)
+        {
+            builder.AppendLine(
+                $"{command.Id}. {command.Objective} - {GetCommandStatus(command)}" +
+                $"{(command.Required ? " - obrigatorio" : " - opcional")}");
+        }
+
+        return Truncate(builder.ToString().Trim(), 2000);
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..maxLength].Trim();
+    }
+
+    private static string TruncateFromStart(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[^maxLength..].Trim();
     }
 
     private async Task TrySavePromptRequestAsync(PromptRequest request, CancellationToken cancellationToken)

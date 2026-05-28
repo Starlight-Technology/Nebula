@@ -22,6 +22,8 @@ services.AddSingleton<ILlamaClient, LlamaClient>();
 services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddSingleton<IJsonExtractor, JsonExtractor>();
 services.AddSingleton<ILogger, ConsoleLogger>();
+services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
+services.AddScoped<NebulaContextBuilder>();
 
 var mongoConn = configuration["MONGO_CONNECTION"] ?? "mongodb://admin:password@localhost:27017/nebula?authSource=admin";
 var mongoDb = configuration["MONGO_DATABASE"] ?? "nebula";
@@ -33,6 +35,7 @@ try
 
     services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
     services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
+    services.AddSingleton<IConversationMemoryStore, MongoConversationMemoryRepository>();
 }
 catch (MongoAuthenticationException ex)
 {
@@ -50,6 +53,8 @@ services.AddDbContext<PostgresContext>(opts => opts.UseNpgsql(pgConn));
 services.AddScoped<ICommandRepository, PostgresCommandRepository>();
 services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
 services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
+services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
+services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 
 services.AddScoped<IManager, Manager>();
 

@@ -329,6 +329,7 @@ public sealed class NebulaWorkspaceState(
         }
 
         turns.Clear();
+        manager.StartNewConversation();
         NotifyChanged();
         return Task.CompletedTask;
     }

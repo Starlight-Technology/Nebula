@@ -43,6 +43,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
         builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
         builder.Services.AddSingleton<Agent.ILogger, ConsoleLogger>();
+        builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
+        builder.Services.AddScoped<NebulaContextBuilder>();
 
         var mongoConn = Environment.GetEnvironmentVariable("MONGO_CONNECTION")
             ?? "mongodb://admin:password@localhost:27017/nebula?authSource=admin";
@@ -56,6 +58,7 @@ public static class MauiProgram
 
             builder.Services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
             builder.Services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
+            builder.Services.AddSingleton<IConversationMemoryStore, MongoConversationMemoryRepository>();
         }
         catch (MongoAuthenticationException ex)
         {
@@ -74,6 +77,8 @@ public static class MauiProgram
         builder.Services.AddScoped<ICommandRepository, PostgresCommandRepository>();
         builder.Services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
         builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
+        builder.Services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
+        builder.Services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
         builder.Services.AddScoped<IManager, Manager>();
 
         builder.Services.AddCoronaTheming(CoronaThemes.Dark());
