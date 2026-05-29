@@ -36,6 +36,24 @@ CREATE TABLE IF NOT EXISTS command_verifications (
     FOREIGN KEY (command_id) REFERENCES commands(id) ON DELETE CASCADE
 );
 
+-- Create conversation_messages table to keep conversation history by ConversationId
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create conversation_states table to keep summary and active goal/plan by ConversationId
+CREATE TABLE IF NOT EXISTS conversation_states (
+    conversation_id UUID PRIMARY KEY,
+    summary TEXT,
+    current_goal TEXT,
+    current_plan TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes for common queries
 CREATE INDEX idx_requests_created_at ON requests(created_at DESC);
 CREATE INDEX idx_requests_classification ON requests(classification);
@@ -44,6 +62,10 @@ CREATE INDEX idx_commands_os_type ON commands(os_type);
 CREATE INDEX idx_commands_executed ON commands(executed);
 CREATE INDEX idx_commands_created_at ON commands(created_at DESC);
 CREATE INDEX idx_command_verifications_command_id ON command_verifications(command_id);
+CREATE INDEX idx_conversation_messages_conversation_id ON conversation_messages(conversation_id);
+CREATE INDEX idx_conversation_messages_created_at ON conversation_messages(created_at DESC);
+CREATE INDEX idx_conversation_messages_conversation_created_at ON conversation_messages(conversation_id, created_at DESC);
+CREATE INDEX idx_conversation_states_updated_at ON conversation_states(updated_at DESC);
 
 -- Create trigger to auto-update updated_at timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -58,4 +80,7 @@ CREATE TRIGGER update_requests_updated_at BEFORE UPDATE ON requests
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_commands_updated_at BEFORE UPDATE ON commands
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_conversation_states_updated_at BEFORE UPDATE ON conversation_states
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

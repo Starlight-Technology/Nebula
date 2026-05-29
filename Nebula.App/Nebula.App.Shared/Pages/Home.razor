@@ -1,7 +1,179 @@
-﻿@page "/"
+@page "/"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
 
-<PageTitle>Home</PageTitle>
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-hero">
+        <div class="nebula-hero__copy">
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Painel operacional" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Runtime online" : "Runtime offline")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+            </CoronaStack>
 
-<h1>Hello, world!</h1>
+            <h2>Central Nebula</h2>
+            <p>
+                Supervisao do agente, conversa local, modelos Ollama e setup de aceleracao em telas dedicadas.
+            </p>
 
-Welcome to your new app.
+            <CoronaStack Direction="CoronaStackDirection.Row"
+                         Wrap="CoronaStackWrap.Wrap"
+                         Align="CoronaStackAlign.Center"
+                         Spacing=".75rem">
+                <CoronaButton Icon="@CoronaIcons.ArrowRight" OnClick="NavigateToChat">
+                    Abrir conversa
+                </CoronaButton>
+
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.Gear"
+                              OnClick="NavigateToModels">
+                    Modelos
+                </CoronaButton>
+            </CoronaStack>
+        </div>
+
+        <div class="nebula-hero__panel">
+            <div>
+                <span>Modelo ativo</span>
+                <strong>@WorkspaceState.ActiveModelName</strong>
+            </div>
+            <div>
+                <span>Endpoint</span>
+                <code>@WorkspaceState.LlamaUrl</code>
+            </div>
+            <div>
+                <span>Aceleracao</span>
+                <strong>@WorkspaceState.GetAccelerationStatusText()</strong>
+            </div>
+        </div>
+    </section>
+
+    <section class="nebula-metrics-grid" aria-label="Resumo da central">
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-comments" aria-hidden="true"></span>
+            </div>
+            <span>Conversas nesta sessao</span>
+            <strong>@WorkspaceState.Turns.Count</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-cubes" aria-hidden="true"></span>
+            </div>
+            <span>Modelos instalados</span>
+            <strong>@WorkspaceState.InstalledModelCount</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-microchip" aria-hidden="true"></span>
+            </div>
+            <span>Host do agente</span>
+            <strong>@WorkspaceState.GetHostSummary()</strong>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-metric-card">
+            <div class="nebula-metric-card__icon">
+                <span class="fa fa-solid fa-display" aria-hidden="true"></span>
+            </div>
+            <span>Shell da UI</span>
+            <strong>@WorkspaceState.GetClientShellSummary()</strong>
+        </CoronaCard>
+    </section>
+
+    <section class="nebula-workspace-grid" aria-label="Telas da central">
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Conversa" Variant="CoronaBadgeVariant.Soft" />
+                <span class="fa fa-solid fa-message" aria-hidden="true"></span>
+            </div>
+            <h3>Agente local</h3>
+            <p>Historico de turnos, resposta, raciocinio exposto e passos validados ficam juntos no fluxo de conversa.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToChat">
+                Entrar
+            </CoronaButton>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Ollama" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
+                <span class="fa fa-solid fa-layer-group" aria-hidden="true"></span>
+            </div>
+            <h3>Hub de modelos</h3>
+            <p>Instalacao, troca de modelo ativo, sugestoes prontas e catalogo local em uma tela propria.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToModels">
+                Gerenciar
+            </CoronaButton>
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-workspace-card">
+            <div class="nebula-workspace-card__top">
+                <CoronaBadge Content="Runtime" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+                <span class="fa fa-solid fa-gauge-high" aria-hidden="true"></span>
+            </div>
+            <h3>Setup e aceleracao</h3>
+            <p>Leitura do ambiente, perfil recomendado e comandos Docker para CPU, NVIDIA, AMD e Intel Vulkan.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowRight"
+                          OnClick="NavigateToRuntime">
+                Ver setup
+            </CoronaButton>
+        </CoronaCard>
+    </section>
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await WorkspaceState.DetectEnvironmentAsync();
+        }
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void NavigateToModels()
+    {
+        NavigationManager.NavigateTo("/models");
+    }
+
+    private void NavigateToRuntime()
+    {
+        NavigationManager.NavigateTo("/runtime");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

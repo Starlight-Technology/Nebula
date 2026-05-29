@@ -1,0 +1,9 @@
+services:
+  ollama:
+    gpus: all
+    environment:
+      OLLAMA_ACCELERATION_MODE: nvidia-cuda
+      OLLAMA_GPU_VENDOR: NVIDIA
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}

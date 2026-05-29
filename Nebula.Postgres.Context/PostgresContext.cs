@@ -12,6 +12,8 @@ public class PostgresContext : DbContext
     public DbSet<Request> Requests { get; set; } = null!;
     public DbSet<StoredCommand> Commands { get; set; } = null!;
     public DbSet<CommandVerification> CommandVerifications { get; set; } = null!;
+    public DbSet<ConversationMessage> ConversationMessages { get; set; } = null!;
+    public DbSet<ConversationState> ConversationStates { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -65,6 +67,31 @@ public class PostgresContext : DbContext
 
             b.HasIndex(x => x.CommandId);
             b.HasIndex(x => x.CreatedAt);
+        });
+
+        modelBuilder.Entity<ConversationMessage>(b =>
+        {
+            b.ToTable("conversation_messages");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Role).IsRequired();
+            b.Property(x => x.Content).IsRequired();
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => x.ConversationId);
+            b.HasIndex(x => x.CreatedAt);
+            b.HasIndex(x => new { x.ConversationId, x.CreatedAt });
+        });
+
+        modelBuilder.Entity<ConversationState>(b =>
+        {
+            b.ToTable("conversation_states");
+            b.HasKey(x => x.ConversationId);
+            b.Property(x => x.Summary);
+            b.Property(x => x.CurrentGoal);
+            b.Property(x => x.CurrentPlan);
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => x.UpdatedAt);
         });
     }
 }

@@ -1,13 +1,10 @@
-﻿using System.Text;
+using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Nebula.Llama.Client;
-
-public class Payload
-{
-    public string Model { get; set; } = "deepseek-r1:7b";
-    public string Prompt { get; set; } = string.Empty;
-}
 
 public enum ClassificationResult
 {
@@ -18,78 +15,440 @@ public enum ClassificationResult
 
 public class LlamaClient : ILlamaClient
 {
-    public string LlamaUrl { get; set; } = "http://localhost:11434/api/generate";
+    private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
+    private const string DefaultModel = "deepseek-r1:7b";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly HttpClient httpClient;
+    private IReadOnlyList<LlamaModelInfo> cachedModels = [];
+    private string selectedModel;
+
+    public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null)
+    {
+        this.httpClient = httpClient ?? new HttpClient();
+        LlamaUrl = llamaUrl
+            ?? Environment.GetEnvironmentVariable("LLAMA_URL")
+            ?? DefaultGenerateUrl;
+        selectedModel = defaultModel
+            ?? Environment.GetEnvironmentVariable("LLAMA_MODEL")
+            ?? Environment.GetEnvironmentVariable("OLLAMA_MODEL")
+            ?? DefaultModel;
+    }
+
+    public string LlamaUrl { get; set; }
+
+    public string SelectedModel => selectedModel;
 
     public async Task<ClassificationResult> ClassifyPrompt(string prompt)
     {
-        var payload = new Payload
-        {
-            Prompt = $"You are an intent classifier. \r\n " +
-            $"Classify the user message into one of two categories: \r\n " +
-            $"action = only when the user wants the computer to perform an operation such as:\r\n- creating files\r\n- listing directories\r\n- running commands\r\n- modifying data\r\n- executing scripts\r\n- interacting with the operating system\r\n\r\n" +
-            $"chat = all other cases, including:\r\n- cooking\r\n- advice\r\n- explanations\r\n- real‑world tasks\r\n- questions\r\n- conversation\r\n\r\n " +
-            $"Respond ONLY with: action or chat.\r\n" +
-            $" No explanations. No extra text.\r\n" +
-            $" message: {prompt}"
-        };
+        var raw = await SendGenerateRequestAsync(
+            prompt,
+            systemPrompt: "You are an intent classifier. Classify the user message into one of two categories: action or chat. " +
+                          "Respond with exactly one word: action or chat. " +
+                          "Use action only when the user wants the computer to perform an operation in terminal, files, scripts, docker, git, shell, or the operating system. " +
+                          "Use chat for everything else.",
+            think: false);
 
-        var raw = await GetResponseAsync(payload.Prompt);
+        var parsed = ModelResponse.Parse(raw);
+        var normalized = parsed.Response.Trim().ToLowerInvariant();
+        var match = Regex.Match(normalized, @"\b(action|chat)\b", RegexOptions.IgnoreCase);
 
-        // Normaliza a resposta
-        var result = raw
-            .Trim()
-            .ToLowerInvariant();
-
-        return result switch
+        return match.Value.ToLowerInvariant() switch
         {
             "action" => ClassificationResult.Action,
             "chat" => ClassificationResult.Chat,
-            _ => await ClassifyPrompt(prompt)
+            _ => ClassificationResult.Unknown
         };
-
     }
 
     public async Task<string> GetResponseAsync(string prompt)
     {
-        using var client = new HttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl);
+        ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
-        var payload = new Payload { Prompt = prompt };
-        var json = JsonSerializer.Serialize(payload);
+        return await GetResponseAsync(prompt, progress: null);
+    }
 
-        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+    public async Task<string> GetResponseAsync(
+        string prompt,
+        IProgress<LlamaStreamUpdate>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
-        Console.WriteLine("Enviando solicitação para Llama...");
-        Console.WriteLine($"Prompt: {prompt}");
+        return await SendGenerateRequestAsync(
+            prompt,
+            think: !ShouldDisableThinking(prompt),
+            progress: progress,
+            cancellationToken: cancellationToken);
+    }
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        using var stream = await response.Content.ReadAsStreamAsync();
+    private async Task<string> SendGenerateRequestAsync(
+        string prompt,
+        string? systemPrompt = null,
+        bool think = true,
+        IProgress<LlamaStreamUpdate>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think, progress, cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (think && IsThinkingUnsupportedError(ex.Message))
+        {
+            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think: false, progress, cancellationToken);
+        }
+    }
+
+    private async Task<string> SendGenerateRequestCoreAsync(
+        string prompt,
+        string? systemPrompt,
+        bool think,
+        IProgress<LlamaStreamUpdate>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl)
+        {
+            Content = JsonContent.Create(new LlamaGenerateRequest
+            {
+                Model = SelectedModel,
+                Prompt = prompt,
+                Stream = true,
+                Think = think,
+                System = systemPrompt
+            })
+        };
+
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        await EnsureSuccessAsync(response);
+
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
 
-        string? line;
-        var fullText = new StringBuilder();
+        var responseText = new StringBuilder();
+        var reasoningText = new StringBuilder();
 
-        while ((line = await reader.ReadLineAsync()) != null)
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             if (string.IsNullOrWhiteSpace(line))
+            {
                 continue;
+            }
 
             try
             {
-                var jsonResponse = JsonSerializer.Deserialize<Dictionary<string, object>>(line);
-                if (jsonResponse != null && jsonResponse.TryGetValue("response", out var token))
+                var chunk = JsonSerializer.Deserialize<LlamaGenerateChunk>(line, JsonOptions);
+                if (!string.IsNullOrWhiteSpace(chunk?.Error))
                 {
-                    fullText.Append(token.ToString());
+                    throw new InvalidOperationException(chunk.Error);
+                }
+
+                if (!string.IsNullOrWhiteSpace(chunk?.Response))
+                {
+                    responseText.Append(chunk.Response);
+                }
+
+                if (!string.IsNullOrWhiteSpace(chunk?.Thinking))
+                {
+                    reasoningText.Append(chunk.Thinking);
+                }
+
+                if (progress is not null && (!string.IsNullOrWhiteSpace(chunk?.Response) || !string.IsNullOrWhiteSpace(chunk?.Thinking)))
+                {
+                    progress.Report(new LlamaStreamUpdate
+                    {
+                        Response = responseText.ToString(),
+                        Reasoning = reasoningText.ToString()
+                    });
                 }
             }
-            catch
+            catch (JsonException)
             {
-                // ignora linhas inválidas
+                // Ignora linhas invalidas do stream.
             }
         }
 
-        Console.WriteLine($"Llama response received: {fullText}");
+        if (reasoningText.Length == 0)
+        {
+            return responseText.ToString();
+        }
 
-        return fullText.ToString();
+        var reasoning = reasoningText.ToString().Trim();
+        var responseContent = responseText.ToString().Trim();
+
+        return string.IsNullOrWhiteSpace(responseContent)
+            ? $"<think>{reasoning}</think>"
+            : $"<think>{reasoning}</think>{responseContent}";
+    }
+
+    public async Task<LlamaRuntimeState> GetRuntimeStateAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var installedModels = await GetInstalledModelsAsync(forceRefresh, cancellationToken);
+
+            return new LlamaRuntimeState
+            {
+                GenerateUrl = LlamaUrl,
+                ApiBaseUrl = BuildApiUrl(string.Empty),
+                SelectedModel = SelectedModel,
+                IsAvailable = true,
+                SelectedModelInstalled = installedModels.Any(model => ModelNamesMatch(model.Name, SelectedModel)),
+                InstalledModels = installedModels
+            };
+        }
+        catch (Exception ex)
+        {
+            return new LlamaRuntimeState
+            {
+                GenerateUrl = LlamaUrl,
+                ApiBaseUrl = BuildApiUrl(string.Empty),
+                SelectedModel = SelectedModel,
+                IsAvailable = false,
+                SelectedModelInstalled = false,
+                LastError = ex.Message,
+                InstalledModels = []
+            };
+        }
+    }
+
+    public async Task<IReadOnlyList<LlamaModelInfo>> GetInstalledModelsAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
+    {
+        if (!forceRefresh && cachedModels.Count > 0)
+        {
+            return cachedModels;
+        }
+
+        using var response = await httpClient.GetAsync(BuildApiUrl("tags"), cancellationToken);
+        await EnsureSuccessAsync(response);
+
+        var payload = await response.Content.ReadFromJsonAsync<LlamaTagsResponse>(JsonOptions, cancellationToken);
+        cachedModels = (payload?.Models ?? [])
+            .OrderByDescending(model => model.ModifiedAt)
+            .ThenBy(model => model.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return cachedModels;
+    }
+
+    public async Task<bool> SelectModelAsync(string modelName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+
+        var normalizedModel = modelName.Trim();
+        var installedModels = await GetInstalledModelsAsync(false, cancellationToken);
+        var selected = installedModels.FirstOrDefault(model => ModelNamesMatch(model.Name, normalizedModel));
+
+        if (selected is null)
+        {
+            return false;
+        }
+
+        selectedModel = selected.Name;
+        return true;
+    }
+
+    public async Task<LlamaPullResult> PullModelAsync(
+        string modelName,
+        bool activateAfterInstall = false,
+        IProgress<LlamaPullProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+
+        var normalizedModel = modelName.Trim();
+        var updates = new List<LlamaPullProgress>();
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, BuildApiUrl("pull"))
+            {
+                Content = JsonContent.Create(new LlamaPullRequest
+                {
+                    Name = normalizedModel,
+                    Stream = true
+                })
+            };
+
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            await EnsureSuccessAsync(response);
+
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var reader = new StreamReader(stream);
+
+            while (await reader.ReadLineAsync(cancellationToken) is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var update = JsonSerializer.Deserialize<LlamaPullProgress>(line, JsonOptions);
+                    if (update is null)
+                    {
+                        continue;
+                    }
+
+                    updates.Add(update);
+                    progress?.Report(update);
+
+                    if (!string.IsNullOrWhiteSpace(update.Error))
+                    {
+                        return new LlamaPullResult
+                        {
+                            ModelName = normalizedModel,
+                            Success = false,
+                            Activated = false,
+                            Message = update.Error,
+                            Updates = updates
+                        };
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Ignora linhas invalidas do stream.
+                }
+            }
+
+            await GetInstalledModelsAsync(true, cancellationToken);
+
+            var activated = false;
+            if (activateAfterInstall)
+            {
+                activated = await SelectModelAsync(normalizedModel, cancellationToken);
+            }
+
+            return new LlamaPullResult
+            {
+                ModelName = normalizedModel,
+                Success = true,
+                Activated = activated,
+                Message = activated
+                    ? $"Modelo {SelectedModel} instalado e ativado."
+                    : $"Modelo {normalizedModel} instalado com sucesso.",
+                Updates = updates
+            };
+        }
+        catch (Exception ex)
+        {
+            return new LlamaPullResult
+            {
+                ModelName = normalizedModel,
+                Success = false,
+                Activated = false,
+                Message = ex.Message,
+                Updates = updates
+            };
+        }
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var details = await response.Content.ReadAsStringAsync();
+        throw new InvalidOperationException(
+            string.IsNullOrWhiteSpace(details)
+                ? $"Ollama returned HTTP {(int)response.StatusCode}."
+                : $"Ollama returned HTTP {(int)response.StatusCode}: {details}");
+    }
+
+    private string BuildApiUrl(string endpoint)
+    {
+        var baseUri = new Uri(LlamaUrl, UriKind.Absolute);
+        var path = baseUri.AbsolutePath;
+        var apiIndex = path.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
+        var rootPath = apiIndex >= 0 ? path[..apiIndex] : path.TrimEnd('/');
+        var builder = new UriBuilder(baseUri)
+        {
+            Path = string.IsNullOrWhiteSpace(endpoint)
+                ? $"{rootPath.TrimEnd('/')}/api"
+                : $"{rootPath.TrimEnd('/')}/api/{endpoint.TrimStart('/')}",
+            Query = string.Empty
+        };
+
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
+    private static bool ModelNamesMatch(string left, string right)
+    {
+        return string.Equals(CanonicalizeModelName(left), CanonicalizeModelName(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CanonicalizeModelName(string modelName)
+    {
+        var trimmed = modelName.Trim();
+        return trimmed.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^7]
+            : trimmed;
+    }
+
+    private static bool ShouldDisableThinking(string prompt)
+    {
+        var normalized = prompt.TrimStart();
+
+        return normalized.StartsWith("You are a command planner.", StringComparison.Ordinal)
+            || normalized.StartsWith("Response only with \"Yes\" or \"No\".", StringComparison.Ordinal);
+    }
+
+    private static bool IsThinkingUnsupportedError(string message)
+    {
+        return message.Contains("does not support thinking", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class LlamaGenerateRequest
+    {
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        [JsonPropertyName("prompt")]
+        public string Prompt { get; set; } = string.Empty;
+
+        [JsonPropertyName("stream")]
+        public bool Stream { get; set; }
+
+        [JsonPropertyName("system")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? System { get; set; }
+
+        [JsonPropertyName("think")]
+        public bool Think { get; set; }
+    }
+
+    private sealed class LlamaGenerateChunk
+    {
+        [JsonPropertyName("response")]
+        public string? Response { get; set; }
+
+        [JsonPropertyName("thinking")]
+        public string? Thinking { get; set; }
+
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
+    }
+
+    private sealed class LlamaTagsResponse
+    {
+        [JsonPropertyName("models")]
+        public List<LlamaModelInfo>? Models { get; set; }
+    }
+
+    private sealed class LlamaPullRequest
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("stream")]
+        public bool Stream { get; set; }
     }
 }

@@ -1,0 +1,12 @@
+services:
+  ollama:
+    devices:
+      - /dev/dri
+    group_add:
+      - render
+      - video
+    environment:
+      OLLAMA_ACCELERATION_MODE: intel-vulkan
+      OLLAMA_GPU_VENDOR: INTEL
+      OLLAMA_VULKAN: "1"
+      GGML_VK_VISIBLE_DEVICES: ${GGML_VK_VISIBLE_DEVICES:-}

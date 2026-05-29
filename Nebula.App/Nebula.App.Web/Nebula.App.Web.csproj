@@ -7,8 +7,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Nebula.App.Shared\Nebula.App.Shared.csproj" />
+    <ProjectReference Include="..\..\Corona\Corona\Corona.csproj" />
+    <ProjectReference Include="..\..\Nebula.Agent\Nebula.Agent.csproj" />
+    <ProjectReference Include="..\..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
+    <ProjectReference Include="..\..\Nebula.Mongo.Context\Nebula.Mongo.Context.csproj" />
+    <ProjectReference Include="..\..\Nebula.Postgres.Context\Nebula.Postgres.Context.csproj" />
+    <ProjectReference Include="..\..\Nebula.Runner\Nebula.Runner.csproj" />
     <ProjectReference Include="..\Nebula.App.Web.Client\Nebula.App.Web.Client.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.8" />
   </ItemGroup>
 
 </Project>

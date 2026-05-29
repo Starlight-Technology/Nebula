@@ -1,0 +1,317 @@
+@page "/chat"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell nebula-chat-page">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Conversa" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.ActiveModelName"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="CoronaColorSemantic.Neutral" />
+            </CoronaStack>
+            <h2>Agente local</h2>
+            <p>Turnos, resposta, raciocinio e comandos validados ficam no mesmo fluxo.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.Gear"
+                          OnClick="NavigateToModels">
+                Modelos
+            </CoronaButton>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsRefreshingRuntime"
+                          Loading="@WorkspaceState.IsRefreshingRuntime"
+                          OnClick="WorkspaceState.RefreshRuntimeAsync">
+                Atualizar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    <div class="nebula-chat-layout">
+        <main class="nebula-chat-main">
+            @if (WorkspaceState.Turns.Count == 0)
+            {
+                <CoronaCard Class="nebula-empty-card">
+                    <div class="nebula-empty-card__content">
+                        <CoronaBadge Content="Pronto" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
+                        <h3>Comece por uma pergunta ou tarefa local.</h3>
+                        <p>A conversa registra o modelo usado em cada turno e os passos executados pelo agente.</p>
+
+                        <div class="nebula-starters">
+                            @foreach (var starter in WorkspaceState.StarterPrompts)
+                            {
+                                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                              Size="CoronaComponentSize.Small"
+                                              Color="CoronaColorSemantic.Neutral"
+                                              Disabled="@WorkspaceState.IsSending"
+                                              OnClick="@(() => WorkspaceState.SendStarterAsync(starter))">
+                                    @starter
+                                </CoronaButton>
+                            }
+                        </div>
+                    </div>
+                </CoronaCard>
+            }
+
+            <section class="nebula-transcript" aria-live="polite">
+                @foreach (var turn in WorkspaceState.Turns)
+                {
+                    <article class="nebula-turn">
+                        <div class="nebula-turn__user">
+                            <CoronaCard Class="nebula-message-card nebula-message-card--user">
+                                <div class="nebula-message-card__meta">
+                                    <CoronaBadge Content="Voce" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
+                                </div>
+                                <div class="nebula-message-card__text">@turn.Prompt</div>
+                            </CoronaCard>
+                        </div>
+
+                        <div class="nebula-turn__assistant">
+                            <CoronaCard Class="nebula-message-card nebula-message-card--assistant">
+                                <div class="nebula-message-card__header">
+                                    <div class="nebula-message-card__meta nebula-message-card__meta--assistant">
+                                        <CoronaBadge Content="Nebula" Variant="CoronaBadgeVariant.Soft" />
+                                        <CoronaBadge Content="@NebulaWorkspaceState.GetTurnModelLabel(turn)"
+                                                     Variant="CoronaBadgeVariant.Outlined"
+                                                     Color="CoronaColorSemantic.Neutral" />
+
+                                        @if (turn.Result is not null)
+                                        {
+                                            <CoronaBadge Content="@turn.Result.Classification"
+                                                         Variant="CoronaBadgeVariant.Outlined"
+                                                         Color="CoronaColorSemantic.Neutral" />
+
+                                            @if (turn.Result.Commands.Count > 0)
+                                            {
+                                                <CoronaBadge Content="@($"{turn.Result.Commands.Count} passo(s)")"
+                                                             Variant="CoronaBadgeVariant.Soft"
+                                                             Color="CoronaColorSemantic.Success" />
+                                            }
+                                        }
+                                        else if (string.IsNullOrWhiteSpace(turn.Error))
+                                        {
+                                            <CoronaBadge Content="@(turn.HasStreamingContent ? "Gerando" : "Pensando")"
+                                                         Variant="CoronaBadgeVariant.Soft"
+                                                         Color="CoronaColorSemantic.Warning" />
+                                        }
+                                    </div>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(turn.Error))
+                                {
+                                    <div class="nebula-error-panel">
+                                        <p class="nebula-error-panel__title">Nao consegui concluir este turno.</p>
+                                        <p>@turn.Error</p>
+                                    </div>
+                                }
+                                else if (turn.Result is null)
+                                {
+                                    <div class="nebula-response-stack">
+                                        @if (!string.IsNullOrWhiteSpace(turn.StreamingResponse))
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="Resposta parcial" Variant="CoronaBadgeVariant.Soft" />
+                                                </div>
+
+                                                <div class="nebula-rich-text">@turn.StreamingResponse</div>
+                                            </section>
+                                        }
+
+                                        @if (!string.IsNullOrWhiteSpace(turn.StreamingReasoning))
+                                        {
+                                            <details class="nebula-think-panel" open>
+                                                <summary class="nebula-think-panel__summary">
+                                                    <span>Raciocinio em andamento</span>
+                                                    <CoronaBadge Content="@turn.RequestedModel"
+                                                                 Variant="CoronaBadgeVariant.Outlined"
+                                                                 Color="CoronaColorSemantic.Neutral" />
+                                                </summary>
+
+                                                <div class="nebula-rich-text nebula-rich-text--reasoning">@turn.StreamingReasoning</div>
+                                            </details>
+                                        }
+
+                                        <div class="nebula-pending-panel">
+                                            <div class="nebula-pending-panel__pulse"></div>
+                                            <div>
+                                                <p class="nebula-pending-panel__title">Preparando a resposta do agente...</p>
+                                                <p>Modelo @turn.RequestedModel.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="nebula-response-stack">
+                                        <section class="nebula-panel-section">
+                                            <div class="nebula-panel-section__header">
+                                                <CoronaBadge Content="Resposta" Variant="CoronaBadgeVariant.Soft" />
+                                            </div>
+
+                                            <div class="nebula-rich-text">@turn.Result.Response</div>
+                                        </section>
+
+                                        <details class="nebula-think-panel" open="@turn.ShowReasoning">
+                                            <summary class="nebula-think-panel__summary">
+                                                <span>Raciocinio</span>
+                                                <CoronaBadge Content="@turn.Result.ModelName"
+                                                             Variant="CoronaBadgeVariant.Outlined"
+                                                             Color="CoronaColorSemantic.Neutral" />
+                                            </summary>
+
+                                            <div class="nebula-rich-text nebula-rich-text--reasoning">@NebulaWorkspaceState.GetReasoningText(turn.Result)</div>
+                                        </details>
+
+                                        @if (turn.Result.Commands.Count > 0)
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="@($"Passos ({turn.Result.Commands.Count})")"
+                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                 Color="CoronaColorSemantic.Success" />
+                                                </div>
+
+                                                <div class="nebula-steps">
+                                                    @foreach (var command in turn.Result.Commands)
+                                                    {
+                                                        <div class="nebula-step-card">
+                                                            <div class="nebula-step-card__top">
+                                                                <div>
+                                                                    <strong>@command.Objective</strong>
+                                                                    <code>@command.Run</code>
+                                                                </div>
+
+                                                                <CoronaBadge Content="@(command.Executed ? "Executado" : "Bloqueado")"
+                                                                             Variant="CoronaBadgeVariant.Soft"
+                                                                             Color="@(command.Executed ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                                                            </div>
+
+                                                            <div class="nebula-step-card__checks">
+                                                                <span>Corretude: @NebulaWorkspaceState.FormatBoolean(command.IsCorrect)</span>
+                                                                <span>Seguranca do modelo: @NebulaWorkspaceState.FormatBoolean(command.IsSafe)</span>
+                                                                <span>Seguranca local: @NebulaWorkspaceState.FormatBoolean(command.PassedLocalSafety)</span>
+                                                            </div>
+
+                                                            @if (!string.IsNullOrWhiteSpace(command.Notes))
+                                                            {
+                                                                <p class="nebula-step-card__notes">@command.Notes</p>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(command.Output))
+                                                            {
+                                                                <pre class="nebula-step-card__output">@command.Output</pre>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </section>
+                                        }
+                                    </div>
+                                }
+                            </CoronaCard>
+                        </div>
+                    </article>
+                }
+            </section>
+
+            <CoronaCard Class="@WorkspaceState.GetComposerCardClass()">
+                <div class="nebula-composer">
+                    <textarea class="nebula-composer__input"
+                              placeholder="Descreva uma tarefa, pergunte algo sobre o projeto ou peca uma acao local..."
+                              @bind="WorkspaceState.ComposerText"
+                              @bind:event="oninput"></textarea>
+
+                    <div class="nebula-composer__footer">
+                        <p class="nebula-composer__hint">Sessao atual com @WorkspaceState.Turns.Count turno(s).</p>
+
+                        <CoronaStack Direction="CoronaStackDirection.Row"
+                                     Align="CoronaStackAlign.Center"
+                                     Justify="CoronaStackJustify.End"
+                                     Spacing=".75rem"
+                                     FullWidth="true">
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Color="CoronaColorSemantic.Neutral"
+                                          Disabled="@(WorkspaceState.IsSending || WorkspaceState.Turns.Count == 0)"
+                                          OnClick="WorkspaceState.ClearConversation">
+                                Nova conversa
+                            </CoronaButton>
+
+                            <CoronaButton Size="CoronaComponentSize.Large"
+                                          Loading="@WorkspaceState.IsSending"
+                                          Disabled="@(!WorkspaceState.CanSend)"
+                                          Icon="@CoronaIcons.ArrowRight"
+                                          OnClick="WorkspaceState.SendAsync">
+                                Enviar
+                            </CoronaButton>
+                        </CoronaStack>
+                    </div>
+                </div>
+            </CoronaCard>
+        </main>
+
+        <aside class="nebula-side-rail" aria-label="Contexto da conversa">
+            <CoronaCard Class="nebula-status-card">
+                <div class="nebula-status-card__header">
+                    <div>
+                        <p class="nebula-kicker">Contexto</p>
+                        <h3>Modelo ativo</h3>
+                    </div>
+                    <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Online" : "Offline")"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                </div>
+
+                <div class="nebula-status-list">
+                    <div class="nebula-status-row">
+                        <span>Modelo</span>
+                        <strong>@WorkspaceState.ActiveModelName</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Catalogo local</span>
+                        <strong>@WorkspaceState.InstalledModelCount modelo(s)</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Endpoint</span>
+                        <code>@WorkspaceState.LlamaUrl</code>
+                    </div>
+                </div>
+            </CoronaCard>
+        </aside>
+    </div>
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    private void NavigateToModels()
+    {
+        NavigationManager.NavigateTo("/models");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

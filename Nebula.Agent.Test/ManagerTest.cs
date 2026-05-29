@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Moq;
 using Nebula.Agent.Data;
 using Nebula.Llama.Client;
@@ -26,7 +27,6 @@ public class ManagerTest
         const string response = "I'm doing well, thanks for asking!";
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
         llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
 
         var manager = create_manager(llamaClientMock);
@@ -34,7 +34,7 @@ public class ManagerTest
         var result = await manager.ManageResponse(prompt);
 
         Assert.Equal(response, result);
-        llamaClientMock.Verify(client => client.ClassifyPrompt(prompt), Times.Once);
+        llamaClientMock.Verify(client => client.ClassifyPrompt(prompt), Times.Never);
         llamaClientMock.Verify(client => client.GetResponseAsync(prompt), Times.Once);
     }
 
@@ -81,7 +81,7 @@ public class ManagerTest
 
         var result = await manager.ManageResponse(prompt);
 
-        Assert.Equal("Commands executed", result);
+        Assert.Equal("Directory listing", result);
         executorMock.Verify(executor => executor.RunCommandAsync("dir"), Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()), Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()), Times.Once);
@@ -200,13 +200,13 @@ public class ManagerTest
 
         var result = await manager.ManageResponse(prompt);
 
-        Assert.Equal("Commands executed", result);
+        Assert.Equal("Directory listing", result);
         Assert.NotNull(savedRequest);
         Assert.NotNull(savedCommand);
         Assert.Equal(savedRequest!.Id, savedCommand!.RequestId);
         Assert.Equal(ClassificationResult.Action.ToString(), savedRequest.Classification);
         Assert.Equal(savedRequest.Id, updatedRequestId);
-        Assert.Equal("Commands executed", updatedResponse);
+        Assert.Equal("Directory listing", updatedResponse);
     }
 
     [Fact]
@@ -250,9 +250,212 @@ public class ManagerTest
     }
 
     [Fact]
+    public async Task manage_conversation_async_must_extract_reasoning_when_model_returns_think_block()
+    {
+        const string prompt = "Explain Nebula";
+        const string rawResponse = "<think>Analyzing the request</think>Nebula is a local AI assistant.";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(rawResponse);
+
+        var manager = create_manager(llamaClientMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal("Nebula is a local AI assistant.", result.Response);
+        Assert.Equal("Analyzing the request", result.Reasoning);
+        Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_report_streaming_updates_for_chat()
+    {
+        const string prompt = "Explain the flow";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(prompt, It.IsAny<IProgress<LlamaStreamUpdate>?>(), It.IsAny<CancellationToken>()))
+            .Returns<string, IProgress<LlamaStreamUpdate>?, CancellationToken>((_, progress, _) =>
+            {
+                progress?.Report(new LlamaStreamUpdate
+                {
+                    Reasoning = "Partial reasoning"
+                });
+                progress?.Report(new LlamaStreamUpdate
+                {
+                    Reasoning = "Partial reasoning",
+                    Response = "Partial response"
+                });
+
+                return Task.FromResult("<think>Partial reasoning</think>Final response");
+            });
+
+        var manager = create_manager(llamaClientMock);
+        ConversationTurn? partialUpdate = null;
+        var progress = new InlineProgress<ConversationTurn>(update => partialUpdate = update);
+
+        var result = await manager.ManageConversationAsync(prompt, progress, CancellationToken.None);
+
+        Assert.NotNull(partialUpdate);
+        Assert.Equal("Partial response", partialUpdate!.Response);
+        Assert.Equal("Partial reasoning", partialUpdate.Reasoning);
+        Assert.Equal("Final response", result.Response);
+        Assert.Equal("Partial reasoning", result.Reasoning);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_fallback_to_chat_when_action_plan_is_invalid()
+    {
+        const string prompt = "Create a script that says hi.";
+        const string invalidPlan = "not-json";
+        const string fallbackResponse = "Oi.";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
+            .ReturnsAsync(invalidPlan)
+            .ReturnsAsync(fallbackResponse);
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(invalidPlan))
+            .Throws(new ArgumentException("Invalid JSON object."));
+
+        var executorMock = create_executor_mock();
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
+        Assert.Equal(fallbackResponse, result.Response);
+        Assert.Contains("fallback de chat", result.Reasoning, StringComparison.OrdinalIgnoreCase);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_downgrade_non_operational_action_prompt_to_chat()
+    {
+        const string prompt = "Diga oi em uma linha.";
+        const string response = "Oi.";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
+
+        var executorMock = create_executor_mock();
+        var manager = create_manager(llamaClientMock, executorMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
+        Assert.Equal(response, result.Response);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_bypass_model_classifier_for_clear_chat_prompts()
+    {
+        const string prompt = "Ola";
+        const string response = "Oi!";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
+
+        var loggerMock = create_logger_mock();
+        var manager = create_manager(llamaClientMock, loggerMock: loggerMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
+        Assert.Equal(response, result.Response);
+        llamaClientMock.Verify(client => client.ClassifyPrompt(prompt), Times.Never);
+        loggerMock.Verify(logger => logger.Log(It.Is<string>(message => message.Contains("classified locally as chat", StringComparison.OrdinalIgnoreCase))), Times.Once);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_reuse_conversation_id_and_send_history_to_model()
+    {
+        var capturedPrompts = new List<string>();
+        var memoryRepository = new InMemoryConversationMemoryRepository();
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(It.IsAny<string>()))
+            .Callback<string>(capturedPrompts.Add)
+            .ReturnsAsync("Resposta do mock");
+
+        var manager = create_manager(llamaClientMock, conversationMemoryRepository: memoryRepository);
+
+        var firstTurn = await manager.ManageConversationAsync("Explique Nebula");
+        var secondTurn = await manager.ManageConversationAsync("Agora explique ela em uma linha");
+
+        Assert.Equal(firstTurn.ConversationId, secondTurn.ConversationId);
+        Assert.Equal(manager.ActiveConversationId, secondTurn.ConversationId);
+        Assert.Equal(2, capturedPrompts.Count);
+        Assert.Contains("[conversation_state]", capturedPrompts[1]);
+        Assert.Contains("user: Explique Nebula", capturedPrompts[1]);
+        Assert.Contains("assistant: Resposta do mock", capturedPrompts[1]);
+        Assert.Contains("[current_user_message]", capturedPrompts[1]);
+        Assert.Contains("Agora explique ela em uma linha", capturedPrompts[1]);
+
+        var persistedMessages = await memoryRepository.GetRecentMessagesAsync(secondTurn.ConversationId, 10);
+        var persistedState = await memoryRepository.GetStateAsync(secondTurn.ConversationId);
+
+        Assert.Equal(4, persistedMessages.Count);
+        Assert.NotNull(persistedState);
+        Assert.Contains("Explique Nebula", persistedState!.Summary);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_abort_required_action_chain_after_first_failed_step()
+    {
+        const string prompt = "list files and then create a marker file";
+        const string commandJson = """
+            {
+                "Steps": [
+                    { "Id": 1, "Objective": "List files", "Run": "dir", "Required": true },
+                    { "Id": 2, "Objective": "Create marker", "Run": "echo ok > marker.txt", "Required": true }
+                ]
+            }
+            """;
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
+            .ReturnsAsync(commandJson)
+            .ReturnsAsync("No")
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
+
+        var loggerMock = create_logger_mock();
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            loggerMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Contains("A execucao foi abortada no passo 1", result.Response);
+        Assert.Contains("1 passo(s) dependente(s) nao foram executados", result.Response);
+        Assert.Equal(2, result.Commands.Count);
+        Assert.False(result.Commands[0].Executed);
+        Assert.True(result.Commands[1].Skipped);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        loggerMock.Verify(
+            logger => logger.LogError(It.Is<string>(message => message.Contains("Aborting action chain"))),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task manage_response_must_log_and_throw_when_classification_throws()
     {
-        const string prompt = "Test prompt";
+        const string prompt = "list files in the current directory";
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ThrowsAsync(new InvalidOperationException("Test error"));
@@ -314,13 +517,60 @@ public class ManagerTest
         Assert.False(result);
     }
 
+    [Fact]
+    public async Task manage_conversation_async_must_not_wait_indefinitely_when_prompt_persistence_stalls()
+    {
+        const string prompt = "Explique a arquitetura";
+        const string response = "Resposta do mock";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Chat);
+        llamaClientMock.Setup(client => client.GetResponseAsync(prompt)).ReturnsAsync(response);
+
+        var promptRepositoryMock = create_prompt_repository_mock();
+        promptRepositoryMock
+            .Setup(repository => repository.SaveAsync(It.IsAny<PromptRequest>(), It.IsAny<CancellationToken>()))
+            .Returns<PromptRequest, CancellationToken>(async (_, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new PromptRequest();
+            });
+        promptRepositoryMock
+            .Setup(repository => repository.UpdateResponseAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<Guid, string, CancellationToken>(async (id, savedResponse, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new PromptRequest
+                {
+                    Id = id,
+                    Response = savedResponse
+                };
+            });
+
+        var loggerMock = create_logger_mock();
+        var manager = create_manager(
+            llamaClientMock,
+            loggerMock: loggerMock,
+            promptRepositoryMock: promptRepositoryMock);
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = await manager.ManageConversationAsync(prompt);
+        stopwatch.Stop();
+
+        Assert.Equal(response, result.Response);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3), $"The manager took too long to return: {stopwatch.Elapsed}.");
+        loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Timed out while persisting prompt request"))), Times.Once);
+        loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Timed out while updating prompt response"))), Times.Once);
+    }
+
     private static Manager create_manager(
         Mock<ILlamaClient> llamaClientMock,
         Mock<IShellExecutor>? executorMock = null,
         Mock<IJsonExtractor>? jsonExtractorMock = null,
         Mock<ILogger>? loggerMock = null,
         Mock<ICommandRepository>? commandRepositoryMock = null,
-        Mock<IPromptRequestRepository>? promptRepositoryMock = null)
+        Mock<IPromptRequestRepository>? promptRepositoryMock = null,
+        IConversationMemoryRepository? conversationMemoryRepository = null)
     {
         return new Manager(
             llamaClientMock.Object,
@@ -328,7 +578,8 @@ public class ManagerTest
             (jsonExtractorMock ?? create_json_extractor_mock()).Object,
             (loggerMock ?? create_logger_mock()).Object,
             commandRepositoryMock?.Object,
-            promptRepositoryMock?.Object);
+            promptRepositoryMock?.Object,
+            conversationMemoryRepository);
     }
 
     private static Mock<ILlamaClient> create_llama_client_mock() => new();
@@ -342,6 +593,14 @@ public class ManagerTest
     private static Mock<ICommandRepository> create_command_repository_mock() => new();
 
     private static Mock<IPromptRequestRepository> create_prompt_repository_mock() => new();
+
+    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            handler(value);
+        }
+    }
 
     private static PromptRequest clone_prompt_request(PromptRequest request)
     {

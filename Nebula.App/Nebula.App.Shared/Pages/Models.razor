@@ -1,0 +1,275 @@
+@page "/models"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Ollama" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.ActiveModelName"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="CoronaColorSemantic.Neutral" />
+            </CoronaStack>
+            <h2>Hub de modelos</h2>
+            <p>Catalogo local, instalacao e troca do modelo ativo para a central Nebula.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToChat">
+                Conversa
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsModelBusy"
+                          Loading="@WorkspaceState.IsRefreshingRuntime"
+                          OnClick="WorkspaceState.RefreshRuntimeAsync">
+                Atualizar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    <div class="nebula-model-layout">
+        <CoronaCard Class="nebula-model-current-card">
+            <div class="nebula-model-current">
+                <div>
+                    <span class="nebula-model-current__label">Modelo em uso</span>
+                    <strong>@WorkspaceState.ActiveModelName</strong>
+                    <p>@(WorkspaceState.RuntimeState?.SelectedModelInstalled == true ? "Pronto para responder agora." : "Ainda nao encontrado no runtime local.")</p>
+                </div>
+
+                <div class="nebula-model-current__badges">
+                    <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Runtime pronto" : "Sem conexao")"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+
+                    @if (WorkspaceState.RuntimeState?.SelectedModelInstalled == true)
+                    {
+                        <CoronaBadge Content="Instalado" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
+                    }
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(WorkspaceState.RuntimeState?.LastError))
+            {
+                <div class="nebula-error-panel nebula-inline-panel">
+                    <div>
+                        <p class="nebula-error-panel__title">Nao consegui ler o catalogo do Ollama.</p>
+                        <p>@WorkspaceState.RuntimeState!.LastError</p>
+                    </div>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(WorkspaceState.ModelFeedback))
+            {
+                <div class="nebula-info-panel">
+                    <p class="nebula-info-panel__title">Atualizacao do runtime</p>
+                    <p>@WorkspaceState.ModelFeedback</p>
+                </div>
+            }
+
+            @if (WorkspaceState.IsRuntimeOnline && WorkspaceState.RuntimeState?.SelectedModelInstalled == false)
+            {
+                <div class="nebula-warning-panel">
+                    <div>
+                        <p class="nebula-warning-panel__title">O modelo ativo ainda nao esta instalado.</p>
+                        <p><strong>@WorkspaceState.ActiveModelName</strong> pode ser baixado e ativado nesta tela.</p>
+                    </div>
+
+                    <CoronaButton Size="CoronaComponentSize.Small"
+                                  Disabled="@WorkspaceState.IsModelBusy"
+                                  Loading="@WorkspaceState.IsInstallingModel"
+                                  OnClick="@(() => WorkspaceState.InstallSpecificModelAsync(WorkspaceState.ActiveModelName, true))">
+                        Instalar modelo ativo
+                    </CoronaButton>
+                </div>
+            }
+        </CoronaCard>
+
+        <div class="nebula-model-grid">
+            <CoronaCard Class="nebula-model-tool-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Instalar um novo modelo</h3>
+                        <p>Digite um nome da biblioteca do Ollama e escolha se quer ativar depois do download.</p>
+                    </div>
+
+                    <div class="nebula-model-install">
+                        <CoronaInput Label="Nome do modelo"
+                                     Placeholder="Ex.: qwen3:8b"
+                                     HelperText="Aceita qualquer modelo compativel com o Ollama local."
+                                     Disabled="@WorkspaceState.IsModelBusy"
+                                     @bind-Value="WorkspaceState.ModelInstallText" />
+
+                        <div class="nebula-model-install__actions">
+                            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                          Color="CoronaColorSemantic.Neutral"
+                                          Disabled="@(!WorkspaceState.CanInstallModel)"
+                                          OnClick="WorkspaceState.InstallModelAsync">
+                                Instalar
+                            </CoronaButton>
+
+                            <CoronaButton Disabled="@(!WorkspaceState.CanInstallModel)"
+                                          Loading="@WorkspaceState.IsInstallingModel"
+                                          OnClick="WorkspaceState.InstallAndActivateModelAsync">
+                                Instalar e usar
+                            </CoronaButton>
+                        </div>
+                    </div>
+
+                    <div class="nebula-section-title">
+                        <h3>Sugestoes prontas</h3>
+                        <p>Perfis populares para conversa, codigo e automacao local.</p>
+                    </div>
+
+                    <div class="nebula-model-suggestions">
+                        @foreach (var suggestion in WorkspaceState.SuggestedModels)
+                        {
+                            var isInstalled = WorkspaceState.RuntimeState?.InstalledModels.Any(model => NebulaWorkspaceState.ModelNamesMatch(model.Name, suggestion.Name)) == true;
+                            var isSelected = NebulaWorkspaceState.ModelNamesMatch(WorkspaceState.ActiveModelName, suggestion.Name);
+
+                            <div class="nebula-model-suggestion-card">
+                                <div>
+                                    <strong>@suggestion.Name</strong>
+                                    <p>@suggestion.Description</p>
+                                </div>
+
+                                <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
+                                              Size="CoronaComponentSize.Small"
+                                              Color="@(isInstalled ? CoronaColorSemantic.Primary : CoronaColorSemantic.Neutral)"
+                                              Disabled="@WorkspaceState.IsModelBusy"
+                                              OnClick="@(() => WorkspaceState.HandleSuggestedModelAsync(suggestion))">
+                                    @(isSelected ? "Em uso" : isInstalled ? "Usar agora" : "Instalar e usar")
+                                </CoronaButton>
+                            </div>
+                        }
+                    </div>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-model-tool-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Modelos instalados</h3>
+                        <p>O modelo ativo muda sem reiniciar a sessao da central.</p>
+                    </div>
+
+                    @if (WorkspaceState.RuntimeState is null && WorkspaceState.IsRefreshingRuntime)
+                    {
+                        <div class="nebula-pending-panel nebula-inline-panel">
+                            <div class="nebula-pending-panel__pulse"></div>
+                            <div>
+                                <p class="nebula-pending-panel__title">Lendo o catalogo do Ollama...</p>
+                                <p>Os modelos instalados aparecem aqui quando o runtime responder.</p>
+                            </div>
+                        </div>
+                    }
+                    else if (WorkspaceState.InstalledModelCount == 0)
+                    {
+                        <div class="nebula-empty-inline">
+                            <p>Nenhum modelo instalado foi encontrado ainda.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="nebula-model-list">
+                            @foreach (var model in WorkspaceState.RuntimeState!.InstalledModels)
+                            {
+                                var isSelected = NebulaWorkspaceState.ModelNamesMatch(model.Name, WorkspaceState.ActiveModelName);
+
+                                <div class="nebula-model-item @(isSelected ? "is-active" : string.Empty)">
+                                    <div class="nebula-model-item__meta">
+                                        <div class="nebula-model-item__top">
+                                            <strong>@model.Name</strong>
+
+                                            <div class="nebula-model-item__badges">
+                                                <CoronaBadge Content="@model.SizeLabel"
+                                                             Variant="CoronaBadgeVariant.Outlined"
+                                                             Color="CoronaColorSemantic.Neutral" />
+
+                                                @if (isSelected)
+                                                {
+                                                    <CoronaBadge Content="Ativo"
+                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                 Color="CoronaColorSemantic.Success" />
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <p>@model.Summary</p>
+                                        <span>Atualizado em @model.ModifiedAtLabel</span>
+                                    </div>
+
+                                    <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
+                                                  Size="CoronaComponentSize.Small"
+                                                  Color="@(isSelected ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Primary)"
+                                                  Disabled="@(WorkspaceState.IsModelBusy || isSelected)"
+                                                  OnClick="@(() => WorkspaceState.SelectInstalledModelAsync(model.Name))">
+                                        @(isSelected ? "Em uso" : "Usar")
+                                    </CoronaButton>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="nebula-section-title">
+                        <h3>Progresso recente</h3>
+                        <p>Eventos recebidos do `ollama pull` nesta sessao.</p>
+                    </div>
+
+                    @if (WorkspaceState.PullUpdates.Count == 0)
+                    {
+                        <div class="nebula-empty-inline">
+                            <p>Nenhum download em andamento.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="nebula-model-progress">
+                            @foreach (var update in WorkspaceState.PullUpdates)
+                            {
+                                <div class="nebula-model-progress__row">
+                                    <span>@update.Status</span>
+                                    <strong>@(update.PercentComplete is int percent ? $"{percent}%" : "...")</strong>
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            </CoronaCard>
+        </div>
+    </div>
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

@@ -1,0 +1,265 @@
+@page "/runtime"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Runtime" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.GetAccelerationStatusText()"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@WorkspaceState.GetRecommendationColor()" />
+            </CoronaStack>
+            <h2>Setup e aceleracao</h2>
+            <p>Leitura do ambiente, perfil recomendado e comandos Docker para o backend local.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToModels">
+                Modelos
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsDetectingEnvironment"
+                          Loading="@WorkspaceState.IsDetectingEnvironment"
+                          OnClick="WorkspaceState.DetectEnvironmentAsync">
+                Redetectar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    <div class="nebula-runtime-layout">
+        <CoronaCard Class="nebula-status-card">
+            <div class="nebula-status-card__header">
+                <div>
+                    <p class="nebula-kicker">Estado da central</p>
+                    <h3>Runtime local</h3>
+                </div>
+
+                <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Online" : "Offline")"
+                             Variant="CoronaBadgeVariant.Soft"
+                             Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+            </div>
+
+            <div class="nebula-status-list nebula-status-list--grid">
+                <div class="nebula-status-row">
+                    <span>Modelo ativo</span>
+                    <strong>@WorkspaceState.ActiveModelName</strong>
+                </div>
+                <div class="nebula-status-row">
+                    <span>Modelos instalados</span>
+                    <strong>@WorkspaceState.InstalledModelCount catalogado(s)</strong>
+                </div>
+                <div class="nebula-status-row">
+                    <span>Endpoint do modelo</span>
+                    <code>@WorkspaceState.LlamaUrl</code>
+                </div>
+                <div class="nebula-status-row">
+                    <span>Host do agente</span>
+                    <strong>@WorkspaceState.GetHostSummary()</strong>
+                </div>
+                <div class="nebula-status-row">
+                    <span>Shell da UI</span>
+                    <strong>@WorkspaceState.GetClientShellSummary()</strong>
+                </div>
+                <div class="nebula-status-row">
+                    <span>Aceleracao recomendada</span>
+                    <strong>@WorkspaceState.GetAccelerationStatusText()</strong>
+                </div>
+            </div>
+        </CoronaCard>
+
+        <section class="nebula-runtime-main">
+            @if (WorkspaceState.IsDetectingEnvironment && WorkspaceState.SetupRecommendation is null)
+            {
+                <div class="nebula-pending-panel">
+                    <div class="nebula-pending-panel__pulse"></div>
+                    <div>
+                        <p class="nebula-pending-panel__title">Analisando o ambiente local...</p>
+                        <p>A recomendacao combina sinais do host, shell da UI e endpoint do Ollama.</p>
+                    </div>
+                </div>
+            }
+            else if (WorkspaceState.SetupRecommendation is not null)
+            {
+                <CoronaCard Class="@GetSetupCardClass()">
+                    <div class="nebula-setup-card__eyebrow">
+                        <CoronaBadge Content="Setup guiado" Variant="CoronaBadgeVariant.Soft" />
+                        <CoronaBadge Content="@WorkspaceState.SetupRecommendation.ProfileName"
+                                     Variant="CoronaBadgeVariant.Outlined"
+                                     Color="@WorkspaceState.GetRecommendationColor()" />
+                        <CoronaBadge Content="@($"Confianca {WorkspaceState.SetupRecommendation.ConfidenceLabel}")"
+                                     Variant="CoronaBadgeVariant.Outlined"
+                                     Color="@WorkspaceState.GetConfidenceColor()" />
+
+                        @if (WorkspaceState.SetupRecommendation.IsExperimental)
+                        {
+                            <CoronaBadge Content="Experimental"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="CoronaColorSemantic.Warning" />
+                        }
+                    </div>
+
+                    <div class="nebula-setup-card__content">
+                        <div>
+                            <h3>@WorkspaceState.SetupRecommendation.Summary</h3>
+                            <p>@WorkspaceState.SetupRecommendation.ModelHint</p>
+                        </div>
+
+                        <code class="nebula-setup-card__command">@WorkspaceState.SetupRecommendation.Command</code>
+                    </div>
+
+                    <div class="nebula-setup-facts">
+                        <div class="nebula-setup-fact">
+                            <span>Host do agente</span>
+                            <strong>@WorkspaceState.GetHostSummary()</strong>
+                        </div>
+
+                        <div class="nebula-setup-fact">
+                            <span>Shell da UI</span>
+                            <strong>@WorkspaceState.GetClientShellSummary()</strong>
+                        </div>
+
+                        <div class="nebula-setup-fact">
+                            <span>Pista de GPU</span>
+                            <strong>@WorkspaceState.SetupRecommendation.GpuLabel</strong>
+                        </div>
+
+                        <div class="nebula-setup-fact">
+                            <span>Runtime Ollama</span>
+                            <strong>@WorkspaceState.GetRuntimeScopeSummary()</strong>
+                        </div>
+                    </div>
+
+                    <div class="nebula-setup-columns">
+                        <div class="nebula-setup-column">
+                            <p class="nebula-setup-column__title">Por que essa sugestao</p>
+                            <ul class="nebula-setup-list">
+                                @foreach (var reason in WorkspaceState.SetupRecommendation.Reasons)
+                                {
+                                    <li>@reason</li>
+                                }
+                            </ul>
+                        </div>
+
+                        <div class="nebula-setup-column">
+                            <p class="nebula-setup-column__title">Proximos passos</p>
+                            <ul class="nebula-setup-list">
+                                @foreach (var step in WorkspaceState.SetupRecommendation.NextSteps)
+                                {
+                                    <li>@step</li>
+                                }
+                            </ul>
+                        </div>
+                    </div>
+                </CoronaCard>
+
+                @if (!string.IsNullOrWhiteSpace(WorkspaceState.EnvironmentDetectionError))
+                {
+                    <div class="nebula-warning-panel">
+                        <div>
+                            <p class="nebula-warning-panel__title">Leitura parcial do shell</p>
+                            <p>@WorkspaceState.EnvironmentDetectionError</p>
+                        </div>
+                    </div>
+                }
+
+                @if (WorkspaceState.SetupRecommendation.Warnings.Count > 0)
+                {
+                    <div class="nebula-warning-panel">
+                        <div>
+                            <p class="nebula-warning-panel__title">Alertas do assistente</p>
+                            <ul class="nebula-setup-list nebula-setup-list--compact">
+                                @foreach (var warning in WorkspaceState.SetupRecommendation.Warnings)
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                        </div>
+                    </div>
+                }
+            }
+
+            <section class="nebula-model-section">
+                <div class="nebula-section-title">
+                    <h3>Perfis de aceleracao</h3>
+                    <p>O backend de GPU e definido pelo runtime do Ollama.</p>
+                </div>
+
+                <div class="nebula-acceleration-grid">
+                    @foreach (var profile in WorkspaceState.AccelerationProfiles)
+                    {
+                        <div class="@WorkspaceState.GetAccelerationCardClass(profile)">
+                            <div class="nebula-acceleration-card__header">
+                                <div class="nebula-acceleration-card__labels">
+                                    <strong>@profile.Name</strong>
+
+                                    @if (WorkspaceState.IsRecommendedProfile(profile))
+                                    {
+                                        <span class="nebula-acceleration-card__flag">Recomendado agora</span>
+                                    }
+                                </div>
+
+                                <CoronaBadge Content="@WorkspaceState.GetAccelerationBadge(profile)"
+                                             Variant="CoronaBadgeVariant.Outlined"
+                                             Color="@WorkspaceState.GetAccelerationBadgeColor(profile)" />
+                            </div>
+
+                            <p>@profile.Description</p>
+                            <code>@profile.Command</code>
+                        </div>
+                    }
+                </div>
+            </section>
+        </section>
+    </div>
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await WorkspaceState.DetectEnvironmentAsync();
+        }
+    }
+
+    private void NavigateToModels()
+    {
+        NavigationManager.NavigateTo("/models");
+    }
+
+    private string GetSetupCardClass()
+    {
+        return WorkspaceState.SetupRecommendation?.UsesGpu == true
+            ? "nebula-setup-card is-gpu"
+            : "nebula-setup-card is-cpu";
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}
