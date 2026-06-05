@@ -1,5 +1,7 @@
 #!/bin/sh
-set -eu
+set -e
+set -u
+
 
 PRIMARY_MODEL="${OLLAMA_MODEL:-deepseek-r1:7b}"
 EXTRA_MODELS="${OLLAMA_MODELS:-}"

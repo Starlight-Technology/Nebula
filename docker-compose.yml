@@ -18,7 +18,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
       - ./ollama-start.sh:/ollama-start.sh
-    entrypoint: ["/bin/sh", "/ollama-start.sh"]
+    # entrypoint: ["/bin/sh", "/ollama-start.sh"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -28,7 +28,7 @@ services:
 
   mongodb:
     image: mongo:7.0
-    container_name: mongodb
+    container_name: mongodb-nebula
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
@@ -50,7 +50,7 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    container_name: postgres
+    container_name: postgres-nebula
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}

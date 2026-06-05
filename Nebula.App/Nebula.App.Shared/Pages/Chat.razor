@@ -94,12 +94,19 @@
                                                              Variant="CoronaBadgeVariant.Soft"
                                                              Color="CoronaColorSemantic.Success" />
                                             }
+
+                                            @if (turn.Result.ActionStatus is ActionExecutionStatus resultActionStatus)
+                                            {
+                                                <CoronaBadge Content="@resultActionStatus.ToString()"
+                                                             Variant="CoronaBadgeVariant.Soft"
+                                                             Color="@NebulaWorkspaceState.GetActionStatusColor(resultActionStatus)" />
+                                            }
                                         }
                                         else if (string.IsNullOrWhiteSpace(turn.Error))
                                         {
-                                            <CoronaBadge Content="@(turn.HasStreamingContent ? "Gerando" : "Pensando")"
+                                            <CoronaBadge Content="@(turn.StreamingActionStatus?.ToString() ?? (turn.HasStreamingContent ? "Gerando" : "Pensando"))"
                                                          Variant="CoronaBadgeVariant.Soft"
-                                                         Color="CoronaColorSemantic.Warning" />
+                                                         Color="@(turn.StreamingActionStatus is ActionExecutionStatus streamingActionStatus ? NebulaWorkspaceState.GetActionStatusColor(streamingActionStatus) : CoronaColorSemantic.Warning)" />
                                         }
                                     </div>
                                 </div>
@@ -139,6 +146,55 @@
                                             </details>
                                         }
 
+                                        @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="@($"Execucao ({NebulaWorkspaceState.GetActionEvents(turn).Count})")"
+                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                 Color="CoronaColorSemantic.Primary" />
+                                                </div>
+
+                                                <div class="nebula-action-log">
+                                                    @foreach (var actionEvent in NebulaWorkspaceState.GetActionEvents(turn))
+                                                    {
+                                                        <div class="nebula-action-event">
+                                                            <div class="nebula-action-event__header">
+                                                                <div>
+                                                                    <strong>@actionEvent.Title</strong>
+                                                                    <span>Tentativa @actionEvent.Attempt</span>
+                                                                </div>
+
+                                                                <CoronaBadge Content="@actionEvent.Status.ToString()"
+                                                                             Variant="CoronaBadgeVariant.Soft"
+                                                                             Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
+                                                            </div>
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
+                                                            {
+                                                                <p>@actionEvent.Message</p>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
+                                                            {
+                                                                <code>@actionEvent.Command</code>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
+                                                            {
+                                                                <pre>@actionEvent.ToolResponse</pre>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+                                                            {
+                                                                <p class="nebula-action-event__error">@actionEvent.Error</p>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </section>
+                                        }
+
                                         <div class="nebula-pending-panel">
                                             <div class="nebula-pending-panel__pulse"></div>
                                             <div>
@@ -158,6 +214,55 @@
 
                                             <div class="nebula-rich-text">@turn.Result.Response</div>
                                         </section>
+
+                                        @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="@($"Execucao ({NebulaWorkspaceState.GetActionEvents(turn).Count})")"
+                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                 Color="CoronaColorSemantic.Primary" />
+                                                </div>
+
+                                                <div class="nebula-action-log">
+                                                    @foreach (var actionEvent in NebulaWorkspaceState.GetActionEvents(turn))
+                                                    {
+                                                        <div class="nebula-action-event">
+                                                            <div class="nebula-action-event__header">
+                                                                <div>
+                                                                    <strong>@actionEvent.Title</strong>
+                                                                    <span>Tentativa @actionEvent.Attempt</span>
+                                                                </div>
+
+                                                                <CoronaBadge Content="@actionEvent.Status.ToString()"
+                                                                             Variant="CoronaBadgeVariant.Soft"
+                                                                             Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
+                                                            </div>
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
+                                                            {
+                                                                <p>@actionEvent.Message</p>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
+                                                            {
+                                                                <code>@actionEvent.Command</code>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
+                                                            {
+                                                                <pre>@actionEvent.ToolResponse</pre>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+                                                            {
+                                                                <p class="nebula-action-event__error">@actionEvent.Error</p>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </section>
+                                        }
 
                                         <details class="nebula-think-panel" open="@turn.ShowReasoning">
                                             <summary class="nebula-think-panel__summary">
@@ -186,12 +291,13 @@
                                                             <div class="nebula-step-card__top">
                                                                 <div>
                                                                     <strong>@command.Objective</strong>
+                                                                    <span class="nebula-step-card__attempt">Tentativa @command.Attempt, passo @command.Id</span>
                                                                     <code>@command.Run</code>
                                                                 </div>
 
-                                                                <CoronaBadge Content="@(command.Executed ? "Executado" : "Bloqueado")"
+                                                                <CoronaBadge Content="@(command.Skipped ? "Ignorado" : command.Executed ? "Executado" : "Bloqueado")"
                                                                              Variant="CoronaBadgeVariant.Soft"
-                                                                             Color="@(command.Executed ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                                                                             Color="@(command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
                                                             </div>
 
                                                             <div class="nebula-step-card__checks">
@@ -208,6 +314,11 @@
                                                             @if (!string.IsNullOrWhiteSpace(command.Output))
                                                             {
                                                                 <pre class="nebula-step-card__output">@command.Output</pre>
+                                                            }
+
+                                                            @if (!string.IsNullOrWhiteSpace(command.Error))
+                                                            {
+                                                                <p class="nebula-action-event__error">@command.Error</p>
                                                             }
                                                         </div>
                                                     }
@@ -244,6 +355,17 @@
                                           OnClick="WorkspaceState.ClearConversation">
                                 Nova conversa
                             </CoronaButton>
+
+                            @if (WorkspaceState.IsSending)
+                            {
+                                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                              Size="CoronaComponentSize.Small"
+                                              Color="CoronaColorSemantic.Warning"
+                                              Icon="@CoronaIcons.Xmark"
+                                              OnClick="WorkspaceState.CancelActiveTurn">
+                                    Cancelar
+                                </CoronaButton>
+                            }
 
                             <CoronaButton Size="CoronaComponentSize.Large"
                                           Loading="@WorkspaceState.IsSending"

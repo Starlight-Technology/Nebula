@@ -6,6 +6,11 @@ public class ShellExecutor : IShellExecutor
 {
     public async Task<string> RunCommandAsync(string command)
     {
+        return await RunCommandAsync(command, CancellationToken.None);
+    }
+
+    public async Task<string> RunCommandAsync(string command, CancellationToken cancellationToken)
+    {
         Console.WriteLine($"Command: {command}");
 
         var process = new Process
@@ -21,14 +26,38 @@ public class ShellExecutor : IShellExecutor
             }
         };
 
-        process.Start();
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("Unable to start shell process.");
+        }
 
-        string output = await process.StandardOutput.ReadToEndAsync();
-        string error = await process.StandardError.ReadToEndAsync();
+        try
+        {
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        await process.WaitForExitAsync();
+            await process.WaitForExitAsync(cancellationToken);
 
-        return string.IsNullOrWhiteSpace(error) ? output : error;
+            var output = await outputTask;
+            var error = await errorTask;
+
+            return string.IsNullOrWhiteSpace(error) ? output : error;
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            throw;
+        }
     }
 
     private string GetShell()

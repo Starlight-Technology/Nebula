@@ -8,6 +8,8 @@ public class ConversationMessage
 
     public Guid ConversationId { get; set; }
 
+    public int ConversationContextId { get; set; }
+
     public string Role { get; set; } = string.Empty;
 
     public string Content { get; set; } = string.Empty;

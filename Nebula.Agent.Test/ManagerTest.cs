@@ -52,7 +52,9 @@ public class ManagerTest
             .ReturnsAsync("Yes");
 
         var executorMock = create_executor_mock();
-        executorMock.Setup(executor => executor.RunCommandAsync("dir")).ReturnsAsync("Directory listing");
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("dir", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Directory listing");
 
         var jsonExtractorMock = create_json_extractor_mock();
         jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
@@ -82,7 +84,7 @@ public class ManagerTest
         var result = await manager.ManageResponse(prompt);
 
         Assert.Equal("Directory listing", result);
-        executorMock.Verify(executor => executor.RunCommandAsync("dir"), Times.Once);
+        executorMock.Verify(executor => executor.RunCommandAsync("dir", It.IsAny<CancellationToken>()), Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()), Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()), Times.Once);
         commandRepositoryMock.Verify(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()), Times.Once);
@@ -151,7 +153,9 @@ public class ManagerTest
             .ReturnsAsync("Yes");
 
         var executorMock = create_executor_mock();
-        executorMock.Setup(executor => executor.RunCommandAsync("dir")).ReturnsAsync("Directory listing");
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("dir", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Directory listing");
 
         var jsonExtractorMock = create_json_extractor_mock();
         jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
@@ -210,29 +214,17 @@ public class ManagerTest
     }
 
     [Fact]
-    public async Task manage_response_must_not_execute_command_when_action_is_not_safe()
+    public async Task manage_conversation_async_must_block_unsafe_action_before_planning()
     {
         const string prompt = "Delete system files";
-        const string commandJson = """{"Steps":[{"Id":1,"Objective":"Delete files","Run":"rm -rf /"}]}""";
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
-        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(commandJson)
-            .ReturnsAsync("No")
-            .ReturnsAsync("Yes");
 
         var executorMock = create_executor_mock();
         var jsonExtractorMock = create_json_extractor_mock();
-        jsonExtractorMock.Setup(extractor => extractor.ExtractJsonObject(commandJson)).Returns(commandJson);
 
         var commandRepositoryMock = create_command_repository_mock();
-        commandRepositoryMock
-            .Setup(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((StoredCommand command, CancellationToken _) => command);
-        commandRepositoryMock
-            .Setup(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((CommandVerification verification, CancellationToken _) => verification);
 
         var loggerMock = create_logger_mock();
 
@@ -243,10 +235,13 @@ public class ManagerTest
             loggerMock,
             commandRepositoryMock);
 
-        _ = await manager.ManageResponse(prompt);
+        var result = await manager.ManageConversationAsync(prompt);
 
-        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
-        loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Command verification failed"))), Times.Once);
+        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
+        Assert.Contains("bloqueada", result.Response, StringComparison.OrdinalIgnoreCase);
+        llamaClientMock.Verify(client => client.GetResponseAsync(It.IsAny<string>()), Times.Never);
+        jsonExtractorMock.Verify(extractor => extractor.ExtractJsonObject(It.IsAny<string>()), Times.Never);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -306,17 +301,14 @@ public class ManagerTest
     }
 
     [Fact]
-    public async Task manage_conversation_async_must_fallback_to_chat_when_action_plan_is_invalid()
+    public async Task manage_conversation_async_must_report_failure_when_action_plan_is_invalid()
     {
         const string prompt = "Create a script that says hi.";
         const string invalidPlan = "not-json";
-        const string fallbackResponse = "Oi.";
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
-        llamaClientMock.SetupSequence(client => client.GetResponseAsync(It.IsAny<string>()))
-            .ReturnsAsync(invalidPlan)
-            .ReturnsAsync(fallbackResponse);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.IsAny<string>())).ReturnsAsync(invalidPlan);
 
         var jsonExtractorMock = create_json_extractor_mock();
         jsonExtractorMock
@@ -324,14 +316,15 @@ public class ManagerTest
             .Throws(new ArgumentException("Invalid JSON object."));
 
         var executorMock = create_executor_mock();
-        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock, maxActionRetries: 0);
 
         var result = await manager.ManageConversationAsync(prompt);
 
-        Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
-        Assert.Equal(fallbackResponse, result.Response);
-        Assert.Contains("fallback de chat", result.Reasoning, StringComparison.OrdinalIgnoreCase);
-        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        Assert.Equal(ClassificationResult.Action.ToString(), result.Classification);
+        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
+        Assert.Contains("Limite de retry", result.Response, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Planning error", result.Reasoning, StringComparison.OrdinalIgnoreCase);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -351,7 +344,7 @@ public class ManagerTest
 
         Assert.Equal(ClassificationResult.Chat.ToString(), result.Classification);
         Assert.Equal(response, result.Response);
-        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -409,6 +402,277 @@ public class ManagerTest
     }
 
     [Fact]
+    public async Task manage_conversation_async_must_send_chat_history_to_action_planner()
+    {
+        const string firstPrompt = "Remember that the project name is Nebula.";
+        const string actionPrompt = "Create a script that prints that project name.";
+        const string commandJson = """{"Steps":[{"Id":1,"Objective":"Create script","Run":"echo Nebula > project.py","Required":true}]}""";
+
+        var capturedPlanningPrompts = new List<string>();
+        var memoryRepository = new InMemoryConversationMemoryRepository();
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(prompt =>
+                !prompt.Contains("command planner", StringComparison.OrdinalIgnoreCase) &&
+                !prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("I will remember Nebula.");
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(prompt =>
+                prompt.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .Callback<string>(capturedPlanningPrompts.Add)
+            .ReturnsAsync(commandJson);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(prompt =>
+                prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+        llamaClientMock.Setup(client => client.ClassifyPrompt(actionPrompt)).ReturnsAsync(ClassificationResult.Action);
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("echo Nebula > project.py", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("created");
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(commandJson))
+            .Returns(commandJson);
+
+        var manager = create_manager(
+            llamaClientMock,
+            executorMock,
+            jsonExtractorMock,
+            conversationMemoryRepository: memoryRepository);
+
+        await manager.ManageConversationAsync(firstPrompt);
+        var result = await manager.ManageConversationAsync(actionPrompt);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Single(capturedPlanningPrompts);
+        Assert.Contains("[recent_messages]", capturedPlanningPrompts[0]);
+        Assert.Contains(firstPrompt, capturedPlanningPrompts[0]);
+        Assert.Contains("assistant: I will remember Nebula.", capturedPlanningPrompts[0]);
+        Assert.Contains(actionPrompt, capturedPlanningPrompts[0]);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_retry_recoverable_action_failures_with_previous_failure_context()
+    {
+        const string prompt = "Create a marker file.";
+        const string firstPlan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"badcmd","Required":true}]}""";
+        const string secondPlan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"goodcmd","Required":true}]}""";
+
+        var planningPrompts = new List<string>();
+        var plans = new Queue<string>([firstPlan, secondPlan]);
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .Callback<string>(planningPrompts.Add)
+            .ReturnsAsync(() => plans.Dequeue());
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("bad command"));
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("goodcmd", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("ok");
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(It.IsAny<string>()))
+            .Returns((string input) => input);
+
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal("ok", result.Response);
+        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Status == ActionExecutionStatus.Retrying);
+        Assert.Contains(result.Commands, command => command.Attempt == 1 && command.Error == "bad command");
+        Assert.Contains(result.Commands, command => command.Attempt == 2 && command.Executed);
+        Assert.Equal(2, planningPrompts.Count);
+        Assert.Contains("[previous_action_failures]", planningPrompts[1]);
+        Assert.Contains("bad command", planningPrompts[1]);
+        executorMock.Verify(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()), Times.Once);
+        executorMock.Verify(executor => executor.RunCommandAsync("goodcmd", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_stop_when_retry_limit_is_reached()
+    {
+        const string prompt = "Create a marker file.";
+        const string plan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"badcmd","Required":true}]}""";
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync(plan);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("still failing"));
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(plan))
+            .Returns(plan);
+
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock, maxActionRetries: 1);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
+        Assert.Contains("Limite de retry (1)", result.Response, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, result.Commands.Count(command => command.Run == "badcmd"));
+        executorMock.Verify(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_stop_retries_when_retry_plan_becomes_unsafe()
+    {
+        const string prompt = "Create a marker file.";
+        const string firstPlan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"badcmd","Required":true}]}""";
+        const string unsafePlan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"rm -rf /","Required":true}]}""";
+
+        var plans = new Queue<string>([firstPlan, unsafePlan]);
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync(() => plans.Dequeue());
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("bad command"));
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(It.IsAny<string>()))
+            .Returns((string input) => input);
+
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+
+        var result = await manager.ManageConversationAsync(prompt);
+
+        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
+        Assert.Contains("ficou insegura", result.Response, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Commands, command => command.Attempt == 2 && command.Run == "rm -rf /" && !command.PassedLocalSafety);
+        Assert.Empty(plans);
+        executorMock.Verify(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()), Times.Once);
+        executorMock.Verify(executor => executor.RunCommandAsync("rm -rf /", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_cancel_running_action_and_stop_retries()
+    {
+        const string prompt = "Create a marker file.";
+        const string plan = """{"Steps":[{"Id":1,"Objective":"Create marker","Run":"slowcmd","Required":true}]}""";
+
+        var commandStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationSource = new CancellationTokenSource();
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync(plan);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("slowcmd", It.IsAny<CancellationToken>()))
+            .Returns<string, CancellationToken>(async (_, cancellationToken) =>
+            {
+                commandStarted.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return "never";
+            });
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(plan))
+            .Returns(plan);
+
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+        var task = manager.ManageConversationAsync(prompt, progress: null, cancellationSource.Token);
+
+        await commandStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellationSource.Cancel();
+
+        var result = await task;
+
+        Assert.True(result.IsCancelled);
+        Assert.Equal(ActionExecutionStatus.Cancelled, result.ActionStatus);
+        Assert.Contains("cancelada", result.Response, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Status == ActionExecutionStatus.Cancelled);
+        executorMock.Verify(executor => executor.RunCommandAsync("slowcmd", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_stream_action_events_and_log_tool_responses()
+    {
+        const string prompt = "List files in the current directory.";
+        const string plan = """{"Steps":[{"Id":1,"Objective":"List files","Run":"dir","Required":true}]}""";
+
+        var updates = new List<ConversationTurn>();
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.Setup(client => client.ClassifyPrompt(prompt)).ReturnsAsync(ClassificationResult.Action);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("command planner", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync(plan);
+        llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(text =>
+                text.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
+            .ReturnsAsync("Yes");
+
+        var executorMock = create_executor_mock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("dir", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Directory listing");
+
+        var jsonExtractorMock = create_json_extractor_mock();
+        jsonExtractorMock
+            .Setup(extractor => extractor.ExtractJsonObject(plan))
+            .Returns(plan);
+
+        var manager = create_manager(llamaClientMock, executorMock, jsonExtractorMock);
+        var progress = new InlineProgress<ConversationTurn>(updates.Add);
+
+        var result = await manager.ManageConversationAsync(prompt, progress, CancellationToken.None);
+
+        var streamedStatuses = updates
+            .Select(update => update.ActionStatus)
+            .Where(status => status is not null)
+            .Select(status => status!.Value)
+            .ToHashSet();
+
+        Assert.Contains(ActionExecutionStatus.Started, streamedStatuses);
+        Assert.Contains(ActionExecutionStatus.Validating, streamedStatuses);
+        Assert.Contains(ActionExecutionStatus.Planning, streamedStatuses);
+        Assert.Contains(ActionExecutionStatus.Executing, streamedStatuses);
+        Assert.Contains(ActionExecutionStatus.Completed, streamedStatuses);
+        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Title == "Tool call" && actionEvent.Command == "dir");
+        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Title == "Tool response" && actionEvent.ToolResponse == "Directory listing");
+        Assert.Contains("Directory listing", result.Reasoning);
+    }
+
+    [Fact]
     public async Task manage_conversation_async_must_abort_required_action_chain_after_first_failed_step()
     {
         const string prompt = "list files and then create a marker file";
@@ -437,16 +701,17 @@ public class ManagerTest
             llamaClientMock,
             executorMock,
             jsonExtractorMock,
-            loggerMock);
+            loggerMock,
+            maxActionRetries: 0);
 
         var result = await manager.ManageConversationAsync(prompt);
 
-        Assert.Contains("A execucao foi abortada no passo 1", result.Response);
-        Assert.Contains("1 passo(s) dependente(s) nao foram executados", result.Response);
+        Assert.Contains("Limite de retry (0)", result.Response, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Required step 1 failed", result.Response, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, result.Commands.Count);
         Assert.False(result.Commands[0].Executed);
         Assert.True(result.Commands[1].Skipped);
-        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>()), Times.Never);
+        executorMock.Verify(executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         loggerMock.Verify(
             logger => logger.LogError(It.Is<string>(message => message.Contains("Aborting action chain"))),
             Times.Once);
@@ -570,7 +835,8 @@ public class ManagerTest
         Mock<ILogger>? loggerMock = null,
         Mock<ICommandRepository>? commandRepositoryMock = null,
         Mock<IPromptRequestRepository>? promptRepositoryMock = null,
-        IConversationMemoryRepository? conversationMemoryRepository = null)
+        IConversationMemoryRepository? conversationMemoryRepository = null,
+        int maxActionRetries = 5)
     {
         return new Manager(
             llamaClientMock.Object,
@@ -579,12 +845,20 @@ public class ManagerTest
             (loggerMock ?? create_logger_mock()).Object,
             commandRepositoryMock?.Object,
             promptRepositoryMock?.Object,
-            conversationMemoryRepository);
+            conversationMemoryRepository,
+            maxActionRetries: maxActionRetries);
     }
 
     private static Mock<ILlamaClient> create_llama_client_mock() => new();
 
-    private static Mock<IShellExecutor> create_executor_mock() => new();
+    private static Mock<IShellExecutor> create_executor_mock()
+    {
+        var mock = new Mock<IShellExecutor>();
+        mock
+            .Setup(executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(string.Empty);
+        return mock;
+    }
 
     private static Mock<IJsonExtractor> create_json_extractor_mock() => new();
 

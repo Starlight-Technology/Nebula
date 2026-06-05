@@ -1,6 +1,9 @@
 <Solution>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
+    <File Path="docker-compose.amd.yml" />
+    <File Path="docker-compose.intel.yml" />
+    <File Path="docker-compose.nvidia.yml" />
     <File Path="docker-compose.yml" />
     <File Path="ollama-start.sh" />
   </Folder>

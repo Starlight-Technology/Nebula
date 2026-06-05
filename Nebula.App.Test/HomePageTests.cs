@@ -82,6 +82,60 @@ public sealed class HomePageTests : HomePageTestContext
         });
     }
 
+    [Fact]
+    public void send_async_must_show_cancel_button_and_render_cancelled_turn()
+    {
+        var manager = new FakeManager
+        {
+            ManageConversationAsyncHandler = async (_, progress, cancellationToken) =>
+            {
+                progress?.Report(new ConversationTurn
+                {
+                    Prompt = "Execute uma acao lenta",
+                    ModelName = "qwen3:8b",
+                    Classification = ClassificationResult.Action.ToString(),
+                    ActionStatus = ActionExecutionStatus.Executing,
+                    ActionEvents =
+                    [
+                        new ActionExecutionEvent
+                        {
+                            Status = ActionExecutionStatus.Executing,
+                            Attempt = 1,
+                            Title = "Tool call",
+                            Message = "Running slow command",
+                            Command = "slowcmd"
+                        }
+                    ]
+                });
+
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new ConversationTurn();
+            }
+        };
+
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+
+        component.Find("textarea").Input("Execute uma acao lenta");
+        FindButton(component, "Enviar").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Tool call", component.Markup);
+            Assert.Contains("slowcmd", component.Markup);
+            Assert.Contains("Cancelar", component.Markup);
+        });
+
+        FindButton(component, "Cancelar").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Execucao cancelada pelo usuario", component.Markup);
+            Assert.DoesNotContain("Preparando a resposta do agente", component.Markup);
+        });
+    }
+
     private sealed class FakeManager : IManager
     {
         public Guid ActiveConversationId { get; private set; } = Guid.NewGuid();

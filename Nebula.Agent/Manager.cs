@@ -22,12 +22,14 @@ public class Manager(
     ICommandRepository? commandRepository = null,
     IPromptRequestRepository? promptRepository = null,
     IConversationMemoryRepository? conversationMemoryRepository = null,
-    NebulaContextBuilder? contextBuilder = null) : IManager
+    NebulaContextBuilder? contextBuilder = null,
+    int maxActionRetries = 5) : IManager
 {
     private static readonly TimeSpan PromptPersistenceTimeout = TimeSpan.FromMilliseconds(800);
     private static readonly TimeSpan ConversationMemoryTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly NebulaContextBuilder nebulaContextBuilder = contextBuilder ?? new NebulaContextBuilder();
+    private readonly int maxActionRetryCount = Math.Max(0, maxActionRetries);
     private Guid activeConversationId = Guid.NewGuid();
     private Guid currentRequestId = Guid.NewGuid();
 
@@ -132,7 +134,7 @@ public class Manager(
 
             var turn = classification switch
             {
-                ClassificationResult.Action => await HandleActionAsync(prompt, modelPrompt, cancellationToken),
+                ClassificationResult.Action => await HandleActionAsync(prompt, modelPrompt, progress, cancellationToken),
                 ClassificationResult.Chat => await HandleChatAsync(prompt, modelPrompt, progress, cancellationToken),
                 _ => new ConversationTurn
                 {
@@ -162,6 +164,11 @@ public class Manager(
                 cancellationToken);
 
             return turn;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.Log($"Request '{currentRequestId}' for ConversationId '{activeConversationId}' was cancelled.");
+            throw;
         }
         catch (Exception ex)
         {
@@ -280,84 +287,416 @@ public class Manager(
         };
     }
 
-    private async Task<ConversationTurn> HandleActionAsync(string prompt, string modelPrompt, CancellationToken cancellationToken)
+    private async Task<ConversationTurn> HandleActionAsync(
+        string prompt,
+        string modelPrompt,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken)
     {
+        var events = new List<ActionExecutionEvent>();
+        var allCommands = new List<CommandExecution>();
+        var failures = new List<ActionFailure>();
+        var maximumAttempts = maxActionRetryCount + 1;
+        string? latestPlanReasoning = null;
+
+        ReportActionEvent(
+            progress,
+            prompt,
+            events,
+            allCommands,
+            ActionExecutionStatus.Started,
+            attempt: 1,
+            title: "Action requested",
+            message: prompt);
+
         try
         {
-            var commandsResponse = await GenerateCommandSteps(prompt, modelPrompt, cancellationToken);
-            var parsedPlan = ModelResponse.Parse(commandsResponse);
-            var responsePayload = string.IsNullOrWhiteSpace(parsedPlan.Response)
-                ? commandsResponse
-                : parsedPlan.Response;
-
-            var json = ExtractJsonObject(responsePayload);
-            var wrapper = JsonSerializer.Deserialize<CommandSteps>(json);
-            var plannedCommands = wrapper?.Steps ?? [];
-            var executedCommands = new List<CommandExecution>();
-            CommandExecution? failedRequiredStep = null;
-
-            foreach (var command in plannedCommands)
+            for (var attempt = 1; attempt <= maximumAttempts; attempt++)
             {
-                if (failedRequiredStep is not null)
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (attempt > 1)
                 {
-                    var skippedExecution = CreateSkippedExecution(command, failedRequiredStep);
-                    executedCommands.Add(skippedExecution);
-                    logger.Log(
-                        $"Skipping step '{command.Id}' because required step '{failedRequiredStep.Id}' failed in ConversationId '{activeConversationId}'.");
+                    var previousFailure = failures.LastOrDefault()?.Summary ?? "Previous attempt failed.";
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Retrying,
+                        attempt,
+                        "Retry attempt",
+                        $"Retry {attempt - 1} of {maxActionRetryCount}. Previous failure: {previousFailure}");
+                }
+
+                ReportActionEvent(
+                    progress,
+                    prompt,
+                    events,
+                    allCommands,
+                    ActionExecutionStatus.Validating,
+                    attempt,
+                    "Validating action",
+                    "Checking safety, policy allowance, and technical feasibility before planning tools.");
+
+                var validation = ValidateActionRequest(prompt, modelPrompt);
+                ReportActionEvent(
+                    progress,
+                    prompt,
+                    events,
+                    allCommands,
+                    ActionExecutionStatus.Validating,
+                    attempt,
+                    "Validation result",
+                    BuildValidationSummary(validation));
+
+                if (!validation.IsValid)
+                {
+                    var response = $"A acao foi bloqueada antes de executar ferramentas. Motivo: {validation.Reason}";
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Failed,
+                        attempt,
+                        "Action blocked",
+                        response);
+
+                    return BuildActionTurn(
+                        prompt,
+                        ActionExecutionStatus.Failed,
+                        response,
+                        BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                        allCommands,
+                        events);
+                }
+
+                ReportActionEvent(
+                    progress,
+                    prompt,
+                    events,
+                    allCommands,
+                    ActionExecutionStatus.Planning,
+                    attempt,
+                    "Generating plan",
+                    "Generating executable command steps with the current message, chat history, and previous failures.");
+
+                var planningContext = BuildActionPlanningContext(modelPrompt, failures);
+                IReadOnlyList<Command> plannedCommands;
+                string? planPayload = null;
+
+                try
+                {
+                    var commandsResponse = await GenerateCommandSteps(prompt, planningContext, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var parsedPlan = ModelResponse.Parse(commandsResponse);
+                    latestPlanReasoning = parsedPlan.Reasoning;
+                    planPayload = string.IsNullOrWhiteSpace(parsedPlan.Response)
+                        ? commandsResponse
+                        : parsedPlan.Response;
+
+                    var json = ExtractJsonObject(planPayload);
+                    var wrapper = JsonSerializer.Deserialize<CommandSteps>(json);
+                    plannedCommands = wrapper?.Steps ?? [];
+
+                    if (plannedCommands.Count == 0)
+                    {
+                        throw new ArgumentException("The generated plan did not include any executable steps.");
+                    }
+
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Planning,
+                        attempt,
+                        "Generated plan",
+                        BuildPlanSummary(plannedCommands),
+                        toolResponse: planPayload);
+                }
+                catch (Exception ex) when (ex is JsonException or ArgumentException)
+                {
+                    var failure = ActionFailure.Recoverable($"Planning failed: {ex.Message}");
+                    failures.Add(failure);
+                    logger.LogError($"Invalid action plan returned by model '{llamaClient.SelectedModel}': {ex.Message}");
+
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Planning,
+                        attempt,
+                        "Planning error",
+                        "The generated plan was invalid.",
+                        toolResponse: planPayload,
+                        error: ex.Message);
+
+                    if (CanRetry(attempt))
+                    {
+                        continue;
+                    }
+
+                    var response = BuildRetryLimitReachedResponse(failure, attempt);
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Failed,
+                        attempt,
+                        "Retry limit reached",
+                        response);
+
+                    return BuildActionTurn(
+                        prompt,
+                        ActionExecutionStatus.Failed,
+                        response,
+                        BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                        allCommands,
+                        events);
+                }
+
+                var attemptCommands = new List<CommandExecution>();
+                CommandExecution? failedRequiredStep = null;
+                ActionFailure? attemptFailure = null;
+
+                foreach (var command in plannedCommands)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (failedRequiredStep is not null)
+                    {
+                        var skippedExecution = CreateSkippedExecution(command, failedRequiredStep, attempt);
+                        attemptCommands.Add(skippedExecution);
+                        allCommands.Add(skippedExecution);
+                        ReportActionEvent(
+                            progress,
+                            prompt,
+                            events,
+                            allCommands,
+                            ActionExecutionStatus.Executing,
+                            attempt,
+                            "Step skipped",
+                            skippedExecution.Notes ?? "Step skipped because a required dependency failed.",
+                            command: command.Run);
+                        logger.Log(
+                            $"Skipping step '{command.Id}' because required step '{failedRequiredStep.Id}' failed in ConversationId '{activeConversationId}'.");
+                        continue;
+                    }
+
+                    var execution = await ExecuteCommandAsync(
+                        command,
+                        attempt,
+                        prompt,
+                        progress,
+                        events,
+                        allCommands,
+                        cancellationToken);
+
+                    attemptCommands.Add(execution);
+                    allCommands.Add(execution);
+
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Executing,
+                        attempt,
+                        "Step result",
+                        execution.Notes ?? GetCommandStatus(execution),
+                        command: execution.Run,
+                        toolResponse: execution.Output,
+                        error: execution.Error);
+
+                    if (IsCommandUnsafeFailure(execution))
+                    {
+                        attemptFailure = ActionFailure.Unsafe($"Step {execution.Id} became unsafe: {execution.Notes}");
+                        break;
+                    }
+
+                    if (execution.Required && !execution.Executed)
+                    {
+                        failedRequiredStep = execution;
+                        attemptFailure = ActionFailure.Recoverable(
+                            $"Required step {execution.Id} failed: {execution.Notes ?? execution.Error ?? "unknown failure"}");
+                        logger.LogError(
+                            $"Aborting action chain for ConversationId '{activeConversationId}' at required step '{execution.Id}': {execution.Notes}");
+                    }
+                }
+
+                if (attemptFailure?.IsUnsafe == true)
+                {
+                    failures.Add(attemptFailure);
+                    var response = $"A acao foi interrompida porque uma tentativa ficou insegura. Motivo: {attemptFailure.Summary}";
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Failed,
+                        attempt,
+                        "Unsafe retry stopped",
+                        response);
+
+                    return BuildActionTurn(
+                        prompt,
+                        ActionExecutionStatus.Failed,
+                        response,
+                        BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                        allCommands,
+                        events);
+                }
+
+                if (IsActionSuccessful(attemptCommands))
+                {
+                    var response = BuildActionResponse(attemptCommands);
+                    ReportActionEvent(
+                        progress,
+                        prompt,
+                        events,
+                        allCommands,
+                        ActionExecutionStatus.Completed,
+                        attempt,
+                        "Action completed",
+                        "All required action steps completed.");
+
+                    return BuildActionTurn(
+                        prompt,
+                        ActionExecutionStatus.Completed,
+                        response,
+                        BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                        allCommands,
+                        events);
+                }
+
+                attemptFailure ??= BuildAttemptFailure(attemptCommands);
+                failures.Add(attemptFailure);
+
+                if (CanRetry(attempt))
+                {
                     continue;
                 }
 
-                var execution = await ExecuteCommandAsync(command);
-                executedCommands.Add(execution);
+                var finalResponse = BuildRetryLimitReachedResponse(attemptFailure, attempt);
+                ReportActionEvent(
+                    progress,
+                    prompt,
+                    events,
+                    allCommands,
+                    ActionExecutionStatus.Failed,
+                    attempt,
+                    "Retry limit reached",
+                    finalResponse);
 
-                if (execution.Required && !execution.Executed)
-                {
-                    failedRequiredStep = execution;
-                    logger.LogError(
-                        $"Aborting action chain for ConversationId '{activeConversationId}' at required step '{execution.Id}': {execution.Notes}");
-                }
+                return BuildActionTurn(
+                    prompt,
+                    ActionExecutionStatus.Failed,
+                    finalResponse,
+                    BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                    allCommands,
+                    events);
             }
-
-            return new ConversationTurn
-            {
-                ConversationId = activeConversationId,
-                RequestId = currentRequestId,
-                Prompt = prompt,
-                ModelName = llamaClient.SelectedModel,
-                Classification = ClassificationResult.Action.ToString(),
-                Response = BuildActionResponse(executedCommands),
-                Reasoning = BuildActionReasoning(parsedPlan.Reasoning, executedCommands),
-                Commands = executedCommands
-            };
         }
-        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.LogError($"Invalid action plan returned by model '{llamaClient.SelectedModel}': {ex.Message}");
+            const string response = "Execucao cancelada pelo usuario.";
+            ReportActionEvent(
+                progress,
+                prompt,
+                events,
+                allCommands,
+                ActionExecutionStatus.Cancelled,
+                Math.Max(1, events.LastOrDefault()?.Attempt ?? 1),
+                "Action cancelled",
+                response);
 
-            var fallback = await HandleChatAsync(prompt, modelPrompt, progress: null, cancellationToken);
-            fallback.Reasoning = BuildActionFallbackReasoning(fallback.Reasoning, ex.Message);
-            return fallback;
+            return BuildActionTurn(
+                prompt,
+                ActionExecutionStatus.Cancelled,
+                response,
+                BuildActionReasoning(latestPlanReasoning, allCommands, events),
+                allCommands,
+                events,
+                isCancelled: true);
         }
+
+        var exhaustedResponse = $"Nao consegui concluir a acao. Limite de retry ({maxActionRetryCount}) atingido sem uma causa detalhada.";
+        ReportActionEvent(
+            progress,
+            prompt,
+            events,
+            allCommands,
+            ActionExecutionStatus.Failed,
+            Math.Max(1, events.LastOrDefault()?.Attempt ?? 1),
+            "Action failed",
+            exhaustedResponse);
+
+        return BuildActionTurn(
+            prompt,
+            ActionExecutionStatus.Failed,
+            exhaustedResponse,
+            BuildActionReasoning(latestPlanReasoning, allCommands, events),
+            allCommands,
+            events);
+
+        bool CanRetry(int attempt) => attempt <= maxActionRetryCount;
     }
 
-    private async Task<CommandExecution> ExecuteCommandAsync(Command command)
+    private async Task<CommandExecution> ExecuteCommandAsync(
+        Command command,
+        int attempt,
+        string prompt,
+        IProgress<ConversationTurn>? progress,
+        List<ActionExecutionEvent> events,
+        IReadOnlyList<CommandExecution> visibleCommands,
+        CancellationToken cancellationToken)
     {
         var execution = new CommandExecution
         {
+            Attempt = attempt,
             Id = command.Id,
             Objective = command.Objective,
             Run = command.Run,
             Required = command.Required
         };
 
+        ReportActionEvent(
+            progress,
+            prompt,
+            events,
+            visibleCommands,
+            ActionExecutionStatus.Validating,
+            attempt,
+            "Validating command",
+            $"Step {command.Id}: {command.Objective}",
+            command: command.Run);
+
         var storedCommand = await TrySaveCommandAsync(command);
 
+        cancellationToken.ThrowIfCancellationRequested();
         execution.IsCorrect = await VerifyCommandCorrectAsync(command);
+        cancellationToken.ThrowIfCancellationRequested();
         execution.IsSafe = await VerifyCommandSafetyAsync(command);
         execution.PassedLocalSafety = PlatformDetector.IsCommandContentSafe(command.Run);
         execution.Notes = BuildVerificationNotes(execution);
 
         await TrySaveVerificationAsync(storedCommand?.Id, execution);
+
+        ReportActionEvent(
+            progress,
+            prompt,
+            events,
+            visibleCommands,
+            ActionExecutionStatus.Validating,
+            attempt,
+            "Command validation result",
+            execution.Notes,
+            command: command.Run);
 
         if (!(execution.IsCorrect && execution.IsSafe && execution.PassedLocalSafety))
         {
@@ -365,9 +704,20 @@ public class Manager(
             return execution;
         }
 
+        ReportActionEvent(
+            progress,
+            prompt,
+            events,
+            visibleCommands,
+            ActionExecutionStatus.Executing,
+            attempt,
+            "Tool call",
+            $"Running step {command.Id}: {command.Objective}",
+            command: command.Run);
+
         try
         {
-            var result = await executor.RunCommandAsync(command.Run);
+            var result = await executor.RunCommandAsync(command.Run, cancellationToken);
 
             execution.Executed = true;
             execution.Output = result;
@@ -375,23 +725,54 @@ public class Manager(
                 ? "Comando executado sem saida textual."
                 : "Comando executado com sucesso.";
 
+            ReportActionEvent(
+                progress,
+                prompt,
+                events,
+                visibleCommands,
+                ActionExecutionStatus.Executing,
+                attempt,
+                "Tool response",
+                execution.Notes,
+                command: command.Run,
+                toolResponse: result);
+
             logger.Log(result);
             await TryUpdateExecutionAsync(storedCommand?.Id, true, result);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
+            execution.Error = ex.Message;
             execution.Notes = $"Falha ao executar o comando: {ex.Message}";
             logger.LogError(execution.Notes);
+
+            ReportActionEvent(
+                progress,
+                prompt,
+                events,
+                visibleCommands,
+                ActionExecutionStatus.Executing,
+                attempt,
+                "Tool error",
+                execution.Notes,
+                command: command.Run,
+                error: ex.Message);
+
             await TryUpdateExecutionAsync(storedCommand?.Id, false, execution.Notes);
         }
 
         return execution;
     }
 
-    private static CommandExecution CreateSkippedExecution(Command command, CommandExecution failedRequiredStep)
+    private static CommandExecution CreateSkippedExecution(Command command, CommandExecution failedRequiredStep, int attempt)
     {
         return new CommandExecution
         {
+            Attempt = attempt,
             Id = command.Id,
             Objective = command.Objective,
             Run = command.Run,
@@ -399,6 +780,296 @@ public class Manager(
             Skipped = true,
             Notes = $"Passo nao executado porque o passo obrigatorio {failedRequiredStep.Id} falhou."
         };
+    }
+
+    private ConversationTurn BuildActionTurn(
+        string prompt,
+        ActionExecutionStatus status,
+        string response,
+        string reasoning,
+        IReadOnlyList<CommandExecution> commands,
+        IReadOnlyList<ActionExecutionEvent> events,
+        bool isCancelled = false)
+    {
+        return new ConversationTurn
+        {
+            ConversationId = activeConversationId,
+            RequestId = currentRequestId,
+            Prompt = prompt,
+            ModelName = llamaClient.SelectedModel,
+            Classification = status == ActionExecutionStatus.Cancelled
+                ? ActionExecutionStatus.Cancelled.ToString()
+                : ClassificationResult.Action.ToString(),
+            Response = response,
+            Reasoning = reasoning,
+            Commands = commands.ToList(),
+            ActionStatus = status,
+            ActionEvents = events.ToList(),
+            IsCancelled = isCancelled
+        };
+    }
+
+    private void ReportActionEvent(
+        IProgress<ConversationTurn>? progress,
+        string prompt,
+        List<ActionExecutionEvent> events,
+        IReadOnlyList<CommandExecution> commands,
+        ActionExecutionStatus status,
+        int attempt,
+        string title,
+        string message,
+        string? command = null,
+        string? toolResponse = null,
+        string? error = null)
+    {
+        var actionEvent = new ActionExecutionEvent
+        {
+            Status = status,
+            Attempt = Math.Max(1, attempt),
+            Title = title,
+            Message = message,
+            Command = command,
+            ToolResponse = toolResponse,
+            Error = error
+        };
+
+        events.Add(actionEvent);
+        logger.Log($"Action event [{status}] attempt {actionEvent.Attempt}: {title} - {message}");
+
+        progress?.Report(new ConversationTurn
+        {
+            ConversationId = activeConversationId,
+            RequestId = currentRequestId,
+            Prompt = prompt,
+            ModelName = llamaClient.SelectedModel,
+            Classification = status == ActionExecutionStatus.Cancelled
+                ? ActionExecutionStatus.Cancelled.ToString()
+                : ClassificationResult.Action.ToString(),
+            Response = BuildActionProgressResponse(actionEvent),
+            Reasoning = BuildActionEventLog(events),
+            Commands = commands.ToList(),
+            ActionStatus = status,
+            ActionEvents = events.ToList(),
+            IsCancelled = status == ActionExecutionStatus.Cancelled
+        });
+    }
+
+    private static ActionValidationResult ValidateActionRequest(string userRequest, string conversationContext)
+    {
+        var validationText = ShouldUseConversationContextForValidation(userRequest)
+            ? $"{conversationContext}{Environment.NewLine}{userRequest}"
+            : userRequest;
+        var safe = IsActionTextSafe(validationText);
+        var allowed = IsActionAllowed(validationText);
+        var feasible = !string.IsNullOrWhiteSpace(userRequest) &&
+                       !PlatformDetector.GetCurrentOsType().Equals("Unknown", StringComparison.OrdinalIgnoreCase) &&
+                       LooksLikeComputerOperationPrompt(userRequest);
+
+        var failures = new List<string>();
+
+        if (!safe)
+        {
+            failures.Add("a solicitacao contem padroes destrutivos ou perigosos");
+        }
+
+        if (!allowed)
+        {
+            failures.Add("a solicitacao viola a politica local de acoes permitidas");
+        }
+
+        if (!feasible)
+        {
+            failures.Add("a acao nao parece tecnicamente executavel neste ambiente");
+        }
+
+        return new ActionValidationResult
+        {
+            Safe = safe,
+            Allowed = allowed,
+            Feasible = feasible,
+            Reason = failures.Count == 0
+                ? "A acao foi considerada segura, permitida e tecnicamente viavel."
+                : string.Join("; ", failures)
+        };
+    }
+
+    private static bool ShouldUseConversationContextForValidation(string userRequest)
+    {
+        var normalized = userRequest.ToLowerInvariant();
+        string[] referentialTerms =
+        [
+            "that",
+            "it",
+            "previous",
+            "above",
+            "same",
+            "isso",
+            "aquilo",
+            "anterior",
+            "mesmo",
+            "mesma",
+            "ele",
+            "ela"
+        ];
+
+        return referentialTerms.Any(term => normalized.Contains(term, StringComparison.Ordinal));
+    }
+
+    private static bool IsActionTextSafe(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        if (!PlatformDetector.IsCommandContentSafe(value))
+        {
+            return false;
+        }
+
+        var normalized = value.ToLowerInvariant();
+        string[] unsafePhrases =
+        [
+            "delete system files",
+            "apagar arquivos do sistema",
+            "deletar arquivos do sistema",
+            "format c:",
+            "format disk",
+            "wipe disk",
+            "wipe the disk",
+            "erase the disk",
+            "del /s c:\\",
+            "system32",
+            "mkfs",
+            "dd if=",
+            "cipher /w"
+        ];
+
+        return !unsafePhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
+    }
+
+    private static bool IsActionAllowed(string value)
+    {
+        var normalized = value.ToLowerInvariant();
+        string[] disallowedPhrases =
+        [
+            "steal",
+            "exfiltrate",
+            "keylogger",
+            "ransomware",
+            "malware",
+            "credential theft",
+            "roubar senha",
+            "disable antivirus",
+            "desativar antivirus"
+        ];
+
+        return !disallowedPhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
+    }
+
+    private static string BuildValidationSummary(ActionValidationResult validation)
+    {
+        return
+            $"Safe: {FormatBooleanForText(validation.Safe)}. " +
+            $"Allowed: {FormatBooleanForText(validation.Allowed)}. " +
+            $"Feasible: {FormatBooleanForText(validation.Feasible)}. " +
+            $"Reason: {validation.Reason}";
+    }
+
+    private static string BuildActionPlanningContext(string conversationContext, IReadOnlyList<ActionFailure> failures)
+    {
+        if (failures.Count == 0)
+        {
+            return conversationContext;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine(conversationContext);
+        builder.AppendLine();
+        builder.AppendLine("[previous_action_failures]");
+
+        for (var index = 0; index < failures.Count; index++)
+        {
+            builder.AppendLine($"{index + 1}. {failures[index].Summary}");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("Use the previous failures to correct the next plan. Do not repeat failed commands unchanged unless the failure reason was external and recoverable.");
+
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildPlanSummary(IReadOnlyList<Command> commands)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var command in commands)
+        {
+            builder.AppendLine(
+                $"{command.Id}. {command.Objective} -> {command.Run} " +
+                $"({(command.Required ? "required" : "optional")})");
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static bool IsActionSuccessful(IReadOnlyList<CommandExecution> commands)
+    {
+        if (commands.Count == 0)
+        {
+            return false;
+        }
+
+        var requiredCommands = commands.Where(command => command.Required).ToList();
+
+        if (requiredCommands.Count == 0)
+        {
+            return commands.Any(command => command.Executed);
+        }
+
+        return requiredCommands.All(command => command.Executed);
+    }
+
+    private static ActionFailure BuildAttemptFailure(IReadOnlyList<CommandExecution> commands)
+    {
+        var unsafeCommand = commands.FirstOrDefault(IsCommandUnsafeFailure);
+        if (unsafeCommand is not null)
+        {
+            return ActionFailure.Unsafe($"Step {unsafeCommand.Id} became unsafe: {unsafeCommand.Notes}");
+        }
+
+        var failedRequiredStep = commands.FirstOrDefault(command => command.Required && !command.Executed && !command.Skipped);
+        if (failedRequiredStep is not null)
+        {
+            return ActionFailure.Recoverable(
+                $"Required step {failedRequiredStep.Id} failed: {failedRequiredStep.Notes ?? failedRequiredStep.Error ?? "unknown failure"}");
+        }
+
+        return ActionFailure.Recoverable("The action did not produce a successful required result.");
+    }
+
+    private string BuildRetryLimitReachedResponse(ActionFailure failure, int attemptsUsed)
+    {
+        return
+            $"Nao consegui concluir a acao apos {attemptsUsed} tentativa(s). " +
+            $"Limite de retry ({maxActionRetryCount}) atingido. Motivo: {failure.Summary}";
+    }
+
+    private static bool IsCommandUnsafeFailure(CommandExecution execution)
+    {
+        return !execution.IsSafe || !execution.PassedLocalSafety;
+    }
+
+    private static string BuildActionProgressResponse(ActionExecutionEvent actionEvent)
+    {
+        if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+        {
+            return $"{actionEvent.Title}: {actionEvent.Error}";
+        }
+
+        return string.IsNullOrWhiteSpace(actionEvent.Message)
+            ? actionEvent.Title
+            : $"{actionEvent.Title}: {actionEvent.Message}";
     }
 
     private string ExtractJsonObject(string input)
@@ -428,7 +1099,7 @@ public class Manager(
             return "Nao consegui gerar passos executaveis para esse pedido.";
         }
 
-        var failedStep = commands.FirstOrDefault(command => !command.Executed && !command.Skipped);
+        var failedStep = commands.FirstOrDefault(command => command.Required && !command.Executed && !command.Skipped);
         if (failedStep is not null)
         {
             var skippedCount = commands.Count(command => command.Skipped);
@@ -465,13 +1136,23 @@ public class Manager(
             : "Os passos planejados foram bloqueados pela verificacao de seguranca.";
     }
 
-    private static string BuildActionReasoning(string? modelReasoning, IReadOnlyList<CommandExecution> commands)
+    private static string BuildActionReasoning(
+        string? modelReasoning,
+        IReadOnlyList<CommandExecution> commands,
+        IReadOnlyList<ActionExecutionEvent> events)
     {
         var builder = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(modelReasoning))
         {
             builder.AppendLine(modelReasoning.Trim());
+            builder.AppendLine();
+        }
+
+        if (events.Count > 0)
+        {
+            builder.AppendLine("Registro transparente da acao:");
+            builder.AppendLine(BuildActionEventLog(events));
             builder.AppendLine();
         }
 
@@ -487,7 +1168,7 @@ public class Manager(
             var command = commands[index];
 
             builder.AppendLine();
-            builder.AppendLine($"{index + 1}. {command.Objective}");
+            builder.AppendLine($"{index + 1}. Tentativa {command.Attempt}, passo {command.Id}: {command.Objective}");
             builder.AppendLine($"   Comando: {command.Run}");
             builder.AppendLine($"   Obrigatorio: {(command.Required ? "sim" : "nao")}");
 
@@ -504,6 +1185,47 @@ public class Manager(
             {
                 builder.AppendLine($"   Observacao: {command.Notes}");
             }
+
+            if (!string.IsNullOrWhiteSpace(command.Error))
+            {
+                builder.AppendLine($"   Erro: {command.Error}");
+            }
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildActionEventLog(IReadOnlyList<ActionExecutionEvent> events)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var actionEvent in events)
+        {
+            builder.Append(
+                $"[{actionEvent.Status}] tentativa {actionEvent.Attempt}: " +
+                $"{actionEvent.Title}");
+
+            if (!string.IsNullOrWhiteSpace(actionEvent.Message))
+            {
+                builder.Append($" - {actionEvent.Message}");
+            }
+
+            builder.AppendLine();
+
+            if (!string.IsNullOrWhiteSpace(actionEvent.Command))
+            {
+                builder.AppendLine($"   Chamada: {actionEvent.Command}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
+            {
+                builder.AppendLine($"   Resposta: {actionEvent.ToolResponse.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+            {
+                builder.AppendLine($"   Erro: {actionEvent.Error}");
+            }
         }
 
         return builder.ToString().Trim();
@@ -518,6 +1240,8 @@ public class Manager(
 
         return command.Executed ? "executado" : "bloqueado";
     }
+
+    private static string FormatBooleanForText(bool value) => value ? "sim" : "nao";
 
     private static string BuildActionFallbackReasoning(string? chatReasoning, string error)
     {
@@ -963,6 +1687,19 @@ public class Manager(
         catch (Exception ex)
         {
             logger.LogError($"Unable to update execution for command '{storedCommandId}': {ex.Message}");
+        }
+    }
+
+    private sealed record ActionFailure(string Summary, bool IsUnsafe)
+    {
+        public static ActionFailure Recoverable(string summary)
+        {
+            return new ActionFailure(summary, IsUnsafe: false);
+        }
+
+        public static ActionFailure Unsafe(string summary)
+        {
+            return new ActionFailure(summary, IsUnsafe: true);
         }
     }
 
