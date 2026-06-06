@@ -470,10 +470,16 @@ public sealed class NebulaWorkspaceState(
         return status switch
         {
             ActionExecutionStatus.Completed => CoronaColorSemantic.Success,
+            ActionExecutionStatus.Unsafe => CoronaColorSemantic.Danger,
             ActionExecutionStatus.Failed or ActionExecutionStatus.Cancelled => CoronaColorSemantic.Warning,
             ActionExecutionStatus.Executing or ActionExecutionStatus.Retrying => CoronaColorSemantic.Primary,
             _ => CoronaColorSemantic.Neutral
         };
+    }
+
+    public static string GetActionEventLabel(ActionExecutionEvent actionEvent)
+    {
+        return actionEvent.Kind.ToString();
     }
 
     public static string FormatBoolean(bool value) => value ? "sim" : "nao";
@@ -553,7 +559,9 @@ public sealed class NebulaWorkspaceState(
             var events = turn.StreamingActionEvents.ToList();
             events.Add(new ActionExecutionEvent
             {
+                Kind = ActionExecutionEventKind.Cancelled,
                 Status = ActionExecutionStatus.Cancelled,
+                Step = Math.Max(1, events.LastOrDefault()?.Step ?? 1),
                 Attempt = Math.Max(1, events.LastOrDefault()?.Attempt ?? 1),
                 Title = "Action cancelled",
                 Message = "Execucao cancelada pelo usuario."

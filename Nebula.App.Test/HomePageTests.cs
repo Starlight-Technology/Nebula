@@ -99,9 +99,11 @@ public sealed class HomePageTests : HomePageTestContext
                     [
                         new ActionExecutionEvent
                         {
+                            Kind = ActionExecutionEventKind.ActionStarted,
                             Status = ActionExecutionStatus.Executing,
+                            Step = 1,
                             Attempt = 1,
-                            Title = "Tool call",
+                            Title = "Action started",
                             Message = "Running slow command",
                             Command = "slowcmd"
                         }
@@ -122,7 +124,7 @@ public sealed class HomePageTests : HomePageTestContext
 
         component.WaitForAssertion(() =>
         {
-            Assert.Contains("Tool call", component.Markup);
+            Assert.Contains("Action started", component.Markup);
             Assert.Contains("slowcmd", component.Markup);
             Assert.Contains("Cancelar", component.Markup);
         });

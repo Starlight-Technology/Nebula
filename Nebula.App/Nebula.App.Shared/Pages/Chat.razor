@@ -162,10 +162,10 @@
                                                             <div class="nebula-action-event__header">
                                                                 <div>
                                                                     <strong>@actionEvent.Title</strong>
-                                                                    <span>Tentativa @actionEvent.Attempt</span>
+                                                                    <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
                                                                 </div>
 
-                                                                <CoronaBadge Content="@actionEvent.Status.ToString()"
+                                                                <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
                                                                              Variant="CoronaBadgeVariant.Soft"
                                                                              Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
                                                             </div>
@@ -231,10 +231,10 @@
                                                             <div class="nebula-action-event__header">
                                                                 <div>
                                                                     <strong>@actionEvent.Title</strong>
-                                                                    <span>Tentativa @actionEvent.Attempt</span>
+                                                                    <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
                                                                 </div>
 
-                                                                <CoronaBadge Content="@actionEvent.Status.ToString()"
+                                                                <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
                                                                              Variant="CoronaBadgeVariant.Soft"
                                                                              Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
                                                             </div>

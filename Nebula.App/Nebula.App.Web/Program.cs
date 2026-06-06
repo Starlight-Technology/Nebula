@@ -62,6 +62,7 @@ builder.Services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>
 builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
 builder.Services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
 builder.Services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
+builder.Services.AddScoped<IAgentActionRunner, AgentActionRunner>();
 builder.Services.AddScoped<IManager, Manager>();
 builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 

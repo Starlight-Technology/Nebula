@@ -63,6 +63,20 @@ public enum ActionExecutionStatus
     Retrying,
     Completed,
     Failed,
+    Unsafe,
+    Cancelled
+}
+
+public enum ActionExecutionEventKind
+{
+    ReasoningSummary,
+    ActionStarted,
+    ActionCompleted,
+    Observation,
+    RetryScheduled,
+    Completed,
+    Failed,
+    Unsafe,
     Cancelled
 }
 
@@ -73,6 +87,10 @@ public class ActionExecutionEvent
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ActionExecutionStatus Status { get; set; }
+
+    public ActionExecutionEventKind Kind { get; set; }
+
+    public int Step { get; set; } = 1;
 
     public int Attempt { get; set; } = 1;
 

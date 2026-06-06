@@ -23,13 +23,23 @@ public class Manager(
     IPromptRequestRepository? promptRepository = null,
     IConversationMemoryRepository? conversationMemoryRepository = null,
     NebulaContextBuilder? contextBuilder = null,
-    int maxActionRetries = 5) : IManager
+    int maxActionRetries = 5,
+    int maxActionSteps = AgentActionRunRequest.DefaultMaxSteps,
+    IAgentActionRunner? actionRunner = null) : IManager
 {
     private static readonly TimeSpan PromptPersistenceTimeout = TimeSpan.FromMilliseconds(800);
     private static readonly TimeSpan ConversationMemoryTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly NebulaContextBuilder nebulaContextBuilder = contextBuilder ?? new NebulaContextBuilder();
     private readonly int maxActionRetryCount = Math.Max(0, maxActionRetries);
+    private readonly int maxActionStepCount = Math.Max(1, maxActionSteps);
+    private readonly IAgentActionRunner agentActionRunner = actionRunner ?? new AgentActionRunner(
+        llamaClient,
+        executor,
+        jsonExtractor,
+        logger,
+        commandRepository,
+        maxActionRetries);
     private Guid activeConversationId = Guid.NewGuid();
     private Guid currentRequestId = Guid.NewGuid();
 
@@ -134,7 +144,19 @@ public class Manager(
 
             var turn = classification switch
             {
-                ClassificationResult.Action => await HandleActionAsync(prompt, modelPrompt, progress, cancellationToken),
+                ClassificationResult.Action => await agentActionRunner.RunAsync(
+                    new AgentActionRunRequest
+                    {
+                        ConversationId = conversationId,
+                        RequestId = currentRequestId,
+                        Prompt = prompt,
+                        ChatHistoryContext = modelPrompt,
+                        ModelName = llamaClient.SelectedModel,
+                        MaxSteps = maxActionStepCount,
+                        MaxRetriesPerStep = maxActionRetryCount
+                    },
+                    progress,
+                    cancellationToken),
                 ClassificationResult.Chat => await HandleChatAsync(prompt, modelPrompt, progress, cancellationToken),
                 _ => new ConversationTurn
                 {
