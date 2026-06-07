@@ -53,6 +53,7 @@ public class ShellExecutor : IShellExecutor
                 }
                 catch (InvalidOperationException)
                 {
+                    // The process exited after HasExited was checked.
                 }
             }
 

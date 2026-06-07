@@ -1,29 +1,49 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using Nebula.Agent.Application;
 using Nebula.Agent.Data;
+using Nebula.Agent.Domain;
+using Nebula.Agent.Infrastructure;
 using Nebula.Llama.Client;
 using Nebula.Runner;
 
 namespace Nebula.Agent;
 
-public sealed class AgentActionRunner(
-    ILlamaClient llamaClient,
-    IShellExecutor executor,
-    IJsonExtractor jsonExtractor,
-    ILogger logger,
-    ICommandRepository? commandRepository = null,
-    int maxRetries = AgentActionRunRequest.DefaultMaxRetriesPerStep,
-    int maxSteps = AgentActionRunRequest.DefaultMaxSteps) : IAgentActionRunner
+public sealed class AgentActionRunner : IAgentActionRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly int defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
-    private readonly int defaultMaxSteps = Math.Max(1, maxSteps);
+    private readonly ILlamaClient llamaClient;
+    private readonly IShellExecutor executor;
+    private readonly IJsonExtractor jsonExtractor;
+    private readonly ILogger logger;
+    private readonly CommandValidationService commandValidationService;
+    private readonly CommandAuditService commandAuditService;
+    private readonly int defaultMaxRetriesPerStep;
+    private readonly int defaultMaxSteps;
+
+    public AgentActionRunner(
+        ILlamaClient llamaClient,
+        IShellExecutor executor,
+        IJsonExtractor jsonExtractor,
+        ILogger logger,
+        ICommandRepository? commandRepository = null,
+        int maxRetries = AgentActionRunRequest.DefaultMaxRetriesPerStep,
+        int maxSteps = AgentActionRunRequest.DefaultMaxSteps)
+    {
+        this.llamaClient = llamaClient;
+        this.executor = executor;
+        this.jsonExtractor = jsonExtractor;
+        this.logger = logger;
+        commandValidationService = new CommandValidationService(llamaClient);
+        commandAuditService = new CommandAuditService(commandRepository, logger);
+        defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
+        defaultMaxSteps = Math.Max(1, maxSteps);
+    }
 
     public async Task<ConversationTurn> RunAsync(
         AgentActionRunRequest request,
@@ -32,438 +52,21 @@ public sealed class AgentActionRunner(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Prompt);
 
-        var maxStepCount = Math.Max(1, request.MaxSteps ?? defaultMaxSteps);
-#pragma warning disable CS0618
-        var maxRetryCount = Math.Max(
-            0,
-            request.MaxRetriesPerStep ??
-            request.MaxRetries ??
+        var session = new AgentActionSession(
+            request,
+            progress,
+            logger,
+            llamaClient.SelectedModel,
+            defaultMaxSteps,
             defaultMaxRetriesPerStep);
-#pragma warning restore CS0618
-
-        var events = new List<ActionExecutionEvent>();
-        var commands = new List<CommandExecution>();
-        var observations = new List<string>();
-        var completedPlanSteps = new List<string>();
-        string? previousActionResult = null;
-        var stepNumber = 1;
-        var retryNumber = 0;
 
         try
         {
-            EmitEvent(
-                request,
-                progress,
-                events,
-                commands,
-                ActionExecutionEventKind.ReasoningSummary,
-                ActionExecutionStatus.Validating,
-                stepNumber,
-                retryNumber + 1,
-                "Reasoning summary",
-                "I need to validate the objective before using local tools.");
-
-            var requestValidation = await ValidateAsync(request, cancellationToken);
-            if (!requestValidation.IsValid)
-            {
-                var response = $"A acao foi bloqueada antes de executar ferramentas. Motivo: {requestValidation.Reason}";
-                EmitTerminalEvent(
-                    request,
-                    progress,
-                    events,
-                    commands,
-                    ActionExecutionEventKind.Unsafe,
-                    ActionExecutionStatus.Unsafe,
-                    stepNumber,
-                    retryNumber + 1,
-                    "Unsafe",
-                    response);
-
-                return BuildTurn(
-                    request,
-                    ActionExecutionStatus.Unsafe,
-                    response,
-                    commands,
-                    events);
-            }
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                AgentActionDecision decision;
-                try
-                {
-                    decision = await GenerateNextStepAsync(new AgentActionDecisionRequest
-                    {
-                        Objective = request.Prompt,
-                        ChatHistoryContext = request.ChatHistoryContext,
-                        CurrentPlan = BuildCurrentPlan(completedPlanSteps),
-                        PreviousActionResult = previousActionResult,
-                        Observations = observations.ToList(),
-                        StepNumber = stepNumber,
-                        RetryNumber = retryNumber
-                    }, cancellationToken);
-                }
-                catch (Exception ex) when (ex is JsonException or ArgumentException)
-                {
-                    var observation = $"The next-action decision was invalid: {ex.Message}";
-                    observations.Add(BuildObservationRecord(stepNumber, retryNumber + 1, "decision", observation));
-                    previousActionResult = observation;
-
-                    EmitEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.ReasoningSummary,
-                        ActionExecutionStatus.Planning,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Reasoning summary",
-                        "I could not produce a valid next action, so I need to correct the decision.");
-                    EmitEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.Observation,
-                        ActionExecutionStatus.Planning,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Observation",
-                        observation,
-                        error: ex.Message);
-
-                    if (!TryScheduleRetry(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            ref retryNumber,
-                            maxRetryCount,
-                            observation))
-                    {
-                        return BuildRetryLimitFailure(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            retryNumber + 1,
-                            maxRetryCount,
-                            observation);
-                    }
-
-                    continue;
-                }
-
-                EmitEvent(
-                    request,
-                    progress,
-                    events,
-                    commands,
-                    ActionExecutionEventKind.ReasoningSummary,
-                    ActionExecutionStatus.Planning,
-                    stepNumber,
-                    retryNumber + 1,
-                    "Reasoning summary",
-                    decision.ReasoningSummary);
-
-                if (decision.IsComplete)
-                {
-                    var response = string.IsNullOrWhiteSpace(decision.CompletionMessage)
-                        ? "Objetivo concluido com sucesso."
-                        : decision.CompletionMessage.Trim();
-
-                    EmitTerminalEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.Completed,
-                        ActionExecutionStatus.Completed,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Completed",
-                        response);
-
-                    return BuildTurn(
-                        request,
-                        ActionExecutionStatus.Completed,
-                        response,
-                        commands,
-                        events);
-                }
-
-                if (stepNumber > maxStepCount)
-                {
-                    var response =
-                        $"Nao consegui concluir a acao antes do limite de {maxStepCount} passo(s).";
-                    EmitTerminalEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.Failed,
-                        ActionExecutionStatus.Failed,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Failed",
-                        response);
-
-                    return BuildTurn(
-                        request,
-                        ActionExecutionStatus.Failed,
-                        response,
-                        commands,
-                        events);
-                }
-
-                var action = decision.Action!;
-                var execution = new CommandExecution
-                {
-                    Attempt = retryNumber + 1,
-                    Id = stepNumber,
-                    Objective = action.Objective,
-                    Run = action.Command,
-                    Required = true
-                };
-
-                var storedCommand = await TrySaveCommandAsync(
-                    request.RequestId,
-                    execution,
-                    cancellationToken);
-
-                var validation = await ValidateCommandAsync(execution, cancellationToken);
-                await TrySaveVerificationAsync(
-                    storedCommand?.Id,
-                    execution,
-                    cancellationToken);
-
-                if (!validation.Safe)
-                {
-                    commands.Add(execution);
-                    var response =
-                        $"A acao foi interrompida porque o passo {stepNumber} ficou inseguro. {execution.Notes}";
-                    EmitTerminalEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.Unsafe,
-                        ActionExecutionStatus.Unsafe,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Unsafe",
-                        response,
-                        command: execution.Run);
-
-                    return BuildTurn(
-                        request,
-                        ActionExecutionStatus.Unsafe,
-                        response,
-                        commands,
-                        events);
-                }
-
-                if (!validation.Correct)
-                {
-                    commands.Add(execution);
-                    var observation = execution.Notes ?? "The proposed action does not satisfy the current step.";
-                    observations.Add(BuildObservationRecord(
-                        stepNumber,
-                        retryNumber + 1,
-                        execution.Run,
-                        observation));
-                    previousActionResult = observation;
-
-                    EmitEvent(
-                        request,
-                        progress,
-                        events,
-                        commands,
-                        ActionExecutionEventKind.Observation,
-                        ActionExecutionStatus.Executing,
-                        stepNumber,
-                        retryNumber + 1,
-                        "Observation",
-                        observation,
-                        command: execution.Run);
-
-                    if (!TryScheduleRetry(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            ref retryNumber,
-                            maxRetryCount,
-                            observation))
-                    {
-                        return BuildRetryLimitFailure(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            retryNumber + 1,
-                            maxRetryCount,
-                            observation);
-                    }
-
-                    continue;
-                }
-
-                commands.Add(execution);
-                EmitEvent(
-                    request,
-                    progress,
-                    events,
-                    commands,
-                    ActionExecutionEventKind.ActionStarted,
-                    ActionExecutionStatus.Executing,
-                    stepNumber,
-                    retryNumber + 1,
-                    "Action started",
-                    action.Objective,
-                    command: action.Command);
-
-                string toolResponse;
-                try
-                {
-                    toolResponse = await executor.RunCommandAsync(action.Command, cancellationToken);
-                    execution.Output = toolResponse;
-
-                    if (ToolResponseIndicatesFailure(toolResponse))
-                    {
-                        execution.Error = "Tool response indicated failure.";
-                        execution.Notes = "Falha detectada ao inspecionar a resposta da ferramenta.";
-                    }
-                    else
-                    {
-                        execution.Executed = true;
-                        execution.Notes = string.IsNullOrWhiteSpace(toolResponse)
-                            ? "Comando executado sem saida textual."
-                            : "Comando executado com sucesso.";
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    toolResponse = ex.Message;
-                    execution.Error = ex.Message;
-                    execution.Notes = $"Falha ao executar o comando: {ex.Message}";
-                }
-
-                EmitEvent(
-                    request,
-                    progress,
-                    events,
-                    commands,
-                    ActionExecutionEventKind.ActionCompleted,
-                    ActionExecutionStatus.Executing,
-                    stepNumber,
-                    retryNumber + 1,
-                    "Action completed",
-                    execution.Executed
-                        ? "The existing terminal tool completed the action."
-                        : "The existing terminal tool completed with a failure.",
-                    command: action.Command,
-                    error: execution.Error);
-
-                var observationMessage = execution.Executed
-                    ? (string.IsNullOrWhiteSpace(toolResponse)
-                        ? "The tool completed successfully without textual output."
-                        : toolResponse)
-                    : execution.Notes ?? toolResponse;
-
-                EmitEvent(
-                    request,
-                    progress,
-                    events,
-                    commands,
-                    ActionExecutionEventKind.Observation,
-                    ActionExecutionStatus.Executing,
-                    stepNumber,
-                    retryNumber + 1,
-                    "Observation",
-                    observationMessage,
-                    command: action.Command,
-                    toolResponse: toolResponse,
-                    error: execution.Error);
-
-                observations.Add(BuildObservationRecord(
-                    stepNumber,
-                    retryNumber + 1,
-                    action.Command,
-                    observationMessage));
-                previousActionResult = observationMessage;
-
-                await TryUpdateExecutionAsync(
-                    storedCommand?.Id,
-                    execution.Executed,
-                    execution.Executed ? toolResponse : execution.Notes,
-                    cancellationToken);
-
-                if (!execution.Executed)
-                {
-                    if (!TryScheduleRetry(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            ref retryNumber,
-                            maxRetryCount,
-                            observationMessage))
-                    {
-                        return BuildRetryLimitFailure(
-                            request,
-                            progress,
-                            events,
-                            commands,
-                            stepNumber,
-                            retryNumber + 1,
-                            maxRetryCount,
-                            observationMessage);
-                    }
-
-                    continue;
-                }
-
-                completedPlanSteps.Add(
-                    $"{stepNumber}. {action.Objective} - completed. Observation: {Truncate(observationMessage, 500)}");
-                stepNumber++;
-                retryNumber = 0;
-            }
+            return await RunCoreAsync(session, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            const string response = "Execucao cancelada pelo usuario.";
-            EmitTerminalEvent(
-                request,
-                progress,
-                events,
-                commands,
-                ActionExecutionEventKind.Cancelled,
-                ActionExecutionStatus.Cancelled,
-                stepNumber,
-                retryNumber + 1,
-                "Cancelled",
-                response);
-
-            return BuildTurn(
-                request,
-                ActionExecutionStatus.Cancelled,
-                response,
-                commands,
-                events,
-                isCancelled: true);
+            return session.Cancel();
         }
     }
 
@@ -473,53 +76,9 @@ public sealed class AgentActionRunner(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Objective);
 
-        var payloadPrompt = $$"""
-            You are Nebula's ReAct action controller.
-
-            Choose exactly one next action, or declare the objective complete.
-            Use only Nebula's existing terminal/file execution tool. File operations must be expressed as shell commands.
-            Never reveal chain-of-thought, hidden reasoning, or private analysis.
-            The reasoningSummary must be a concise user-visible summary of the next practical need, at most two sentences.
-            Use the previous action result and accumulated observations to correct failures.
-            When RetryNumber is greater than zero, correct the same logical step instead of silently skipping it.
-            Do not claim completion unless the observations demonstrate that the objective is complete.
-            Respond ONLY with valid JSON and no markdown.
-
-            Response format:
-            {
-              "reasoningSummary": "concise user-visible summary",
-              "isComplete": false,
-              "completionMessage": "",
-              "action": {
-                "objective": "what this single action accomplishes",
-                "command": "one shell command",
-                "requiresSafetyReview": true
-              }
-            }
-
-            Set action to null when isComplete is true.
-
-            Original objective:
-            {{request.Objective}}
-
-            Relevant chat history:
-            {{request.ChatHistoryContext}}
-
-            Current plan and progress:
-            {{request.CurrentPlan}}
-
-            Previous action result:
-            {{request.PreviousActionResult ?? "No previous action result."}}
-
-            Accumulated observations:
-            {{BuildObservationContext(request.Observations)}}
-
-            StepNumber: {{request.StepNumber}}
-            RetryNumber: {{request.RetryNumber}}
-            """;
-
+        var decisionPrompt = CreateDecisionPrompt(request);
         var rawResponse = await llamaClient.GetResponseAsync(
-            payloadPrompt,
+            decisionPrompt,
             progress: null,
             cancellationToken);
         var responsePayload = ModelResponse.Parse(rawResponse).Response;
@@ -559,258 +118,206 @@ public sealed class AgentActionRunner(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-
-        var validationText = ShouldUseConversationContextForValidation(request.Prompt)
-            ? $"{request.ChatHistoryContext}{Environment.NewLine}{request.Prompt}"
-            : request.Prompt;
-        var safe = IsActionTextSafe(validationText);
-        var allowed = IsActionAllowed(validationText);
-        var feasible = !string.IsNullOrWhiteSpace(request.Prompt) &&
-                       !PlatformDetector.GetCurrentOsType().Equals("Unknown", StringComparison.OrdinalIgnoreCase) &&
-                       LooksLikeComputerOperationPrompt(request.Prompt);
-
-        var failures = new List<string>();
-
-        if (!safe)
-        {
-            failures.Add("a solicitacao contem padroes destrutivos ou perigosos");
-        }
-
-        if (!allowed)
-        {
-            failures.Add("a solicitacao viola a politica local de acoes permitidas");
-        }
-
-        if (!feasible)
-        {
-            failures.Add("a acao nao parece tecnicamente executavel neste ambiente");
-        }
-
-        return Task.FromResult(new ActionValidationResult
-        {
-            Safe = safe,
-            Allowed = allowed,
-            Feasible = feasible,
-            Reason = failures.Count == 0
-                ? "A acao foi considerada segura, permitida e tecnicamente viavel."
-                : string.Join("; ", failures)
-        });
+        return Task.FromResult(ActionRequestValidator.Validate(request));
     }
 
-    private async Task<CommandValidation> ValidateCommandAsync(
-        CommandExecution execution,
+    private async Task<ConversationTurn> RunCoreAsync(
+        AgentActionSession session,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        execution.IsCorrect = await VerifyCommandCorrectAsync(execution, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        execution.IsSafe = await VerifyCommandSafetyAsync(execution, cancellationToken);
-        execution.PassedLocalSafety = PlatformDetector.IsCommandContentSafe(execution.Run);
-        execution.Notes = BuildVerificationNotes(execution);
+        session.EmitValidationStarted();
 
-        return new CommandValidation(
-            Correct: execution.IsCorrect,
-            Safe: execution.IsSafe && execution.PassedLocalSafety);
+        var requestValidation = await ValidateAsync(session.Request, cancellationToken);
+        if (!requestValidation.IsValid)
+        {
+            return session.BlockUnsafeRequest(requestValidation.Reason);
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var decisionAttempt = await TryGenerateDecisionAsync(session, cancellationToken);
+            if (!decisionAttempt.Succeeded)
+            {
+                var terminalTurn = ScheduleRetryOrFail(session, decisionAttempt.Failure!);
+                if (terminalTurn is not null)
+                {
+                    return terminalTurn;
+                }
+
+                continue;
+            }
+
+            var decision = decisionAttempt.Decision!;
+            session.EmitReasoning(decision.ReasoningSummary);
+
+            if (decision.IsComplete)
+            {
+                return session.Complete(decision.CompletionMessage);
+            }
+
+            if (session.StepLimitExceeded)
+            {
+                return session.FailStepLimit();
+            }
+
+            var actionResult = await ExecuteActionAsync(
+                session,
+                decision.Action!,
+                cancellationToken);
+            if (actionResult.TerminalTurn is not null)
+            {
+                return actionResult.TerminalTurn;
+            }
+
+            if (actionResult.RequiresRetry)
+            {
+                var terminalTurn = ScheduleRetryOrFail(session, actionResult.Observation);
+                if (terminalTurn is not null)
+                {
+                    return terminalTurn;
+                }
+
+                continue;
+            }
+
+            session.CompleteStep(decision.Action!.Objective, actionResult.Observation);
+        }
     }
 
-    private async Task<bool> VerifyCommandCorrectAsync(
-        CommandExecution execution,
+    private async Task<DecisionAttempt> TryGenerateDecisionAsync(
+        AgentActionSession session,
         CancellationToken cancellationToken)
     {
-        var response = await llamaClient.GetResponseAsync(
-            $$"""
-            Response only with "Yes" or "No". Does this command execute exactly the objective on {{PlatformDetector.GetCurrentOsType()}}?
-            Objective: {{execution.Objective}}
-            Command: {{execution.Run}}
-            """,
-            progress: null,
+        try
+        {
+            var decision = await GenerateNextStepAsync(
+                session.CreateDecisionRequest(),
+                cancellationToken);
+            return DecisionAttempt.Success(decision);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            var failure = $"The next-action decision was invalid: {ex.Message}";
+            session.RecordDecisionFailure(failure, ex.Message);
+            return DecisionAttempt.Failed(failure);
+        }
+    }
+
+    private async Task<ActionAttemptResult> ExecuteActionAsync(
+        AgentActionSession session,
+        AgentToolAction action,
+        CancellationToken cancellationToken)
+    {
+        var execution = session.CreateExecution(action);
+        var storedCommand = await commandAuditService.SaveCommandAsync(
+            session.Request.RequestId,
+            execution,
+            cancellationToken);
+        var validation = await commandValidationService.ValidateAsync(
+            execution,
             cancellationToken);
 
-        return IsAffirmativeResponse(response);
+        await commandAuditService.SaveVerificationAsync(
+            storedCommand?.Id,
+            execution,
+            cancellationToken);
+        session.Commands.Add(execution);
+
+        if (!validation.Safe)
+        {
+            return ActionAttemptResult.Terminal(session.BlockUnsafeCommand(execution));
+        }
+
+        if (!validation.Correct)
+        {
+            var observation = execution.Notes
+                ?? "The proposed action does not satisfy the current step.";
+            session.RecordCommandObservation(execution.Run, observation);
+            return ActionAttemptResult.Retry(observation);
+        }
+
+        session.EmitActionStarted(action);
+        var toolResponse = await ExecuteToolAsync(execution, cancellationToken);
+        session.EmitActionCompleted(execution);
+
+        var observationMessage = BuildObservationMessage(execution, toolResponse);
+        session.EmitToolObservation(execution, observationMessage, toolResponse);
+        session.RecordObservation(execution.Run, observationMessage);
+
+        await commandAuditService.UpdateExecutionAsync(
+            storedCommand?.Id,
+            execution.Executed,
+            execution.Executed ? toolResponse : execution.Notes,
+            cancellationToken);
+
+        return execution.Executed
+            ? ActionAttemptResult.Completed(observationMessage)
+            : ActionAttemptResult.Retry(observationMessage);
     }
 
-    private async Task<bool> VerifyCommandSafetyAsync(
+    private async Task<string> ExecuteToolAsync(
         CommandExecution execution,
         CancellationToken cancellationToken)
     {
-        var response = await llamaClient.GetResponseAsync(
-            $$"""
-            Response only with "Yes" or "No". Is this command safe and allowed to execute on {{PlatformDetector.GetCurrentOsType()}}?
-            Command: {{execution.Run}}
-            """,
-            progress: null,
-            cancellationToken);
-
-        return IsAffirmativeResponse(response);
+        try
+        {
+            var toolResponse = await executor.RunCommandAsync(execution.Run, cancellationToken);
+            ApplyToolResponse(execution, toolResponse);
+            return toolResponse;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            execution.Error = ex.Message;
+            execution.Notes = $"Falha ao executar o comando: {ex.Message}";
+            return ex.Message;
+        }
     }
 
-    private bool TryScheduleRetry(
-        AgentActionRunRequest request,
-        IProgress<ConversationTurn>? progress,
-        List<ActionExecutionEvent> events,
-        IReadOnlyList<CommandExecution> commands,
-        int stepNumber,
-        ref int retryNumber,
-        int maxRetryCount,
-        string failure)
+    private static void ApplyToolResponse(CommandExecution execution, string toolResponse)
     {
-        if (retryNumber >= maxRetryCount)
+        execution.Output = toolResponse;
+
+        if (ToolResponseIndicatesFailure(toolResponse))
         {
-            return false;
+            execution.Error = "Tool response indicated failure.";
+            execution.Notes = "Falha detectada ao inspecionar a resposta da ferramenta.";
+            return;
         }
 
-        retryNumber++;
-        EmitEvent(
-            request,
-            progress,
-            events,
-            commands,
-            ActionExecutionEventKind.RetryScheduled,
-            ActionExecutionStatus.Retrying,
-            stepNumber,
-            retryNumber + 1,
-            "Retry scheduled",
-            $"Retry {retryNumber} of {maxRetryCount}. Previous observation: {failure}");
-        return true;
+        execution.Executed = true;
+        execution.Output = toolResponse;
+        execution.Notes = string.IsNullOrWhiteSpace(toolResponse)
+            ? "Comando executado sem saida textual."
+            : "Comando executado com sucesso.";
     }
 
-    private ConversationTurn BuildRetryLimitFailure(
-        AgentActionRunRequest request,
-        IProgress<ConversationTurn>? progress,
-        List<ActionExecutionEvent> events,
-        IReadOnlyList<CommandExecution> commands,
-        int stepNumber,
-        int attempt,
-        int maxRetryCount,
+    private static ConversationTurn? ScheduleRetryOrFail(
+        AgentActionSession session,
         string failure)
     {
-        var response =
-            $"Nao consegui concluir o passo {stepNumber}. Limite de retry por passo ({maxRetryCount}) atingido. Motivo: {failure}";
-        EmitTerminalEvent(
-            request,
-            progress,
-            events,
-            commands,
-            ActionExecutionEventKind.Failed,
-            ActionExecutionStatus.Failed,
-            stepNumber,
-            attempt,
-            "Failed",
-            response);
-
-        return BuildTurn(
-            request,
-            ActionExecutionStatus.Failed,
-            response,
-            commands,
-            events);
+        return session.TryScheduleRetry(failure)
+            ? null
+            : session.FailRetryLimit(failure);
     }
 
-    private ConversationTurn BuildTurn(
-        AgentActionRunRequest request,
-        ActionExecutionStatus status,
-        string response,
-        IReadOnlyList<CommandExecution> commands,
-        IReadOnlyList<ActionExecutionEvent> events,
-        bool isCancelled = false)
+    private static string BuildObservationMessage(
+        CommandExecution execution,
+        string toolResponse)
     {
-        return new ConversationTurn
+        if (!execution.Executed)
         {
-            ConversationId = request.ConversationId,
-            RequestId = request.RequestId,
-            Prompt = request.Prompt,
-            ModelName = string.IsNullOrWhiteSpace(request.ModelName)
-                ? llamaClient.SelectedModel
-                : request.ModelName,
-            Classification = status == ActionExecutionStatus.Cancelled
-                ? ActionExecutionStatus.Cancelled.ToString()
-                : ClassificationResult.Action.ToString(),
-            Response = response,
-            Reasoning = BuildVisibleReasoning(events),
-            Commands = commands.ToList(),
-            ActionStatus = status,
-            ActionEvents = events.ToList(),
-            IsCancelled = isCancelled
-        };
-    }
+            return execution.Notes ?? toolResponse;
+        }
 
-    private void EmitTerminalEvent(
-        AgentActionRunRequest request,
-        IProgress<ConversationTurn>? progress,
-        List<ActionExecutionEvent> events,
-        IReadOnlyList<CommandExecution> commands,
-        ActionExecutionEventKind kind,
-        ActionExecutionStatus status,
-        int step,
-        int attempt,
-        string title,
-        string message,
-        string? command = null)
-    {
-        EmitEvent(
-            request,
-            progress,
-            events,
-            commands,
-            kind,
-            status,
-            step,
-            attempt,
-            title,
-            message,
-            command);
-    }
-
-    private void EmitEvent(
-        AgentActionRunRequest request,
-        IProgress<ConversationTurn>? progress,
-        List<ActionExecutionEvent> events,
-        IReadOnlyList<CommandExecution> commands,
-        ActionExecutionEventKind kind,
-        ActionExecutionStatus status,
-        int step,
-        int attempt,
-        string title,
-        string message,
-        string? command = null,
-        string? toolResponse = null,
-        string? error = null)
-    {
-        var actionEvent = new ActionExecutionEvent
-        {
-            Kind = kind,
-            Status = status,
-            Step = Math.Max(1, step),
-            Attempt = Math.Max(1, attempt),
-            Title = title,
-            Message = message,
-            Command = command,
-            ToolResponse = toolResponse,
-            Error = error
-        };
-
-        events.Add(actionEvent);
-        logger.Log(
-            $"ReAct event [{kind}] step {actionEvent.Step} attempt {actionEvent.Attempt}: {message}");
-
-        progress?.Report(new ConversationTurn
-        {
-            ConversationId = request.ConversationId,
-            RequestId = request.RequestId,
-            Prompt = request.Prompt,
-            ModelName = string.IsNullOrWhiteSpace(request.ModelName)
-                ? llamaClient.SelectedModel
-                : request.ModelName,
-            Classification = status == ActionExecutionStatus.Cancelled
-                ? ActionExecutionStatus.Cancelled.ToString()
-                : ClassificationResult.Action.ToString(),
-            Response = message,
-            Reasoning = BuildVisibleReasoning(events),
-            Commands = commands.ToList(),
-            ActionStatus = status,
-            ActionEvents = events.ToList(),
-            IsCancelled = status == ActionExecutionStatus.Cancelled
-        });
+        return string.IsNullOrWhiteSpace(toolResponse)
+            ? "The tool completed successfully without textual output."
+            : toolResponse;
     }
 
     private string ExtractJsonObject(string input)
@@ -826,95 +333,52 @@ public sealed class AgentActionRunner(
         }
     }
 
-    private async Task<StoredCommand?> TrySaveCommandAsync(
-        Guid requestId,
-        CommandExecution execution,
-        CancellationToken cancellationToken)
+    private static string CreateDecisionPrompt(AgentActionDecisionRequest request)
     {
-        if (commandRepository is null)
-        {
-            return null;
-        }
+        return $$"""
+            You are Nebula's ReAct action controller.
 
-        try
-        {
-            return await commandRepository.SaveAsync(new StoredCommand
+            Choose exactly one next action, or declare the objective complete.
+            Use only Nebula's existing terminal/file execution tool. File operations must be expressed as shell commands.
+            Never reveal chain-of-thought, hidden reasoning, or private analysis.
+            The reasoningSummary must be a concise user-visible summary of the next practical need, at most two sentences.
+            Use the previous action result and accumulated observations to correct failures.
+            When RetryNumber is greater than zero, correct the same logical step instead of silently skipping it.
+            Do not claim completion unless the observations demonstrate that the objective is complete.
+            Respond ONLY with valid JSON and no markdown.
+
+            Response format:
             {
-                RequestId = requestId,
-                CommandId = execution.Id,
-                Objective = execution.Objective,
-                Command = execution.Run,
-                OsType = PlatformDetector.GetCurrentOsType()
-            }, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError($"Unable to persist command '{execution.Run}': {ex.Message}");
-            return null;
-        }
-    }
+              "reasoningSummary": "concise user-visible summary",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "what this single action accomplishes",
+                "command": "one shell command",
+                "requiresSafetyReview": true
+              }
+            }
 
-    private async Task TrySaveVerificationAsync(
-        Guid? storedCommandId,
-        CommandExecution execution,
-        CancellationToken cancellationToken)
-    {
-        if (commandRepository is null || storedCommandId is null)
-        {
-            return;
-        }
+            Set action to null when isComplete is true.
 
-        try
-        {
-            await commandRepository.SaveVerificationAsync(new CommandVerification
-            {
-                CommandId = storedCommandId.Value,
-                IsCorrect = execution.IsCorrect,
-                IsSafe = execution.IsSafe && execution.PassedLocalSafety,
-                VerificationNotes = BuildVerificationNotes(execution)
-            }, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError($"Unable to persist verification for command '{storedCommandId}': {ex.Message}");
-        }
-    }
+            Original objective:
+            {{request.Objective}}
 
-    private async Task TryUpdateExecutionAsync(
-        Guid? storedCommandId,
-        bool executed,
-        string? result,
-        CancellationToken cancellationToken)
-    {
-        if (commandRepository is null || storedCommandId is null)
-        {
-            return;
-        }
+            Relevant chat history:
+            {{request.ChatHistoryContext}}
 
-        try
-        {
-            await commandRepository.UpdateExecutionAsync(
-                storedCommandId.Value,
-                executed,
-                result,
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError($"Unable to update execution for command '{storedCommandId}': {ex.Message}");
-        }
+            Current plan and progress:
+            {{request.CurrentPlan}}
+
+            Previous action result:
+            {{request.PreviousActionResult ?? "No previous action result."}}
+
+            Accumulated observations:
+            {{AgentActionSession.BuildObservationContext(request.Observations)}}
+
+            StepNumber: {{request.StepNumber}}
+            RetryNumber: {{request.RetryNumber}}
+            """;
     }
 
     private static void ValidateDecision(AgentActionDecision decision)
@@ -924,7 +388,9 @@ public sealed class AgentActionRunner(
             throw new ArgumentException("The ReAct decision did not include a reasoningSummary.");
         }
 
-        decision.ReasoningSummary = Truncate(decision.ReasoningSummary.Trim(), 500);
+        decision.ReasoningSummary = TextTruncation.Truncate(
+            decision.ReasoningSummary.Trim(),
+            500);
 
         if (decision.IsComplete)
         {
@@ -932,75 +398,20 @@ public sealed class AgentActionRunner(
             return;
         }
 
-        if (decision.Action is null ||
-            string.IsNullOrWhiteSpace(decision.Action.Objective) ||
-            string.IsNullOrWhiteSpace(decision.Action.Command))
+        if (!HasValidAction(decision.Action))
         {
             throw new ArgumentException("The ReAct decision did not include a valid action.");
         }
 
-        decision.Action.Objective = decision.Action.Objective.Trim();
+        decision.Action!.Objective = decision.Action.Objective.Trim();
         decision.Action.Command = decision.Action.Command.Trim();
     }
 
-    private static string BuildCurrentPlan(IReadOnlyList<string> completedPlanSteps)
+    private static bool HasValidAction(AgentToolAction? action)
     {
-        return completedPlanSteps.Count == 0
-            ? "No actions completed yet."
-            : string.Join(Environment.NewLine, completedPlanSteps);
-    }
-
-    private static string BuildObservationContext(IReadOnlyList<string> observations)
-    {
-        if (observations.Count == 0)
-        {
-            return "No observations yet.";
-        }
-
-        var value = string.Join(Environment.NewLine, observations);
-        return value.Length <= 16000
-            ? value
-            : value[^16000..];
-    }
-
-    private static string BuildObservationRecord(
-        int step,
-        int attempt,
-        string action,
-        string observation)
-    {
-        return
-            $"Step {step}, attempt {attempt}, action `{action}`: " +
-            Truncate(observation, 2000);
-    }
-
-    private static string BuildVisibleReasoning(IReadOnlyList<ActionExecutionEvent> events)
-    {
-        var builder = new StringBuilder();
-
-        foreach (var actionEvent in events)
-        {
-            builder.AppendLine(
-                $"[{actionEvent.Kind}] Step {actionEvent.Step}, attempt {actionEvent.Attempt}: " +
-                actionEvent.Message);
-
-            if (!string.IsNullOrWhiteSpace(actionEvent.Command))
-            {
-                builder.AppendLine($"Action: {actionEvent.Command}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
-            {
-                builder.AppendLine($"Observation: {actionEvent.ToolResponse.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(actionEvent.Error))
-            {
-                builder.AppendLine($"Error: {actionEvent.Error}");
-            }
-        }
-
-        return builder.ToString().Trim();
+        return action is not null &&
+               !string.IsNullOrWhiteSpace(action.Objective) &&
+               !string.IsNullOrWhiteSpace(action.Command);
     }
 
     private static bool ToolResponseIndicatesFailure(string? output)
@@ -1010,7 +421,7 @@ public sealed class AgentActionRunner(
             return false;
         }
 
-        var normalized = output.ToLowerInvariant();
+        var normalizedOutput = output.ToLowerInvariant();
         string[] failureSignals =
         [
             "is not recognized as an internal or external command",
@@ -1021,114 +432,51 @@ public sealed class AgentActionRunner(
             "permission denied"
         ];
 
-        return failureSignals.Any(signal => normalized.Contains(signal, StringComparison.Ordinal));
+        return failureSignals.Any(
+            signal => normalizedOutput.Contains(signal, StringComparison.Ordinal));
     }
 
-    private static bool LooksLikeComputerOperationPrompt(string prompt)
-    {
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            return false;
-        }
-
-        var normalized = prompt.Trim().ToLowerInvariant();
-        string[] actionKeywords =
-        [
-            "arquivo", "arquivos", "pasta", "pastas", "diretorio", "diretorios",
-            "terminal", "comando", "comandos", "shell", "powershell", "bash", "cmd",
-            "git", "docker", "script", "scripts", "repositorio", "repo", "rodar",
-            "executar", "criar", "listar", "abrir", "instalar", "remover", "deletar",
-            "apagar", "mover", "copiar", "renomear", "editar", "salvar", "alterar",
-            "altere", "atualizar", "atualize", "mudar", "mude", "run ", "execute",
-            "create", "list ", "open ", "install", "remove", "delete", "move ", "copy ",
-            "rename", "edit ", "save ", "change", "update", "file", "files", "folder",
-            "directory"
-        ];
-
-        return actionKeywords.Any(keyword => normalized.Contains(keyword, StringComparison.Ordinal));
-    }
-
-    private static bool ShouldUseConversationContextForValidation(string userRequest)
-    {
-        var normalized = userRequest.ToLowerInvariant();
-        string[] referentialTerms =
-        [
-            "that", "it", "previous", "above", "same", "isso", "aquilo", "anterior",
-            "mesmo", "mesma", "ele", "ela"
-        ];
-
-        return referentialTerms.Any(term => normalized.Contains(term, StringComparison.Ordinal));
-    }
-
-    private static bool IsActionTextSafe(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || !PlatformDetector.IsCommandContentSafe(value))
-        {
-            return false;
-        }
-
-        var normalized = value.ToLowerInvariant();
-        string[] unsafePhrases =
-        [
-            "delete system files", "apagar arquivos do sistema", "deletar arquivos do sistema",
-            "format c:", "format disk", "wipe disk", "wipe the disk", "erase the disk",
-            "del /s c:\\", "system32", "mkfs", "dd if=", "cipher /w"
-        ];
-
-        return !unsafePhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
-    }
-
-    private static bool IsActionAllowed(string value)
-    {
-        var normalized = value.ToLowerInvariant();
-        string[] disallowedPhrases =
-        [
-            "steal", "exfiltrate", "keylogger", "ransomware", "malware",
-            "credential theft", "roubar senha", "disable antivirus", "desativar antivirus"
-        ];
-
-        return !disallowedPhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
-    }
-
-    private static string BuildVerificationNotes(CommandExecution execution)
-    {
-        if (execution.IsCorrect && execution.IsSafe && execution.PassedLocalSafety)
-        {
-            return "Aprovado pela verificacao do modelo e pela protecao local.";
-        }
-
-        var failures = new List<string>();
-
-        if (!execution.IsCorrect)
-        {
-            failures.Add("o modelo nao confirmou que o comando atende ao objetivo");
-        }
-
-        if (!execution.IsSafe)
-        {
-            failures.Add("o modelo nao considerou o comando seguro");
-        }
-
-        if (!execution.PassedLocalSafety)
-        {
-            failures.Add("a protecao local bloqueou um padrao de comando perigoso");
-        }
-
-        return $"Passo bloqueado porque {string.Join("; ", failures)}.";
-    }
-
-    private static bool IsAffirmativeResponse(string rawResponse)
+    internal static bool IsAffirmativeResponse(string rawResponse)
     {
         var response = ModelResponse.Parse(rawResponse).Response.Trim();
         return Regex.IsMatch(response, @"^yes\b", RegexOptions.IgnoreCase);
     }
 
-    private static string Truncate(string value, int maxLength)
+    private sealed record DecisionAttempt(
+        AgentActionDecision? Decision,
+        string? Failure)
     {
-        return value.Length <= maxLength
-            ? value
-            : value[..maxLength].Trim();
+        public bool Succeeded => Decision is not null;
+
+        public static DecisionAttempt Success(AgentActionDecision decision)
+        {
+            return new DecisionAttempt(decision, Failure: null);
+        }
+
+        public static DecisionAttempt Failed(string failure)
+        {
+            return new DecisionAttempt(Decision: null, failure);
+        }
     }
 
-    private sealed record CommandValidation(bool Correct, bool Safe);
+    private sealed record ActionAttemptResult(
+        string Observation,
+        bool RequiresRetry,
+        ConversationTurn? TerminalTurn)
+    {
+        public static ActionAttemptResult Completed(string observation)
+        {
+            return new ActionAttemptResult(observation, RequiresRetry: false, TerminalTurn: null);
+        }
+
+        public static ActionAttemptResult Retry(string observation)
+        {
+            return new ActionAttemptResult(observation, RequiresRetry: true, TerminalTurn: null);
+        }
+
+        public static ActionAttemptResult Terminal(ConversationTurn turn)
+        {
+            return new ActionAttemptResult(string.Empty, RequiresRetry: false, turn);
+        }
+    }
 }

@@ -14,7 +14,7 @@ using Nebula.Llama.Client;
 
 namespace Nebula.App.Test;
 
-public abstract class HomePageTestContext : TestContext
+public abstract class HomePageTestContext : BunitContext
 {
     protected HomePageTestContext()
     {

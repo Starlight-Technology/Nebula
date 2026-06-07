@@ -12,6 +12,14 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
 {
     public RuntimeSetupRecommendation BuildRecommendation(ClientEnvironmentProbe? probe, string runtimeUrl)
     {
+        var context = CreateRecommendationContext(probe, runtimeUrl);
+        return SelectRecommendation(context);
+    }
+
+    private RecommendationContext CreateRecommendationContext(
+        ClientEnvironmentProbe? probe,
+        string runtimeUrl)
+    {
         var host = CaptureHostSnapshot(shellKind);
         var client = CreateClientSnapshot(probe);
         var runtime = CreateRuntimeTarget(runtimeUrl);
@@ -32,129 +40,49 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
             warnings.Add($"O endpoint atual do Ollama parece remoto ({runtime.Host}). A sugestao abaixo so faz sentido se o runtime morar na mesma maquina desta central.");
         }
 
-        if (host.IsMacOS)
+        var context = new RecommendationContext(
+            host,
+            client,
+            runtime,
+            probe,
+            sameMachine,
+            gpuKind,
+            reasons,
+            nextSteps,
+            warnings);
+
+        return context;
+    }
+
+    private static RuntimeSetupRecommendation SelectRecommendation(
+        RecommendationContext context)
+    {
+        if (context.Host.IsMacOS)
         {
-            reasons.Add("O host do agente esta em macOS.");
-            reasons.Add("Neste stack, a rota mais previsivel continua sendo CPU no Compose e Ollama nativo se voce quiser mais performance no Mac.");
-
-            nextSteps.Add("Use o perfil CPU se quiser continuar dentro deste docker-compose.");
-            nextSteps.Add("Se a prioridade for desempenho, rode o Ollama nativo no host e mantenha a central apontando para ele.");
-
-            return CreateRecommendation(
-                host,
-                client,
-                runtime,
-                profileKey: "cpu",
-                profileName: "CPU",
-                command: "docker compose up -d",
-                summary: "CPU e a rota mais segura neste ambiente.",
-                confidence: "Alta",
-                modeLabel: "Fallback estavel",
-                gpuLabel: BuildGpuLabel(probe, sameMachine, gpuKind),
-                modelHint: "Se ficar em CPU, comece por phi4-mini ou qwen3:8b para manter a experiencia leve.",
-                usesGpu: false,
-                isExperimental: false,
-                reasons: reasons,
-                nextSteps: nextSteps,
-                warnings: warnings);
+            return BuildMacRecommendation(context);
         }
 
-        if (gpuKind == GpuKind.Nvidia)
+        if (context.GpuKind == GpuKind.Nvidia)
         {
-            reasons.Add("Encontrei pistas de GPU NVIDIA no shell da interface.");
-            reasons.Add(host.IsWindows
-                ? "Em Windows, o caminho mais previsivel deste stack e usar Docker Desktop com WSL2 e passthrough NVIDIA."
-                : "Em Linux, o perfil NVIDIA e o backend mais maduro desta central.");
-
-            nextSteps.Add("Suba o runtime com o perfil NVIDIA e confirme que o host ja enxerga a GPU.");
-            nextSteps.Add("Depois volte na central, clique em Atualizar e valide o catalogo do Ollama.");
-
-            return CreateRecommendation(
-                host,
-                client,
-                runtime,
-                profileKey: "nvidia",
-                profileName: "NVIDIA CUDA",
-                command: "docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d",
-                summary: "NVIDIA CUDA parece ser o melhor caminho para acelerar os modelos nesta maquina.",
-                confidence: sameMachine ? "Alta" : "Media",
-                modeLabel: "GPU recomendada",
-                gpuLabel: BuildGpuLabel(probe, sameMachine, gpuKind),
-                modelHint: "Voce pode comecar com qwen3:8b ou deepseek-r1:8b sem apertar tanto o runtime.",
-                usesGpu: true,
-                isExperimental: false,
-                reasons: reasons,
-                nextSteps: nextSteps,
-                warnings: warnings);
+            return BuildNvidiaRecommendation(context);
         }
 
-        if (host.IsLinux && (gpuKind == GpuKind.Amd || host.HasKfdDevice))
+        if (ShouldRecommendAmd(context))
         {
-            reasons.Add(host.HasKfdDevice
-                ? "O host Linux expoe /dev/kfd, o que combina com o fluxo ROCm."
-                : "Encontrei pistas de GPU AMD no shell da interface.");
-            reasons.Add("Para AMD, este projeto usa a imagem ollama/ollama:rocm com acesso aos dispositivos /dev/kfd e /dev/dri.");
-
-            if (!host.HasKfdDevice)
-            {
-                warnings.Add("Nao encontrei /dev/kfd neste host. O perfil AMD pode precisar de ajuste no ambiente Linux antes de subir.");
-            }
-
-            nextSteps.Add("Confirme ROCm no host Linux e depois suba o perfil AMD.");
-            nextSteps.Add("Se quiser reduzir risco no primeiro teste, comece com um modelo menor antes de trocar para um de raciocinio pesado.");
-
-            return CreateRecommendation(
-                host,
-                client,
-                runtime,
-                profileKey: "amd",
-                profileName: "AMD ROCm",
-                command: "docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d",
-                summary: "AMD ROCm parece o perfil mais compativel para este host Linux.",
-                confidence: host.HasKfdDevice ? "Alta" : "Media",
-                modeLabel: "GPU recomendada",
-                gpuLabel: BuildGpuLabel(probe, sameMachine, gpuKind),
-                modelHint: "Comece com qwen3:8b ou phi4-mini enquanto valida ROCm e depois suba para modelos mais pesados.",
-                usesGpu: true,
-                isExperimental: false,
-                reasons: reasons,
-                nextSteps: nextSteps,
-                warnings: warnings);
+            return BuildAmdRecommendation(context);
         }
 
-        if (host.IsLinux && (gpuKind == GpuKind.Intel || host.HasDriDevice))
+        if (ShouldRecommendIntel(context))
         {
-            reasons.Add(host.HasDriDevice
-                ? "O host Linux expoe /dev/dri, o que permite testar o backend Vulkan."
-                : "Encontrei pistas de GPU Intel no shell da interface.");
-            reasons.Add("Neste projeto, Intel entra pelo caminho Vulkan, que ainda e experimental no Ollama.");
-
-            nextSteps.Add("Suba o perfil Intel Vulkan e valide um modelo menor primeiro.");
-            nextSteps.Add("Se o runtime ficar instavel, volte para CPU e mantenha a troca de modelos pela central.");
-
-            return CreateRecommendation(
-                host,
-                client,
-                runtime,
-                profileKey: "intel",
-                profileName: "Intel Vulkan",
-                command: "docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d",
-                summary: "Intel Vulkan parece o melhor ponto de partida, com a ressalva de ainda ser experimental.",
-                confidence: host.HasDriDevice ? "Media" : "Baixa",
-                modeLabel: "GPU experimental",
-                gpuLabel: BuildGpuLabel(probe, sameMachine, gpuKind),
-                modelHint: "Use phi4-mini ou qwen3:8b nas primeiras validacoes para reduzir atrito no backend Vulkan.",
-                usesGpu: true,
-                isExperimental: true,
-                reasons: reasons,
-                nextSteps: nextSteps,
-                warnings: warnings);
+            return BuildIntelRecommendation(context);
         }
 
-        reasons.Add("Nao encontrei sinais confiaveis o bastante para recomendar um backend de GPU com seguranca.");
-        reasons.Add("Neste cenario, CPU continua sendo o caminho mais previsivel para manter a central funcional.");
+        var warnings = context.Warnings;
+        var nextSteps = context.NextSteps;
+        context.Reasons.Add("Nao encontrei sinais confiaveis o bastante para recomendar um backend de GPU com seguranca.");
+        context.Reasons.Add("Neste cenario, CPU continua sendo o caminho mais previsivel para manter a central funcional.");
 
-        if (sameMachine && probe is not null && string.IsNullOrWhiteSpace(probe.GpuRenderer) && string.IsNullOrWhiteSpace(probe.GpuVendor))
+        if (HasMissingGpuDetails(context))
         {
             warnings.Add("O shell atual nao expôs informacoes detalhadas da GPU. Isso costuma acontecer quando o navegador bloqueia o renderer WebGL.");
         }
@@ -162,23 +90,134 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         nextSteps.Add("Comece por CPU e valide o fluxo de conversa, instalacao e troca de modelo.");
         nextSteps.Add("Se a maquina realmente tiver GPU compativel, voce pode testar manualmente um dos perfis dedicados depois.");
 
-        return CreateRecommendation(
-            host,
-            client,
-            runtime,
+        return BuildCpuRecommendation(context);
+    }
+
+    private static bool ShouldRecommendAmd(RecommendationContext context)
+    {
+        return context.Host.IsLinux &&
+               (context.GpuKind == GpuKind.Amd || context.Host.HasKfdDevice);
+    }
+
+    private static bool ShouldRecommendIntel(RecommendationContext context)
+    {
+        return context.Host.IsLinux &&
+               (context.GpuKind == GpuKind.Intel || context.Host.HasDriDevice);
+    }
+
+    private static bool HasMissingGpuDetails(RecommendationContext context)
+    {
+        return context.SameMachine &&
+               context.Probe is not null &&
+               string.IsNullOrWhiteSpace(context.Probe.GpuRenderer) &&
+               string.IsNullOrWhiteSpace(context.Probe.GpuVendor);
+    }
+
+    private static RuntimeSetupRecommendation BuildMacRecommendation(
+        RecommendationContext context)
+    {
+        context.Reasons.Add("O host do agente esta em macOS.");
+        context.Reasons.Add("Neste stack, a rota mais previsivel continua sendo CPU no Compose e Ollama nativo se voce quiser mais performance no Mac.");
+        context.NextSteps.Add("Use o perfil CPU se quiser continuar dentro deste docker-compose.");
+        context.NextSteps.Add("Se a prioridade for desempenho, rode o Ollama nativo no host e mantenha a central apontando para ele.");
+
+        return context.CreateRecommendation(
+            profileKey: "cpu",
+            profileName: "CPU",
+            command: "docker compose up -d",
+            summary: "CPU e a rota mais segura neste ambiente.",
+            confidence: "Alta",
+            modeLabel: "Fallback estavel",
+            modelHint: "Se ficar em CPU, comece por phi4-mini ou qwen3:8b para manter a experiencia leve.",
+            usesGpu: false,
+            isExperimental: false);
+    }
+
+    private static RuntimeSetupRecommendation BuildNvidiaRecommendation(
+        RecommendationContext context)
+    {
+        context.Reasons.Add("Encontrei pistas de GPU NVIDIA no shell da interface.");
+        context.Reasons.Add(context.Host.IsWindows
+            ? "Em Windows, o caminho mais previsivel deste stack e usar Docker Desktop com WSL2 e passthrough NVIDIA."
+            : "Em Linux, o perfil NVIDIA e o backend mais maduro desta central.");
+        context.NextSteps.Add("Suba o runtime com o perfil NVIDIA e confirme que o host ja enxerga a GPU.");
+        context.NextSteps.Add("Depois volte na central, clique em Atualizar e valide o catalogo do Ollama.");
+
+        return context.CreateRecommendation(
+            profileKey: "nvidia",
+            profileName: "NVIDIA CUDA",
+            command: "docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d",
+            summary: "NVIDIA CUDA parece ser o melhor caminho para acelerar os modelos nesta maquina.",
+            confidence: context.SameMachine ? "Alta" : "Media",
+            modeLabel: "GPU recomendada",
+            modelHint: "Voce pode comecar com qwen3:8b ou deepseek-r1:8b sem apertar tanto o runtime.",
+            usesGpu: true,
+            isExperimental: false);
+    }
+
+    private static RuntimeSetupRecommendation BuildAmdRecommendation(
+        RecommendationContext context)
+    {
+        context.Reasons.Add(context.Host.HasKfdDevice
+            ? "O host Linux expoe /dev/kfd, o que combina com o fluxo ROCm."
+            : "Encontrei pistas de GPU AMD no shell da interface.");
+        context.Reasons.Add("Para AMD, este projeto usa a imagem ollama/ollama:rocm com acesso aos dispositivos /dev/kfd e /dev/dri.");
+
+        if (!context.Host.HasKfdDevice)
+        {
+            context.Warnings.Add("Nao encontrei /dev/kfd neste host. O perfil AMD pode precisar de ajuste no ambiente Linux antes de subir.");
+        }
+
+        context.NextSteps.Add("Confirme ROCm no host Linux e depois suba o perfil AMD.");
+        context.NextSteps.Add("Se quiser reduzir risco no primeiro teste, comece com um modelo menor antes de trocar para um de raciocinio pesado.");
+
+        return context.CreateRecommendation(
+            profileKey: "amd",
+            profileName: "AMD ROCm",
+            command: "docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d",
+            summary: "AMD ROCm parece o perfil mais compativel para este host Linux.",
+            confidence: context.Host.HasKfdDevice ? "Alta" : "Media",
+            modeLabel: "GPU recomendada",
+            modelHint: "Comece com qwen3:8b ou phi4-mini enquanto valida ROCm e depois suba para modelos mais pesados.",
+            usesGpu: true,
+            isExperimental: false);
+    }
+
+    private static RuntimeSetupRecommendation BuildIntelRecommendation(
+        RecommendationContext context)
+    {
+        context.Reasons.Add(context.Host.HasDriDevice
+            ? "O host Linux expoe /dev/dri, o que permite testar o backend Vulkan."
+            : "Encontrei pistas de GPU Intel no shell da interface.");
+        context.Reasons.Add("Neste projeto, Intel entra pelo caminho Vulkan, que ainda e experimental no Ollama.");
+        context.NextSteps.Add("Suba o perfil Intel Vulkan e valide um modelo menor primeiro.");
+        context.NextSteps.Add("Se o runtime ficar instavel, volte para CPU e mantenha a troca de modelos pela central.");
+
+        return context.CreateRecommendation(
+            profileKey: "intel",
+            profileName: "Intel Vulkan",
+            command: "docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d",
+            summary: "Intel Vulkan parece o melhor ponto de partida, com a ressalva de ainda ser experimental.",
+            confidence: context.Host.HasDriDevice ? "Media" : "Baixa",
+            modeLabel: "GPU experimental",
+            modelHint: "Use phi4-mini ou qwen3:8b nas primeiras validacoes para reduzir atrito no backend Vulkan.",
+            usesGpu: true,
+            isExperimental: true);
+    }
+
+    private static RuntimeSetupRecommendation BuildCpuRecommendation(
+        RecommendationContext context)
+    {
+        return context.CreateRecommendation(
             profileKey: "cpu",
             profileName: "CPU",
             command: "docker compose up -d",
             summary: "CPU e o ponto de partida mais seguro para esta maquina agora.",
             confidence: "Media",
             modeLabel: "Fallback estavel",
-            gpuLabel: BuildGpuLabel(probe, sameMachine, gpuKind),
             modelHint: "Para CPU, priorize phi4-mini ou qwen3:8b e evite modelos grandes ate medir tempo de resposta.",
             usesGpu: false,
-            isExperimental: false,
-            reasons: reasons,
-            nextSteps: nextSteps,
-            warnings: warnings);
+            isExperimental: false);
     }
 
     private static RuntimeHostSnapshot CaptureHostSnapshot(string shellKind)
@@ -332,17 +371,17 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
             return GpuKind.Unknown;
         }
 
-        if (text.Contains("nvidia") || text.Contains("geforce") || text.Contains("quadro") || text.Contains("tesla"))
+        if (ContainsAny(text, "nvidia", "geforce", "quadro", "tesla"))
         {
             return GpuKind.Nvidia;
         }
 
-        if (text.Contains("amd") || text.Contains("radeon") || text.Contains("ati"))
+        if (ContainsAny(text, "amd", "radeon", "ati"))
         {
             return GpuKind.Amd;
         }
 
-        if (text.Contains("intel") || text.Contains("iris") || text.Contains("arc") || text.Contains("xe") || text.Contains("uhd"))
+        if (ContainsAny(text, "intel", "iris", "arc", "xe", "uhd"))
         {
             return GpuKind.Intel;
         }
@@ -353,6 +392,11 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         }
 
         return GpuKind.Unknown;
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates)
+    {
+        return candidates.Any(value.Contains);
     }
 
     private static string BuildGpuLabel(ClientEnvironmentProbe? probe, bool sameMachine, GpuKind gpuKind)
@@ -458,6 +502,66 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         Amd,
         Intel,
         Apple
+    }
+
+    private sealed class RecommendationContext(
+        RuntimeHostSnapshot host,
+        ClientShellSnapshot? client,
+        RuntimeEndpointSnapshot runtime,
+        ClientEnvironmentProbe? probe,
+        bool sameMachine,
+        GpuKind gpuKind,
+        List<string> reasons,
+        List<string> nextSteps,
+        List<string> warnings)
+    {
+        public RuntimeHostSnapshot Host { get; } = host;
+
+        public ClientShellSnapshot? Client { get; } = client;
+
+        public RuntimeEndpointSnapshot Runtime { get; } = runtime;
+
+        public ClientEnvironmentProbe? Probe { get; } = probe;
+
+        public bool SameMachine { get; } = sameMachine;
+
+        public GpuKind GpuKind { get; } = gpuKind;
+
+        public List<string> Reasons { get; } = reasons;
+
+        public List<string> NextSteps { get; } = nextSteps;
+
+        public List<string> Warnings { get; } = warnings;
+
+        public RuntimeSetupRecommendation CreateRecommendation(
+            string profileKey,
+            string profileName,
+            string command,
+            string summary,
+            string confidence,
+            string modeLabel,
+            string modelHint,
+            bool usesGpu,
+            bool isExperimental)
+        {
+            return RuntimeSetupAdvisor.CreateRecommendation(
+                Host,
+                Client,
+                Runtime,
+                profileKey,
+                profileName,
+                command,
+                summary,
+                confidence,
+                modeLabel,
+                BuildGpuLabel(Probe, SameMachine, GpuKind),
+                modelHint,
+                usesGpu,
+                isExperimental,
+                Reasons,
+                NextSteps,
+                Warnings);
+        }
     }
 }
 

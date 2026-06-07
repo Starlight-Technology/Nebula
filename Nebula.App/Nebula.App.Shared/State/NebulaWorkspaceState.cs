@@ -501,9 +501,11 @@ public sealed class NebulaWorkspaceState(
             }
             catch (JSDisconnectedException)
             {
+                // The browser circuit was already disconnected during disposal.
             }
             catch (InvalidOperationException)
             {
+                // The JS module was not available anymore during disposal.
             }
         }
     }
@@ -548,6 +550,7 @@ public sealed class NebulaWorkspaceState(
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
+            // Disposal intentionally stops the active turn without updating UI state.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested)
         {

@@ -1,8 +1,17 @@
 namespace Nebula.Agent.Data;
 
-public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemoryStore> stores) : IConversationMemoryRepository
+public class CompositeConversationMemoryRepository : IConversationMemoryRepository
 {
-    private readonly IReadOnlyList<IConversationMemoryStore> stores = stores.ToList();
+    private readonly IReadOnlyList<IConversationMemoryStore> stores;
+    private readonly ILogger? logger;
+
+    public CompositeConversationMemoryRepository(
+        IEnumerable<IConversationMemoryStore> stores,
+        ILogger? logger = null)
+    {
+        this.stores = stores.ToList();
+        this.logger = logger;
+    }
 
     public async Task<ConversationMessage> AddMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
     {
@@ -19,6 +28,7 @@ public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemo
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 lastFailure = ex;
+                LogStoreFailure(store, "add a conversation message", ex);
             }
         }
 
@@ -55,6 +65,7 @@ public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemo
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LogStoreFailure(store, "load recent conversation messages", ex);
             }
         }
 
@@ -85,6 +96,7 @@ public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemo
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LogStoreFailure(store, "load conversation state", ex);
             }
         }
 
@@ -108,6 +120,7 @@ public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemo
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 lastFailure = ex;
+                LogStoreFailure(store, "save conversation state", ex);
             }
         }
 
@@ -122,5 +135,14 @@ public class CompositeConversationMemoryRepository(IEnumerable<IConversationMemo
         }
 
         throw new InvalidOperationException("Unable to persist conversation state in any registered store.", lastFailure);
+    }
+
+    private void LogStoreFailure(
+        IConversationMemoryStore store,
+        string operation,
+        Exception exception)
+    {
+        logger?.LogError(
+            $"Conversation store '{store.GetType().Name}' failed to {operation}: {exception.Message}");
     }
 }
