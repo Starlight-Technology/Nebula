@@ -129,6 +129,17 @@ public sealed class NebulaWorkspaceState(
         await SubmitPromptAsync(prompt);
     }
 
+    public void CancelActiveTurn()
+    {
+        if (!IsSending || activeTurnCancellationSource is null)
+        {
+            return;
+        }
+
+        activeTurnCancellationSource.Cancel();
+        NotifyChanged();
+    }
+
     public async Task SubmitPromptAsync(string prompt)
     {
         if (IsSending)
@@ -444,6 +455,33 @@ public sealed class NebulaWorkspaceState(
         return turn.Result?.ModelName ?? turn.RequestedModel;
     }
 
+    public static IReadOnlyList<ActionExecutionEvent> GetActionEvents(ConversationEntryViewModel turn)
+    {
+        return turn.Result?.ActionEvents ?? turn.StreamingActionEvents;
+    }
+
+    public static IReadOnlyList<CommandExecution> GetVisibleCommands(ConversationEntryViewModel turn)
+    {
+        return turn.Result?.Commands ?? turn.StreamingCommands;
+    }
+
+    public static CoronaColorSemantic GetActionStatusColor(ActionExecutionStatus status)
+    {
+        return status switch
+        {
+            ActionExecutionStatus.Completed => CoronaColorSemantic.Success,
+            ActionExecutionStatus.Unsafe => CoronaColorSemantic.Danger,
+            ActionExecutionStatus.Failed or ActionExecutionStatus.Cancelled => CoronaColorSemantic.Warning,
+            ActionExecutionStatus.Executing or ActionExecutionStatus.Retrying => CoronaColorSemantic.Primary,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+
+    public static string GetActionEventLabel(ActionExecutionEvent actionEvent)
+    {
+        return actionEvent.Kind.ToString();
+    }
+
     public static string FormatBoolean(bool value) => value ? "sim" : "nao";
 
     public static bool ModelNamesMatch(string left, string right)
@@ -463,9 +501,11 @@ public sealed class NebulaWorkspaceState(
             }
             catch (JSDisconnectedException)
             {
+                // The browser circuit was already disconnected during disposal.
             }
             catch (InvalidOperationException)
             {
+                // The JS module was not available anymore during disposal.
             }
         }
     }
@@ -490,6 +530,9 @@ public sealed class NebulaWorkspaceState(
                 turn.StreamingClassification = partialTurn.Classification;
                 turn.StreamingResponse = partialTurn.Response;
                 turn.StreamingReasoning = partialTurn.Reasoning;
+                turn.StreamingActionStatus = partialTurn.ActionStatus;
+                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                turn.StreamingCommands = partialTurn.Commands.ToList();
 
                 if (!isDisposed)
                 {
@@ -501,9 +544,46 @@ public sealed class NebulaWorkspaceState(
             turn.StreamingClassification = null;
             turn.StreamingResponse = null;
             turn.StreamingReasoning = null;
+            turn.StreamingActionStatus = null;
+            turn.StreamingActionEvents.Clear();
+            turn.StreamingCommands.Clear();
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
+            // Disposal intentionally stops the active turn without updating UI state.
+        }
+        catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested)
+        {
+            turn.StreamingClassification = null;
+            turn.StreamingResponse = null;
+            turn.StreamingReasoning = null;
+            turn.StreamingActionStatus = null;
+
+            var events = turn.StreamingActionEvents.ToList();
+            events.Add(new ActionExecutionEvent
+            {
+                Kind = ActionExecutionEventKind.Cancelled,
+                Status = ActionExecutionStatus.Cancelled,
+                Step = Math.Max(1, events.LastOrDefault()?.Step ?? 1),
+                Attempt = Math.Max(1, events.LastOrDefault()?.Attempt ?? 1),
+                Title = "Action cancelled",
+                Message = "Execucao cancelada pelo usuario."
+            });
+
+            turn.Result = new ConversationTurn
+            {
+                Prompt = normalizedPrompt,
+                ModelName = turn.RequestedModel,
+                Classification = ActionExecutionStatus.Cancelled.ToString(),
+                Response = "Execucao cancelada pelo usuario.",
+                ActionStatus = ActionExecutionStatus.Cancelled,
+                ActionEvents = events,
+                Commands = turn.StreamingCommands.ToList(),
+                IsCancelled = true
+            };
+
+            turn.StreamingActionEvents.Clear();
+            turn.StreamingCommands.Clear();
         }
         catch (Exception ex)
         {
@@ -569,9 +649,16 @@ public sealed class ConversationEntryViewModel
 
     public string? StreamingReasoning { get; set; }
 
+    public ActionExecutionStatus? StreamingActionStatus { get; set; }
+
+    public List<ActionExecutionEvent> StreamingActionEvents { get; set; } = [];
+
+    public List<CommandExecution> StreamingCommands { get; set; } = [];
+
     public bool HasStreamingContent =>
         !string.IsNullOrWhiteSpace(StreamingResponse) ||
-        !string.IsNullOrWhiteSpace(StreamingReasoning);
+        !string.IsNullOrWhiteSpace(StreamingReasoning) ||
+        StreamingActionEvents.Count > 0;
 
     public bool ShowReasoning { get; set; } = true;
 }

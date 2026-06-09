@@ -56,6 +56,7 @@ services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>()
 services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
 services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 
+services.AddScoped<IAgentActionRunner, AgentActionRunner>();
 services.AddScoped<IManager, Manager>();
 
 var provider = services.BuildServiceProvider();

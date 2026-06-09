@@ -6,6 +6,8 @@ public class ConversationMessage
 
     public Guid ConversationId { get; set; }
 
+    public int ConversationContextId { get; set; }
+
     public string Role { get; set; } = ConversationRoles.User;
 
     public string Content { get; set; } = string.Empty;

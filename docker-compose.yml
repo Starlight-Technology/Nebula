@@ -18,7 +18,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
       - ./ollama-start.sh:/ollama-start.sh
-    entrypoint: ["/bin/sh", "/ollama-start.sh"]
+    # entrypoint: ["/bin/sh", "/ollama-start.sh"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -28,7 +28,7 @@ services:
 
   mongodb:
     image: mongo:7.0
-    container_name: mongodb
+    container_name: mongodb-nebula
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
@@ -50,7 +50,7 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    container_name: postgres
+    container_name: postgres-nebula
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -68,7 +68,33 @@ services:
       retries: 30
       start_period: 10s
 
+  nebula-web:
+    build:
+      context: .
+      dockerfile: Nebula.App/Nebula.App.Web/Dockerfile
+    container_name: nebula_app_web
+    depends_on:
+      ollama:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      LLAMA_URL: "http://ollama:11434/api/generate"
+      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
+      MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
+      MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
+      POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
+    restart: unless-stopped
+
 volumes:
   ollama-data:
   mongodb-data:
   postgres-data:
+  nebula-web:
