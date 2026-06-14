@@ -4,6 +4,7 @@ using Microsoft.JSInterop;
 
 using Nebula.Agent;
 using Nebula.App.Shared.Setup;
+using Nebula.Core.Interactions;
 using Nebula.Llama.Client;
 
 namespace Nebula.App.Shared.State;
@@ -26,7 +27,7 @@ public sealed class NebulaWorkspaceState(
     public IReadOnlyList<string> StarterPrompts { get; } =
     [
         "Resuma este projeto e destaque os modulos principais",
-        "Explique como o agente decide entre chat e acao",
+        "Explique a diferenca entre os modos Conversa e Agente",
         "Liste os riscos tecnicos mais importantes desta solucao",
         "Sugira um modelo melhor para tarefas de codigo neste projeto"
     ];
@@ -83,6 +84,8 @@ public sealed class NebulaWorkspaceState(
 
     public string ComposerText { get; set; } = string.Empty;
 
+    public InteractionMode SelectedInteractionMode { get; private set; } = InteractionMode.Chat;
+
     public string ModelInstallText { get; set; } = string.Empty;
 
     public string? ModelFeedback { get; private set; }
@@ -129,6 +132,17 @@ public sealed class NebulaWorkspaceState(
         await SubmitPromptAsync(prompt);
     }
 
+    public void SelectInteractionMode(InteractionMode mode)
+    {
+        if (IsSending || SelectedInteractionMode == mode)
+        {
+            return;
+        }
+
+        SelectedInteractionMode = mode;
+        NotifyChanged();
+    }
+
     public void CancelActiveTurn()
     {
         if (!IsSending || activeTurnCancellationSource is null)
@@ -156,6 +170,7 @@ public sealed class NebulaWorkspaceState(
         var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
+            Mode = SelectedInteractionMode,
             RequestedModel = ActiveModelName
         };
 
@@ -540,7 +555,10 @@ public sealed class NebulaWorkspaceState(
                 }
             });
 
-            turn.Result = await manager.ManageConversationAsync(normalizedPrompt, progress, turnCancellationSource.Token);
+            turn.Result = await manager.ManageConversationAsync(
+                new UserMessage(normalizedPrompt, turn.Mode),
+                progress,
+                turnCancellationSource.Token);
             turn.StreamingClassification = null;
             turn.StreamingResponse = null;
             turn.StreamingReasoning = null;
@@ -573,8 +591,9 @@ public sealed class NebulaWorkspaceState(
             turn.Result = new ConversationTurn
             {
                 Prompt = normalizedPrompt,
+                Mode = turn.Mode,
                 ModelName = turn.RequestedModel,
-                Classification = ActionExecutionStatus.Cancelled.ToString(),
+                Classification = turn.Mode.ToString(),
                 Response = "Execucao cancelada pelo usuario.",
                 ActionStatus = ActionExecutionStatus.Cancelled,
                 ActionEvents = events,
@@ -636,6 +655,8 @@ public sealed class NebulaWorkspaceState(
 public sealed class ConversationEntryViewModel
 {
     public string Prompt { get; set; } = string.Empty;
+
+    public InteractionMode Mode { get; set; }
 
     public string RequestedModel { get; set; } = string.Empty;
 

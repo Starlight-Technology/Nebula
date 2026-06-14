@@ -3,6 +3,7 @@ using Bunit;
 using Nebula.Agent;
 using Nebula.App.Shared.Pages;
 using Nebula.App.Shared.Setup;
+using Nebula.Core.Interactions;
 using Nebula.Llama.Client;
 
 namespace Nebula.App.Test;
@@ -20,8 +21,9 @@ public sealed class HomePageTests : HomePageTestContext
                 progress?.Report(new ConversationTurn
                 {
                     Prompt = "Explique a arquitetura",
+                    Mode = InteractionMode.Chat,
                     ModelName = "qwen3:8b",
-                    Classification = ClassificationResult.Chat.ToString(),
+                    Classification = InteractionMode.Chat.ToString(),
                     Reasoning = "Raciocinio parcial do mock"
                 });
 
@@ -38,7 +40,7 @@ public sealed class HomePageTests : HomePageTestContext
 
         component.WaitForAssertion(() =>
         {
-            Assert.Contains("Preparando a resposta do agente", component.Markup);
+            Assert.Contains("Preparando resposta de conversa", component.Markup);
             Assert.Contains("Explique a arquitetura", component.Markup);
             Assert.Contains("Raciocinio parcial do mock", component.Markup);
         });
@@ -46,8 +48,9 @@ public sealed class HomePageTests : HomePageTestContext
         completion.SetResult(new ConversationTurn
         {
             Prompt = "Explique a arquitetura",
+            Mode = InteractionMode.Chat,
             ModelName = "qwen3:8b",
-            Classification = ClassificationResult.Chat.ToString(),
+            Classification = InteractionMode.Chat.ToString(),
             Response = "Resposta do mock",
             Reasoning = "Raciocinio do mock"
         });
@@ -56,7 +59,7 @@ public sealed class HomePageTests : HomePageTestContext
         {
             Assert.Contains("Resposta do mock", component.Markup);
             Assert.Contains("Raciocinio do mock", component.Markup);
-            Assert.DoesNotContain("Preparando a resposta do agente", component.Markup);
+            Assert.DoesNotContain("Preparando resposta de conversa", component.Markup);
         });
     }
 
@@ -92,8 +95,9 @@ public sealed class HomePageTests : HomePageTestContext
                 progress?.Report(new ConversationTurn
                 {
                     Prompt = "Execute uma acao lenta",
+                    Mode = InteractionMode.Agent,
                     ModelName = "qwen3:8b",
-                    Classification = ClassificationResult.Action.ToString(),
+                    Classification = InteractionMode.Agent.ToString(),
                     ActionStatus = ActionExecutionStatus.Executing,
                     ActionEvents =
                     [
@@ -119,6 +123,7 @@ public sealed class HomePageTests : HomePageTestContext
 
         var component = Render<Chat>();
 
+        FindModeButton(component, "Agente").Click();
         component.Find("textarea").Input("Execute uma acao lenta");
         FindButton(component, "Enviar").Click();
 
@@ -134,39 +139,88 @@ public sealed class HomePageTests : HomePageTestContext
         component.WaitForAssertion(() =>
         {
             Assert.Contains("Execucao cancelada pelo usuario", component.Markup);
-            Assert.DoesNotContain("Preparando a resposta do agente", component.Markup);
+            Assert.DoesNotContain("Executando tarefa do agente", component.Markup);
         });
+    }
+
+    [Fact]
+    public void mode_selector_must_send_selected_mode_to_backend_and_keep_session_choice()
+    {
+        UserMessage? receivedMessage = null;
+        var manager = new FakeManager
+        {
+            ManageConversationAsyncHandler = (message, _, _) =>
+            {
+                receivedMessage = message;
+                return Task.FromResult(new ConversationTurn
+                {
+                    Prompt = message.Content,
+                    Mode = message.Mode,
+                    ModelName = "qwen3:8b",
+                    Classification = message.Mode.ToString(),
+                    Response = "Executado"
+                });
+            }
+        };
+
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+        FindModeButton(component, "Agente").Click();
+        component.Find("textarea").Input("Crie um arquivo teste.txt");
+        FindButton(component, "Enviar").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.NotNull(receivedMessage);
+            Assert.Equal("Crie um arquivo teste.txt", receivedMessage!.Content);
+            Assert.Equal(InteractionMode.Agent, receivedMessage.Mode);
+            Assert.Contains(
+                "nebula-mode-selector__button is-active",
+                FindModeButton(component, "Agente").ClassName);
+        });
+    }
+
+    private static AngleSharp.Dom.IElement FindModeButton(
+        IRenderedComponent<Chat> component,
+        string label)
+    {
+        return component.FindAll(".nebula-mode-selector__button")
+            .Single(button => button.TextContent.Trim().Equals(
+                label,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private sealed class FakeManager : IManager
     {
         public Guid ActiveConversationId { get; private set; } = Guid.NewGuid();
 
-        public Func<string, IProgress<ConversationTurn>?, CancellationToken, Task<ConversationTurn>> ManageConversationAsyncHandler { get; set; }
-            = (prompt, _, _) => Task.FromResult(new ConversationTurn
+        public Func<UserMessage, IProgress<ConversationTurn>?, CancellationToken, Task<ConversationTurn>> ManageConversationAsyncHandler { get; set; }
+            = (message, _, _) => Task.FromResult(new ConversationTurn
             {
-                Prompt = prompt,
+                Prompt = message.Content,
+                Mode = message.Mode,
                 ModelName = "qwen3:8b",
-                Classification = ClassificationResult.Chat.ToString(),
+                Classification = message.Mode.ToString(),
                 Response = "Resposta padrao"
             });
 
-        public Task<ConversationTurn> ManageConversationAsync(string prompt)
+        public Task<ConversationTurn> ManageConversationAsync(UserMessage message)
         {
-            return ManageConversationAsync(prompt, progress: null, cancellationToken: default);
+            return ManageConversationAsync(message, progress: null, cancellationToken: default);
         }
 
         public Task<ConversationTurn> ManageConversationAsync(
-            string prompt,
+            UserMessage message,
             IProgress<ConversationTurn>? progress,
             CancellationToken cancellationToken = default)
         {
-            return ManageConversationAsyncHandler(prompt, progress, cancellationToken);
+            return ManageConversationAsyncHandler(message, progress, cancellationToken);
         }
 
-        public Task<string> ManageResponse(string prompt)
+        public Task<string> ManageResponse(UserMessage message)
         {
-            return Task.FromResult(prompt);
+            return Task.FromResult(message.Content);
         }
 
         public Guid StartNewConversation()
@@ -196,11 +250,6 @@ public sealed class HomePageTests : HomePageTestContext
         public string LlamaUrl { get; set; } = "http://localhost:11434/api/generate";
 
         public string SelectedModel { get; private set; } = "qwen3:8b";
-
-        public Task<ClassificationResult> ClassifyPrompt(string prompt)
-        {
-            return Task.FromResult(ClassificationResult.Chat);
-        }
 
         public Task<string> GetResponseAsync(string prompt)
         {

@@ -1,4 +1,5 @@
 using Nebula.Agent.Data;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Application;
 
@@ -12,6 +13,7 @@ public interface IConversationContextService
     Task<PreparedConversationContext> PrepareAsync(
         Guid conversationId,
         string prompt,
+        InteractionMode mode,
         CancellationToken cancellationToken);
 
     Task CompleteAsync(
@@ -31,11 +33,26 @@ public sealed class ConversationContextService(
     public async Task<PreparedConversationContext> PrepareAsync(
         Guid conversationId,
         string prompt,
+        InteractionMode mode,
         CancellationToken cancellationToken)
     {
         if (conversationRepository is null)
         {
-            return new PreparedConversationContext(conversationId, prompt, PreviousState: null);
+            var currentMessage = new ConversationMessage
+            {
+                ConversationId = conversationId,
+                Role = ConversationRoles.User,
+                Content = prompt.Trim()
+            };
+            return new PreparedConversationContext(
+                conversationId,
+                contextBuilder.Build(
+                    conversationId,
+                    state: null,
+                    [currentMessage],
+                    currentMessage,
+                    mode),
+                PreviousState: null);
         }
 
         var userMessage = await AddMessageAsync(
@@ -45,12 +62,14 @@ public sealed class ConversationContextService(
                 Role = ConversationRoles.User,
                 Content = prompt.Trim()
             },
+            mode,
             cancellationToken);
-        var recentMessages = await GetRecentMessagesAsync(conversationId, cancellationToken);
-        var conversationState = await GetStateAsync(conversationId, cancellationToken);
+        var recentMessages = await GetRecentMessagesAsync(conversationId, mode, cancellationToken);
+        var conversationState = await GetStateAsync(conversationId, mode, cancellationToken);
 
         logger.Log(
-            $"ConversationId '{conversationId}' loaded {recentMessages.Count} recent message(s). " +
+            $"{ModePrefix(mode)} ConversationId '{conversationId}' loaded " +
+            $"{recentMessages.Count} recent message(s). " +
             $"Conversation state: {(conversationState is null ? "missing" : "loaded")}.");
 
         return new PreparedConversationContext(
@@ -59,7 +78,8 @@ public sealed class ConversationContextService(
                 conversationId,
                 conversationState,
                 recentMessages,
-                userMessage),
+                userMessage,
+                mode),
             conversationState);
     }
 
@@ -81,6 +101,7 @@ public sealed class ConversationContextService(
                 Role = ConversationRoles.Assistant,
                 Content = turn.Response
             },
+            turn.Mode,
             cancellationToken);
         await UpsertStateAsync(
             ConversationStateFactory.Create(
@@ -88,11 +109,13 @@ public sealed class ConversationContextService(
                 context.PreviousState,
                 prompt,
                 turn),
+            turn.Mode,
             cancellationToken);
     }
 
     private async Task<ConversationMessage> AddMessageAsync(
         ConversationMessage message,
+        InteractionMode mode,
         CancellationToken cancellationToken)
     {
         try
@@ -100,7 +123,7 @@ public sealed class ConversationContextService(
             using var timeout = CreateTimeout(cancellationToken);
             var savedMessage = await conversationRepository!.AddMessageAsync(message, timeout.Token);
             logger.Log(
-                $"Saved {savedMessage.Role} conversation message '{savedMessage.Id}' " +
+                $"{ModePrefix(mode)} Saved {savedMessage.Role} conversation message '{savedMessage.Id}' " +
                 $"for ConversationId '{savedMessage.ConversationId}'.");
             return savedMessage;
         }
@@ -108,20 +131,21 @@ public sealed class ConversationContextService(
         {
             LogCancellation(
                 cancellationToken,
-                $"Conversation message persistence for '{message.ConversationId}' was cancelled with the active conversation.",
-                $"Timed out while persisting conversation message for ConversationId '{message.ConversationId}'.");
+                $"{ModePrefix(mode)} Conversation message persistence for '{message.ConversationId}' was cancelled with the active conversation.",
+                $"{ModePrefix(mode)} Timed out while persisting conversation message for ConversationId '{message.ConversationId}'.");
             return message;
         }
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to persist conversation message for ConversationId '{message.ConversationId}': {ex.Message}");
+                $"{ModePrefix(mode)} Unable to persist conversation message for ConversationId '{message.ConversationId}': {ex.Message}");
             return message;
         }
     }
 
     private async Task<IReadOnlyList<ConversationMessage>> GetRecentMessagesAsync(
         Guid conversationId,
+        InteractionMode mode,
         CancellationToken cancellationToken)
     {
         try
@@ -136,20 +160,21 @@ public sealed class ConversationContextService(
         {
             LogCancellation(
                 cancellationToken,
-                $"Conversation history load for '{conversationId}' was cancelled with the active conversation.",
-                $"Timed out while loading recent messages for ConversationId '{conversationId}'.");
+                $"{ModePrefix(mode)} Conversation history load for '{conversationId}' was cancelled with the active conversation.",
+                $"{ModePrefix(mode)} Timed out while loading recent messages for ConversationId '{conversationId}'.");
             return [];
         }
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to load recent messages for ConversationId '{conversationId}': {ex.Message}");
+                $"{ModePrefix(mode)} Unable to load recent messages for ConversationId '{conversationId}': {ex.Message}");
             return [];
         }
     }
 
     private async Task<ConversationState?> GetStateAsync(
         Guid conversationId,
+        InteractionMode mode,
         CancellationToken cancellationToken)
     {
         try
@@ -161,39 +186,41 @@ public sealed class ConversationContextService(
         {
             LogCancellation(
                 cancellationToken,
-                $"Conversation state load for '{conversationId}' was cancelled with the active conversation.",
-                $"Timed out while loading state for ConversationId '{conversationId}'.");
+                $"{ModePrefix(mode)} Conversation state load for '{conversationId}' was cancelled with the active conversation.",
+                $"{ModePrefix(mode)} Timed out while loading state for ConversationId '{conversationId}'.");
             return null;
         }
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to load state for ConversationId '{conversationId}': {ex.Message}");
+                $"{ModePrefix(mode)} Unable to load state for ConversationId '{conversationId}': {ex.Message}");
             return null;
         }
     }
 
     private async Task UpsertStateAsync(
         ConversationState state,
+        InteractionMode mode,
         CancellationToken cancellationToken)
     {
         try
         {
             using var timeout = CreateTimeout(cancellationToken);
             await conversationRepository!.UpsertStateAsync(state, timeout.Token);
-            logger.Log($"Saved conversation state for ConversationId '{state.ConversationId}'.");
+            logger.Log(
+                $"{ModePrefix(mode)} Saved conversation state for ConversationId '{state.ConversationId}'.");
         }
         catch (OperationCanceledException)
         {
             LogCancellation(
                 cancellationToken,
-                $"Conversation state update for '{state.ConversationId}' was cancelled with the active conversation.",
-                $"Timed out while saving state for ConversationId '{state.ConversationId}'.");
+                $"{ModePrefix(mode)} Conversation state update for '{state.ConversationId}' was cancelled with the active conversation.",
+                $"{ModePrefix(mode)} Timed out while saving state for ConversationId '{state.ConversationId}'.");
         }
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to save state for ConversationId '{state.ConversationId}': {ex.Message}");
+                $"{ModePrefix(mode)} Unable to save state for ConversationId '{state.ConversationId}': {ex.Message}");
         }
     }
 
@@ -217,4 +244,7 @@ public sealed class ConversationContextService(
 
         logger.LogError(timeoutMessage);
     }
+
+    private static string ModePrefix(InteractionMode mode) =>
+        mode == InteractionMode.Agent ? "[AGENT]" : "[CHAT]";
 }

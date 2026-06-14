@@ -2,16 +2,8 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Nebula.Llama.Client;
-
-public enum ClassificationResult
-{
-    Action,
-    Chat,
-    Unknown
-}
 
 public class LlamaClient : ILlamaClient
 {
@@ -42,28 +34,6 @@ public class LlamaClient : ILlamaClient
     public string LlamaUrl { get; set; }
 
     public string SelectedModel => selectedModel;
-
-    public async Task<ClassificationResult> ClassifyPrompt(string prompt)
-    {
-        var raw = await SendGenerateRequestAsync(
-            prompt,
-            systemPrompt: "You are an intent classifier. Classify the user message into one of two categories: action or chat. " +
-                          "Respond with exactly one word: action or chat. " +
-                          "Use action only when the user wants the computer to perform an operation in terminal, files, scripts, docker, git, shell, or the operating system. " +
-                          "Use chat for everything else.",
-            think: false);
-
-        var parsed = ModelResponse.Parse(raw);
-        var normalized = parsed.Response.Trim().ToLowerInvariant();
-        var match = Regex.Match(normalized, @"\b(action|chat)\b", RegexOptions.IgnoreCase);
-
-        return match.Value.ToLowerInvariant() switch
-        {
-            "action" => ClassificationResult.Action,
-            "chat" => ClassificationResult.Chat,
-            _ => ClassificationResult.Unknown
-        };
-    }
 
     public async Task<string> GetResponseAsync(string prompt)
     {

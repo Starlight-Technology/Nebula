@@ -1,4 +1,5 @@
 using Nebula.Llama.Client;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Application;
 
@@ -21,8 +22,9 @@ internal sealed class ChatResponseService(ILlamaClient llamaClient)
             ConversationId = request.ConversationId,
             RequestId = request.RequestId,
             Prompt = request.Prompt,
+            Mode = InteractionMode.Chat,
             ModelName = request.ModelName,
-            Classification = ClassificationResult.Chat.ToString(),
+            Classification = InteractionMode.Chat.ToString(),
             Response = string.IsNullOrWhiteSpace(parsedResponse.Response)
                 ? "Nao consegui gerar uma resposta para esse pedido."
                 : parsedResponse.Response,
@@ -54,8 +56,9 @@ internal sealed class ChatResponseService(ILlamaClient llamaClient)
             ConversationId = request.ConversationId,
             RequestId = request.RequestId,
             Prompt = request.Prompt,
+            Mode = InteractionMode.Chat,
             ModelName = request.ModelName,
-            Classification = ClassificationResult.Chat.ToString(),
+            Classification = InteractionMode.Chat.ToString(),
             Response = update.Response,
             Reasoning = string.IsNullOrWhiteSpace(update.Reasoning) ? null : update.Reasoning
         };

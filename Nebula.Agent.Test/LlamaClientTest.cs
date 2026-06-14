@@ -36,32 +36,6 @@ public class LlamaClientTest
     }
 
     [Fact]
-    public async Task classify_prompt_must_send_system_prompt_and_disable_thinking()
-    {
-        string? capturedPayload = null;
-
-        var handler = new StubHttpMessageHandler(request =>
-        {
-            capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{"response":"chat","done":true}""", Encoding.UTF8, "application/json")
-            };
-        });
-
-        var client = new LlamaClient(new HttpClient(handler), defaultModel: "mock-model");
-
-        var result = await client.ClassifyPrompt("Hello");
-
-        Assert.Equal(ClassificationResult.Chat, result);
-        Assert.NotNull(capturedPayload);
-        Assert.Contains(@"""think"":false", capturedPayload, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(@"""system"":", capturedPayload, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(@"""prompt"":""Hello""", capturedPayload, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task get_response_async_must_disable_thinking_for_command_planner_prompt()
     {
         string? capturedPayload = null;

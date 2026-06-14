@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Nebula.Agent\Nebula.Agent.csproj" />
+    <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
+    <ProjectReference Include="..\Nebula.Services\Nebula.Services.csproj" />
     <ProjectReference Include="..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
     <ProjectReference Include="..\Nebula.Runner\Nebula.Runner.csproj" />
     <ProjectReference Include="..\Nebula.Mongo.Context\Nebula.Mongo.Context.csproj" />

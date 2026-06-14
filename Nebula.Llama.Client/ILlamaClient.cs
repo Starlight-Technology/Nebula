@@ -6,8 +6,6 @@ public interface ILlamaClient
 
     string SelectedModel { get; }
 
-    Task<ClassificationResult> ClassifyPrompt(string prompt);
-
     Task<string> GetResponseAsync(string prompt);
 
     Task<string> GetResponseAsync(

@@ -1,6 +1,9 @@
 using System.Text;
 
 using Nebula.Agent.Application;
+using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
+using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 
 namespace Nebula.Agent.Domain;
@@ -10,6 +13,8 @@ internal sealed class AgentActionSession
     private readonly IProgress<ConversationTurn>? progress;
     private readonly ILogger logger;
     private readonly string selectedModel;
+    private AgentToolAction? pendingRecoveryAction;
+    private string? pendingRecoveryReasoning;
 
     public AgentActionSession(
         AgentActionRunRequest request,
@@ -37,6 +42,15 @@ internal sealed class AgentActionSession
 
     public List<string> CompletedPlanSteps { get; } = [];
 
+    public List<string> PlanRevisions { get; } = [];
+
+    public ExecutionHistory ExecutionHistory { get; } = new();
+
+    public List<ExecutionEvidence> Evidence { get; } = [];
+
+    public Dictionary<string, CreatedArtifact> CreatedArtifacts { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public int StepNumber { get; private set; } = 1;
 
     public int RetryNumber { get; private set; }
@@ -60,22 +74,90 @@ internal sealed class AgentActionSession
             CurrentPlan = BuildCurrentPlan(),
             PreviousActionResult = PreviousActionResult,
             Observations = Observations.ToList(),
+            ExecutionHistory = ExecutionHistory.Entries.ToList(),
             StepNumber = StepNumber,
             RetryNumber = RetryNumber
         };
     }
 
-    public CommandExecution CreateExecution(AgentToolAction action)
+    public bool TryTakeRecoveryDecision(out AgentActionDecision? decision)
+    {
+        if (pendingRecoveryAction is null)
+        {
+            decision = null;
+            return false;
+        }
+
+        decision = new AgentActionDecision
+        {
+            ReasoningSummary = pendingRecoveryReasoning
+                ?? "The failed step requires a different diagnostic action.",
+            Action = pendingRecoveryAction
+        };
+        pendingRecoveryAction = null;
+        pendingRecoveryReasoning = null;
+        return true;
+    }
+
+    public AgentStep CreateStep(AgentToolAction action)
+    {
+        return new AgentStep
+        {
+            SessionId = Request.ConversationId,
+            OriginalText = Request.Prompt,
+            Objective = action.Objective,
+            DeclaredKind = action.OperationKind,
+            Command = action.Command,
+            Content = action.Content,
+            TargetPath = action.TargetPath,
+            Language = action.Language,
+            WorkingDirectory = ResolveWorkingDirectory(action.WorkingDirectory)
+        };
+    }
+
+    public CommandExecution CreateExecution(
+        AgentToolAction action,
+        AgentStep step,
+        OperationKind operationKind)
     {
         return new CommandExecution
         {
+            StepId = step.Id,
+            OperationKind = operationKind,
             Attempt = AttemptNumber,
             Id = StepNumber,
             Objective = action.Objective,
             Run = action.Command,
+            OriginalCommand = action.Command,
+            WorkingDirectory = step.WorkingDirectory,
+            TargetPath = action.TargetPath,
             Required = true
         };
     }
+
+    public void RecordEvidence(ExecutionEvidence evidence)
+    {
+        Evidence.Add(evidence);
+        logger.Log(
+            $"[AGENT] Evidence collected: sessionId={evidence.SessionId}; " +
+            $"stepId={evidence.StepId}; operationKind={evidence.OperationKind}; " +
+            $"evidenceId={evidence.Id}; executed={evidence.Executed}; " +
+            $"exitCode={evidence.ExitCode?.ToString() ?? "(none)"}; success={evidence.Success}");
+    }
+
+    public void RecordArtifact(
+        string path,
+        string contentHash,
+        CommandClassification classification)
+    {
+        CreatedArtifacts[Path.GetFullPath(path)] =
+            new CreatedArtifact(path, contentHash, classification);
+    }
+
+    public bool TryGetArtifact(
+        string path,
+        out CreatedArtifact? artifact) =>
+        CreatedArtifacts.TryGetValue(Path.GetFullPath(path), out artifact);
 
     public void EmitValidationStarted()
     {
@@ -95,14 +177,14 @@ internal sealed class AgentActionSession
             reasoningSummary);
     }
 
-    public void EmitActionStarted(AgentToolAction action)
+    public void EmitActionStarted(CommandExecution execution)
     {
         Emit(
             ActionExecutionEventKind.ActionStarted,
             ActionExecutionStatus.Executing,
             "Action started",
-            action.Objective,
-            command: action.Command);
+            execution.Objective,
+            command: execution.Run);
     }
 
     public void EmitActionCompleted(CommandExecution execution)
@@ -166,6 +248,76 @@ internal sealed class AgentActionSession
         PreviousActionResult = observation;
     }
 
+    public void RecordExecution(ExecutionHistoryEntry entry)
+    {
+        ExecutionHistory.Add(entry);
+    }
+
+    public void RecordDeduplicationBlocked(
+        CommandExecution execution,
+        string reason)
+    {
+        execution.Skipped = true;
+        execution.Error = reason;
+        execution.Notes = reason;
+        RecordObservation(execution.Run, reason);
+        Emit(
+            ActionExecutionEventKind.DeduplicationBlocked,
+            ActionExecutionStatus.Retrying,
+            "Repeated command blocked",
+            reason,
+            command: execution.Run,
+            error: reason);
+    }
+
+    public void RevisePlan(
+        CommandExecution execution,
+        ErrorReflection? reflection)
+    {
+        var failureOutput = string.IsNullOrWhiteSpace(execution.StandardError)
+            ? execution.StandardOutput
+            : execution.StandardError;
+        var failedStep =
+            $"{StepNumber}.{AttemptNumber} {execution.Objective} - Failed. " +
+            $"Exit code: {execution.ExitCode?.ToString() ?? "unknown"}. " +
+            $"Error: {TextTruncation.Truncate(failureOutput, 500)}";
+        PlanRevisions.Add(failedStep);
+
+        var alternative = reflection is null
+            ? "Choose a different command after inspecting stdout, stderr and exit code."
+            : $"{reflection.AlternativeAction} - Pending. Command: {reflection.NextCommand}";
+        PlanRevisions.Add($"{StepNumber}.{AttemptNumber + 1} Alternative - {alternative}");
+
+        if (reflection is not null)
+        {
+            pendingRecoveryAction = new AgentToolAction
+            {
+                Objective = reflection.AlternativeAction,
+                Command = reflection.NextCommand,
+                WorkingDirectory = execution.WorkingDirectory,
+                RequiresSafetyReview = true
+            };
+            pendingRecoveryReasoning =
+                $"Likely cause: {reflection.Hypothesis} Trying a different diagnostic action.";
+            RecordObservation(
+                "error reflection",
+                $"Hypothesis: {reflection.Hypothesis} Alternative: " +
+                $"{reflection.AlternativeAction}. Next command: {reflection.NextCommand}");
+            Emit(
+                ActionExecutionEventKind.ErrorReflection,
+                ActionExecutionStatus.Planning,
+                "Error reflection",
+                $"Likely cause: {reflection.Hypothesis}",
+                command: reflection.NextCommand);
+        }
+
+        Emit(
+            ActionExecutionEventKind.PlanRevised,
+            ActionExecutionStatus.Planning,
+            "Plan revised",
+            $"Marked the failed action as Failed and added an alternative: {alternative}");
+    }
+
     public void CompleteStep(string objective, string observation)
     {
         CompletedPlanSteps.Add(
@@ -213,10 +365,43 @@ internal sealed class AgentActionSession
             execution.Run);
     }
 
+    public ConversationTurn RequestCommandApproval(CommandExecution execution)
+    {
+        var response =
+            $"O passo {StepNumber} requer confirmação explícita antes da execução. {execution.Notes}";
+        return Finish(
+            ActionExecutionEventKind.ApprovalRequired,
+            ActionExecutionStatus.AwaitingApproval,
+            "Approval required",
+            response,
+            execution.Run);
+    }
+
+    public ConversationTurn BlockUnsupportedOperation(OperationKind operationKind)
+    {
+        var response =
+            $"O passo {StepNumber} nao pode ser executado porque o tipo de operacao " +
+            $"'{operationKind}' nao possui um executor seguro configurado.";
+        return Finish(
+            ActionExecutionEventKind.Unsafe,
+            ActionExecutionStatus.Unsafe,
+            "Unsupported operation",
+            response);
+    }
+
     public ConversationTurn Complete(string completionMessage)
     {
+        if (Evidence.Count == 0)
+        {
+            return Finish(
+                ActionExecutionEventKind.Failed,
+                ActionExecutionStatus.Failed,
+                "Insufficient evidence",
+                "Nao ha evidencia suficiente para afirmar que a tarefa foi executada.");
+        }
+
         var response = string.IsNullOrWhiteSpace(completionMessage)
-            ? "Objetivo concluido com sucesso."
+            ? BuildEvidenceSummary()
             : completionMessage.Trim();
         return Finish(
             ActionExecutionEventKind.Completed,
@@ -245,6 +430,45 @@ internal sealed class AgentActionSession
             ActionExecutionStatus.Failed,
             "Failed",
             response);
+    }
+
+    public ConversationTurn FailRepeatedError(
+        ExecutionHistoryEntry failure,
+        int failureCount)
+    {
+        var diagnostic = string.IsNullOrWhiteSpace(failure.StandardError)
+            ? failure.StandardOutput
+            : failure.StandardError;
+        var response =
+            $"A execucao automatica foi interrompida porque o mesmo erro ocorreu " +
+            $"{failureCount} vezes. Diagnostico: {TextTruncation.Truncate(diagnostic, 1000)} " +
+            "Revise permissoes, disponibilidade da ferramenta e o diretorio de trabalho " +
+            "antes de continuar.";
+        return Finish(
+            ActionExecutionEventKind.Failed,
+            ActionExecutionStatus.Failed,
+            "Repeated error limit reached",
+            response,
+            failure.Command);
+    }
+
+    public ConversationTurn FailCommandNotFoundAlternative(
+        ExecutionHistoryEntry originalFailure,
+        ExecutionHistoryEntry alternativeFailure)
+    {
+        var diagnostic = string.IsNullOrWhiteSpace(alternativeFailure.StandardError)
+            ? alternativeFailure.StandardOutput
+            : alternativeFailure.StandardError;
+        var response =
+            $"A execucao foi interrompida depois que o comando '{originalFailure.Command}' " +
+            "e uma alternativa compativel falharam. " +
+            $"Diagnostico: {TextTruncation.Truncate(diagnostic, 1000)}";
+        return Finish(
+            ActionExecutionEventKind.Failed,
+            ActionExecutionStatus.Failed,
+            "Command not found alternative limit reached",
+            response,
+            alternativeFailure.Command);
     }
 
     public ConversationTurn Cancel()
@@ -307,7 +531,8 @@ internal sealed class AgentActionSession
 
         Events.Add(actionEvent);
         logger.Log(
-            $"ReAct event [{kind}] step {actionEvent.Step} attempt {actionEvent.Attempt}: {message}");
+            $"[AGENT] ReAct event [{kind}] step {actionEvent.Step} " +
+            $"attempt {actionEvent.Attempt}: {message}");
         progress?.Report(BuildTurn(status, message, status == ActionExecutionStatus.Cancelled));
     }
 
@@ -321,26 +546,47 @@ internal sealed class AgentActionSession
             ConversationId = Request.ConversationId,
             RequestId = Request.RequestId,
             Prompt = Request.Prompt,
+            Mode = InteractionMode.Agent,
             ModelName = string.IsNullOrWhiteSpace(Request.ModelName)
                 ? selectedModel
                 : Request.ModelName,
-            Classification = status == ActionExecutionStatus.Cancelled
-                ? ActionExecutionStatus.Cancelled.ToString()
-                : ClassificationResult.Action.ToString(),
+            Classification = InteractionMode.Agent.ToString(),
             Response = response,
             Reasoning = BuildVisibleReasoning(),
             Commands = Commands.ToList(),
+            ExecutionHistory = ExecutionHistory.Entries.ToList(),
+            Evidence = Evidence.ToList(),
             ActionStatus = status,
             ActionEvents = Events.ToList(),
             IsCancelled = isCancelled
         };
     }
 
+    private string BuildEvidenceSummary()
+    {
+        var successful = Evidence.Where(value => value.Success).ToList();
+        if (successful.Count == 0)
+        {
+            return "Nao ha evidencia suficiente para afirmar sucesso.";
+        }
+
+        return string.Join(
+            Environment.NewLine,
+            successful.Select(value =>
+            {
+                var observed = !string.IsNullOrWhiteSpace(value.StdOut)
+                    ? value.StdOut.Trim()
+                    : value.FilePath ?? value.Command ?? "operation completed";
+                return $"{value.OperationKind}: {observed}";
+            }));
+    }
+
     private string BuildCurrentPlan()
     {
-        return CompletedPlanSteps.Count == 0
+        var planEntries = PlanRevisions.Concat(CompletedPlanSteps).ToList();
+        return planEntries.Count == 0
             ? "No actions completed yet."
-            : string.Join(Environment.NewLine, CompletedPlanSteps);
+            : string.Join(Environment.NewLine, planEntries);
     }
 
     private string BuildObservationRecord(string action, string observation)
@@ -395,4 +641,17 @@ internal sealed class AgentActionSession
             defaultMaxRetriesPerStep);
 #pragma warning restore CS0618
     }
+
+    private static string ResolveWorkingDirectory(string? workingDirectory)
+    {
+        return Path.GetFullPath(
+            string.IsNullOrWhiteSpace(workingDirectory)
+                ? Environment.CurrentDirectory
+                : workingDirectory);
+    }
 }
+
+internal sealed record CreatedArtifact(
+    string Path,
+    string ContentHash,
+    CommandClassification Classification);

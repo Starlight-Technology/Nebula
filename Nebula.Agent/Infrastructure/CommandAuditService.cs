@@ -34,7 +34,7 @@ internal sealed class CommandAuditService(
         }
         catch (Exception ex)
         {
-            logger.LogError($"Unable to persist command '{execution.Run}': {ex.Message}");
+            logger.LogError($"[AGENT] Unable to persist command '{execution.Run}': {ex.Message}");
             return null;
         }
     }
@@ -66,7 +66,7 @@ internal sealed class CommandAuditService(
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to persist verification for command '{storedCommandId}': {ex.Message}");
+                $"[AGENT] Unable to persist verification for command '{storedCommandId}': {ex.Message}");
         }
     }
 
@@ -96,7 +96,7 @@ internal sealed class CommandAuditService(
         catch (Exception ex)
         {
             logger.LogError(
-                $"Unable to update execution for command '{storedCommandId}': {ex.Message}");
+                $"[AGENT] Unable to update execution for command '{storedCommandId}': {ex.Message}");
         }
     }
 }

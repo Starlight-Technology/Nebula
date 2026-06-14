@@ -1,4 +1,5 @@
 using Nebula.Agent.Data;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Test;
 
@@ -25,7 +26,8 @@ public sealed class NebulaContextBuilderTest
             conversationId,
             state: null,
             messages,
-            messages[^1]);
+            messages[^1],
+            InteractionMode.Chat);
 
         Assert.DoesNotContain("System note", context);
         Assert.Contains("user: First question", context);
@@ -62,7 +64,8 @@ public sealed class NebulaContextBuilderTest
             conversationId,
             state: null,
             [oldMessage, recentMessage, currentMessage],
-            currentMessage);
+            currentMessage,
+            InteractionMode.Chat);
 
         Assert.DoesNotContain(oldMessage.Content, context);
         Assert.Contains("assistant: short answer", context);
@@ -93,12 +96,57 @@ public sealed class NebulaContextBuilderTest
             conversationId,
             state: null,
             [systemMessage, toolMessage, currentMessage],
-            currentMessage);
+            currentMessage,
+            InteractionMode.Chat);
 
         Assert.Contains("system: Use concise answers", context);
         Assert.Contains("tool: command output", context);
         Assert.Contains("[current_user_message]", context);
         Assert.Contains("summarize", context);
+    }
+
+    [Fact]
+    public void build_must_include_chat_mode_rules_only_for_chat()
+    {
+        var conversationId = Guid.NewGuid();
+        var currentMessage = CreateMessage(
+            conversationId,
+            ConversationRoles.User,
+            "Crie um arquivo teste.txt",
+            1);
+
+        var context = new NebulaContextBuilder().Build(
+            conversationId,
+            state: null,
+            [currentMessage],
+            currentMessage,
+            InteractionMode.Chat);
+
+        Assert.Contains("CHAT MODE", context);
+        Assert.Contains("não deve chamar ferramentas", context, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AGENT MODE", context);
+    }
+
+    [Fact]
+    public void build_must_include_agent_mode_rules_only_for_agent()
+    {
+        var conversationId = Guid.NewGuid();
+        var currentMessage = CreateMessage(
+            conversationId,
+            ConversationRoles.User,
+            "Crie um arquivo teste.txt",
+            1);
+
+        var context = new NebulaContextBuilder().Build(
+            conversationId,
+            state: null,
+            [currentMessage],
+            currentMessage,
+            InteractionMode.Agent);
+
+        Assert.Contains("AGENT MODE", context);
+        Assert.Contains("Colete evidências", context, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("CHAT MODE", context);
     }
 
     private static ConversationMessage CreateMessage(

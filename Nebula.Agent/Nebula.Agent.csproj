@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
+    <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
+    <ProjectReference Include="..\Nebula.Services\Nebula.Services.csproj" />
     <ProjectReference Include="..\Nebula.Runner\Nebula.Runner.csproj" />
     <ProjectReference Include="..\Nebula.Mongo.Context\Nebula.Mongo.Context.csproj" />
     <ProjectReference Include="..\Nebula.Postgres.Context\Nebula.Postgres.Context.csproj" />

@@ -1,3 +1,5 @@
+using Nebula.Core.Interactions;
+
 namespace Nebula.Agent;
 
 public sealed class AgentActionRunRequest
@@ -11,6 +13,8 @@ public sealed class AgentActionRunRequest
     public Guid RequestId { get; set; }
 
     public string Prompt { get; set; } = string.Empty;
+
+    public InteractionMode Mode { get; set; } = InteractionMode.Agent;
 
     public string ChatHistoryContext { get; set; } = string.Empty;
 

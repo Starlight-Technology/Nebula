@@ -870,6 +870,45 @@ pre {
     width: 100%;
 }
 
+.nebula-mode-selector {
+    display: inline-grid;
+    grid-template-columns: repeat(2, minmax(7rem, 1fr));
+    gap: 0.25rem;
+    width: fit-content;
+    padding: 0.25rem;
+    border: 1px solid var(--nebula-border-strong);
+    border-radius: var(--nebula-radius);
+    background: rgba(10, 12, 14, 0.62);
+}
+
+.nebula-mode-selector__button {
+    border: 0;
+    border-radius: calc(var(--nebula-radius) - 0.2rem);
+    padding: 0.6rem 1rem;
+    color: var(--nebula-muted);
+    background: transparent;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.nebula-mode-selector__button.is-active {
+    color: var(--nebula-text);
+    background: var(--nebula-teal-soft);
+    box-shadow: inset 0 0 0 1px var(--nebula-teal);
+}
+
+.nebula-mode-selector__button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.nebula-mode-description {
+    margin: -0.5rem 0 0;
+    color: var(--nebula-muted);
+    font-size: 0.875rem;
+}
+
 .nebula-composer__input {
     width: 100%;
     min-height: 8rem;

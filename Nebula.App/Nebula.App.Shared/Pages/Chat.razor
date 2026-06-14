@@ -2,18 +2,21 @@
 @implements IDisposable
 @inject NebulaWorkspaceState WorkspaceState
 @inject NavigationManager NavigationManager
+@using Nebula.Core.Interactions
 
 <CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell nebula-chat-page">
     <section class="nebula-screen-header">
         <div>
             <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
-                <CoronaBadge Content="Conversa" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.SelectedInteractionMode.ToString()"
+                             Variant="CoronaBadgeVariant.Soft"
+                             Color="@(WorkspaceState.SelectedInteractionMode == InteractionMode.Agent ? CoronaColorSemantic.Warning : CoronaColorSemantic.Primary)" />
                 <CoronaBadge Content="@WorkspaceState.ActiveModelName"
                              Variant="CoronaBadgeVariant.Outlined"
                              Color="CoronaColorSemantic.Neutral" />
             </CoronaStack>
-            <h2>Agente local</h2>
-            <p>Turnos, resposta, raciocinio e comandos validados ficam no mesmo fluxo.</p>
+            <h2>Chat e agente local</h2>
+            <p>Escolha conversa para respostas naturais ou agente para executar tarefas reais.</p>
         </div>
 
         <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
@@ -68,6 +71,9 @@
                             <CoronaCard Class="nebula-message-card nebula-message-card--user">
                                 <div class="nebula-message-card__meta">
                                     <CoronaBadge Content="Voce" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
+                                    <CoronaBadge Content="@turn.Mode.ToString()"
+                                                 Variant="CoronaBadgeVariant.Outlined"
+                                                 Color="@(turn.Mode == InteractionMode.Agent ? CoronaColorSemantic.Warning : CoronaColorSemantic.Primary)" />
                                 </div>
                                 <div class="nebula-message-card__text">@turn.Prompt</div>
                             </CoronaCard>
@@ -198,7 +204,11 @@
                                         <div class="nebula-pending-panel">
                                             <div class="nebula-pending-panel__pulse"></div>
                                             <div>
-                                                <p class="nebula-pending-panel__title">Preparando a resposta do agente...</p>
+                                                <p class="nebula-pending-panel__title">
+                                                    @(turn.Mode == InteractionMode.Chat
+                                                        ? "Preparando resposta de conversa..."
+                                                        : "Executando tarefa do agente...")
+                                                </p>
                                                 <p>Modelo @turn.RequestedModel.</p>
                                             </div>
                                         </div>
@@ -335,8 +345,33 @@
 
             <CoronaCard Class="@WorkspaceState.GetComposerCardClass()">
                 <div class="nebula-composer">
+                    <div class="nebula-mode-selector" role="group" aria-label="Modo de interacao">
+                        <button type="button"
+                                class="@GetModeButtonClass(InteractionMode.Chat)"
+                                aria-pressed="@(WorkspaceState.SelectedInteractionMode == InteractionMode.Chat)"
+                                disabled="@WorkspaceState.IsSending"
+                                @onclick="() => WorkspaceState.SelectInteractionMode(InteractionMode.Chat)">
+                            Conversa
+                        </button>
+                        <button type="button"
+                                class="@GetModeButtonClass(InteractionMode.Agent)"
+                                aria-pressed="@(WorkspaceState.SelectedInteractionMode == InteractionMode.Agent)"
+                                disabled="@WorkspaceState.IsSending"
+                                @onclick="() => WorkspaceState.SelectInteractionMode(InteractionMode.Agent)">
+                            Agente
+                        </button>
+                    </div>
+
+                    <p class="nebula-mode-description">
+                        @(WorkspaceState.SelectedInteractionMode == InteractionMode.Chat
+                            ? "Somente conversa. Nenhum comando ou ferramenta sera executado."
+                            : "Executa tarefas reais com resolver de comandos, safety engine e policy.")
+                    </p>
+
                     <textarea class="nebula-composer__input"
-                              placeholder="Descreva uma tarefa, pergunte algo sobre o projeto ou peca uma acao local..."
+                              placeholder="@(WorkspaceState.SelectedInteractionMode == InteractionMode.Chat
+                                  ? "Pergunte ou converse com o Nebula..."
+                                  : "Descreva a tarefa que deve ser executada...")"
                               @bind="WorkspaceState.ComposerText"
                               @bind:event="oninput"></textarea>
 
@@ -425,6 +460,13 @@
     private void NavigateToModels()
     {
         NavigationManager.NavigateTo("/models");
+    }
+
+    private string GetModeButtonClass(InteractionMode mode)
+    {
+        return WorkspaceState.SelectedInteractionMode == mode
+            ? "nebula-mode-selector__button is-active"
+            : "nebula-mode-selector__button";
     }
 
     private void HandleWorkspaceChanged()

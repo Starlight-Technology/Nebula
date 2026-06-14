@@ -18,8 +18,10 @@
     <Deploy Solution="Debug|*" />
   </Project>
   <Project Path="Nebula.Cli/Nebula.Cli.csproj" />
+  <Project Path="Nebula.Core/Nebula.Core.csproj" />
   <Project Path="Nebula.Llama.Client/Nebula.Llama.Client.csproj" />
   <Project Path="Nebula.Mongo.Context/Nebula.Mongo.Context.csproj" />
   <Project Path="Nebula.Postgres.Context/Nebula.Postgres.Context.csproj" />
   <Project Path="Nebula.Runner/Nebula.Runner.csproj" />
+  <Project Path="Nebula.Services/Nebula.Services.csproj" />
 </Solution>

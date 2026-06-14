@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -23,6 +23,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Nebula.Agent\Nebula.Agent.csproj" />
+    <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
+    <ProjectReference Include="..\Nebula.Services\Nebula.Services.csproj" />
   </ItemGroup>
 
   <ItemGroup>

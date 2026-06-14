@@ -100,3 +100,44 @@ A central em `Nebula.App` mostra:
 - troca de modelo na sessao
 - resposta, raciocinio e passos executados
 - perfis de aceleracao disponiveis
+
+## Classificação e autorização de comandos
+
+A segurança de comandos usa regras determinísticas como primeira camada, ML.NET apenas como
+sinal auxiliar para casos ambíguos e um policy engine separado para produzir `Allow`,
+`AskApproval` ou `Block`. Se o modelo ML.NET não existir, as regras continuam funcionando
+normalmente.
+
+Para treinar ou regenerar o modelo a partir do CSV versionado:
+
+```powershell
+dotnet run --project Nebula.Cli -- --train-command-safety
+```
+
+O arquivo padrão é salvo em `models/command-safety-classifier.zip`. Os caminhos podem ser
+sobrescritos pelas variáveis `COMMAND_SAFETY_TRAINING_DATA` e `COMMAND_SAFETY_MODEL`.
+
+## Pesquisa e aprendizado gratuito
+
+O Learning Engine usa `WebResearch:Provider=Free` por padrão. Esse modo consulta primeiro
+documentação oficial conhecida e usa busca HTML do Bing apenas como fallback, sem API key.
+As páginas são baixadas por HTTP, limitadas a uma requisição por segundo por domínio,
+extraídas com HtmlAgilityPack e armazenadas no cache PostgreSQL por sete dias.
+
+```json
+{
+  "WebResearch": {
+    "Provider": "Free",
+    "ApiKey": "",
+    "MaxResults": 5,
+    "TimeoutSeconds": 20,
+    "CacheDays": 7,
+    "RateLimitMilliseconds": 1000
+  }
+}
+```
+
+Também estão disponíveis `DirectDocumentation`, `BingHtml`, `Disabled` e o provider
+opcional `Brave`. O funcionamento padrão não depende de Brave, SerpAPI, Tavily ou chave
+paga. Quando um mecanismo devolve CAPTCHA ou nenhuma página real, o Nebula registra a
+falha e não cria fontes ou conhecimento fictícios.

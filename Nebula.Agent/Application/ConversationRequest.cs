@@ -1,21 +1,26 @@
 using Nebula.Agent.Data;
-using Nebula.Llama.Client;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Application;
 
 internal sealed record ConversationRequest(
     Guid ConversationId,
     Guid RequestId,
-    string Prompt,
+    UserMessage Message,
     string ModelName)
 {
-    public PromptRequest CreatePromptRequest(ClassificationResult classification)
+    public string Prompt => Message.Content;
+
+    public InteractionMode Mode => Message.Mode;
+
+    public PromptRequest CreatePromptRequest()
     {
         return new PromptRequest
         {
             Id = RequestId,
             Prompt = Prompt,
-            Classification = classification.ToString()
+            Mode = Mode,
+            Classification = Mode.ToString()
         };
     }
 
@@ -29,23 +34,11 @@ internal sealed record ConversationRequest(
             ConversationId = ConversationId,
             RequestId = RequestId,
             Prompt = Prompt,
+            Mode = InteractionMode.Agent,
             ChatHistoryContext = chatHistoryContext,
             ModelName = ModelName,
             MaxSteps = maxSteps,
             MaxRetriesPerStep = maxRetriesPerStep
-        };
-    }
-
-    public ConversationTurn CreateUnknownClassificationTurn()
-    {
-        return new ConversationTurn
-        {
-            ConversationId = ConversationId,
-            RequestId = RequestId,
-            Prompt = Prompt,
-            ModelName = ModelName,
-            Classification = ClassificationResult.Unknown.ToString(),
-            Response = "Unable to classify the prompt. Please try again with a clearer request."
         };
     }
 }

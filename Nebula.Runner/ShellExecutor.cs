@@ -1,28 +1,63 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+
+using Nebula.Core.Commands;
 
 namespace Nebula.Runner;
 
-public class ShellExecutor : IShellExecutor
+public class ShellExecutor : IResolvedCommandExecutor
 {
+    private readonly IRuntimeCommandEnvironmentDetector environmentDetector;
+
+    public ShellExecutor(IRuntimeCommandEnvironmentDetector? environmentDetector = null)
+    {
+        this.environmentDetector =
+            environmentDetector ?? new RuntimeCommandEnvironmentDetector();
+    }
+
     public async Task<string> RunCommandAsync(string command)
     {
         return await RunCommandAsync(command, CancellationToken.None);
     }
 
-    public async Task<string> RunCommandAsync(string command, CancellationToken cancellationToken)
+    public async Task<string> RunCommandAsync(
+        string command,
+        CancellationToken cancellationToken)
     {
-        Console.WriteLine($"Command: {command}");
+        var result = await RunCommandDetailedAsync(
+            command,
+            Environment.CurrentDirectory,
+            cancellationToken);
+        return result.CombinedOutput;
+    }
+
+    public async Task<ShellCommandResult> RunCommandDetailedAsync(
+        string command,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var environment = environmentDetector.Detect(workingDirectory);
+        var resolved = ResolveLegacyCommand(command, environment);
+        return await RunCommandDetailedAsync(resolved, cancellationToken);
+    }
+
+    public async Task<ShellCommandResult> RunCommandDetailedAsync(
+        ResolvedCommand command,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
+        Console.WriteLine($"Command: {command.DisplayCommand}");
 
         var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = GetShell(),
-                Arguments = GetArguments(command),
+                FileName = command.FileName,
+                Arguments = command.Arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                WorkingDirectory = command.WorkingDirectory
             }
         };
 
@@ -41,7 +76,15 @@ public class ShellExecutor : IShellExecutor
             var output = await outputTask;
             var error = await errorTask;
 
-            return string.IsNullOrWhiteSpace(error) ? output : error;
+            return new ShellCommandResult
+            {
+                Command = command.DisplayCommand,
+                WorkingDirectory = command.WorkingDirectory,
+                StandardOutput = output,
+                StandardError = error,
+                ExitCode = process.ExitCode,
+                Timestamp = DateTimeOffset.UtcNow
+            };
         }
         catch (OperationCanceledException)
         {
@@ -61,21 +104,40 @@ public class ShellExecutor : IShellExecutor
         }
     }
 
-    private string GetShell()
+    private static ResolvedCommand ResolveLegacyCommand(
+        string command,
+        RuntimeCommandEnvironment environment)
     {
-        if (OperatingSystem.IsWindows())
-            return "cmd.exe";
-        else if (OperatingSystem.IsLinux())
-            return "/bin/bash";
-
-        return "/bin/sh";
+        return environment.Shell switch
+        {
+            ShellKind.PowerShell => new ResolvedCommand(
+                RuntimeCommandEnvironmentDetector.GetPowerShellExecutable()
+                    ?? "powershell.exe",
+                $"-NoProfile -ExecutionPolicy Bypass -Command \"{Escape(command)}\"",
+                command,
+                environment.WorkingDirectory,
+                ["Legacy command executed with detected PowerShell."]),
+            ShellKind.Cmd => new ResolvedCommand(
+                "cmd.exe",
+                $"/c {command}",
+                command,
+                environment.WorkingDirectory,
+                ["Legacy command executed with detected CMD."]),
+            ShellKind.Bash => new ResolvedCommand(
+                "/bin/bash",
+                $"-c \"{Escape(command)}\"",
+                command,
+                environment.WorkingDirectory,
+                ["Legacy command executed with detected bash."]),
+            _ => new ResolvedCommand(
+                "/bin/sh",
+                $"-c \"{Escape(command)}\"",
+                command,
+                environment.WorkingDirectory,
+                ["Legacy command executed with detected sh."])
+        };
     }
 
-    private string GetArguments(string command)
-    {
-        if (OperatingSystem.IsWindows())
-            return $"/c {command}";
-
-        return $"-c \"{command}\"";
-    }
+    private static string Escape(string command) =>
+        command.Replace("\"", "\\\"", StringComparison.Ordinal);
 }

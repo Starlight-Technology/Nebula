@@ -1,11 +1,16 @@
 using Nebula.Agent.Data;
+using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 
 namespace Nebula.Agent.Application;
 
-internal sealed record CommandValidation(bool Correct, bool Safe);
+internal sealed record CommandValidation(
+    bool Correct,
+    CommandSafetyDecision SafetyDecision);
 
-internal sealed class CommandValidationService(ILlamaClient llamaClient)
+internal sealed class CommandValidationService(
+    ILlamaClient llamaClient,
+    ICommandPolicyEngine commandPolicyEngine)
 {
     public async Task<CommandValidation> ValidateAsync(
         CommandExecution execution,
@@ -14,13 +19,13 @@ internal sealed class CommandValidationService(ILlamaClient llamaClient)
         cancellationToken.ThrowIfCancellationRequested();
         execution.IsCorrect = await VerifyCorrectnessAsync(execution, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        execution.IsSafe = await VerifySafetyAsync(execution, cancellationToken);
-        execution.PassedLocalSafety = PlatformDetector.IsCommandContentSafe(execution.Run);
-        execution.Notes = BuildVerificationNotes(execution);
 
-        return new CommandValidation(
-            execution.IsCorrect,
-            execution.IsSafe && execution.PassedLocalSafety);
+        var safetyDecision = await commandPolicyEngine.EvaluateAsync(execution.Run, cancellationToken);
+        execution.IsSafe = safetyDecision.Decision == CommandSafetyDecisionType.Allow;
+        execution.PassedLocalSafety = execution.IsSafe;
+        execution.Notes = BuildVerificationNotes(execution, safetyDecision);
+
+        return new CommandValidation(execution.IsCorrect, safetyDecision);
     }
 
     private async Task<bool> VerifyCorrectnessAsync(
@@ -39,53 +44,24 @@ internal sealed class CommandValidationService(ILlamaClient llamaClient)
         return AgentActionRunner.IsAffirmativeResponse(response);
     }
 
-    private async Task<bool> VerifySafetyAsync(
+    internal static string BuildVerificationNotes(CommandExecution execution) =>
+        execution.Notes ?? (execution.IsSafe
+            ? "Aprovado pelo policy engine de comandos."
+            : "Bloqueado pelo policy engine de comandos.");
+
+    private static string BuildVerificationNotes(
         CommandExecution execution,
-        CancellationToken cancellationToken)
+        CommandSafetyDecision safetyDecision)
     {
-        var response = await llamaClient.GetResponseAsync(
-            $$"""
-            Response only with "Yes" or "No". Is this command safe and allowed to execute on {{PlatformDetector.GetCurrentOsType()}}?
-            Command: {{execution.Run}}
-            """,
-            progress: null,
-            cancellationToken);
+        var safetySummary =
+            $"decision={safetyDecision.Decision}; intent={safetyDecision.Intent}; " +
+            $"confidence={safetyDecision.Confidence:F3}; reasons={string.Join(" | ", safetyDecision.Reasons)}";
 
-        return AgentActionRunner.IsAffirmativeResponse(response);
-    }
-
-    internal static string BuildVerificationNotes(CommandExecution execution)
-    {
-        if (execution.IsCorrect && execution.IsSafe && execution.PassedLocalSafety)
+        if (!execution.IsCorrect)
         {
-            return "Aprovado pela verificacao do modelo e pela protecao local.";
+            return $"O modelo não confirmou que o comando atende ao objetivo; {safetySummary}";
         }
 
-        var failures = new List<string>();
-        AddFailure(
-            failures,
-            !execution.IsCorrect,
-            "o modelo nao confirmou que o comando atende ao objetivo");
-        AddFailure(
-            failures,
-            !execution.IsSafe,
-            "o modelo nao considerou o comando seguro");
-        AddFailure(
-            failures,
-            !execution.PassedLocalSafety,
-            "a protecao local bloqueou um padrao de comando perigoso");
-
-        return $"Passo bloqueado porque {string.Join("; ", failures)}.";
-    }
-
-    private static void AddFailure(
-        List<string> failures,
-        bool condition,
-        string message)
-    {
-        if (condition)
-        {
-            failures.Add(message);
-        }
+        return safetySummary;
     }
 }

@@ -2,8 +2,11 @@ using System.Text.RegularExpressions;
 
 using Nebula.Agent.Application;
 using Nebula.Agent.Data;
+using Nebula.Core.Interactions;
+using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
+using Nebula.Services.Safety;
 
 namespace Nebula.Agent;
 
@@ -11,8 +14,8 @@ public class Manager : IManager
 {
     private readonly ILlamaClient llamaClient;
     private readonly ILogger logger;
+    private readonly ICommandPolicyEngine commandPolicyEngine;
     private readonly IAgentActionRunner actionRunner;
-    private readonly PromptClassifier promptClassifier;
     private readonly ChatResponseService chatResponseService;
     private readonly IConversationContextService conversationContextService;
     private readonly PromptRequestAuditService promptAuditService;
@@ -32,20 +35,22 @@ public class Manager : IManager
         int maxActionRetries = 5,
         int maxActionSteps = AgentActionRunRequest.DefaultMaxSteps,
         IAgentActionRunner? actionRunner = null,
-        IConversationContextService? conversationContextService = null)
+        IConversationContextService? conversationContextService = null,
+        ICommandPolicyEngine? commandPolicyEngine = null)
     {
         this.llamaClient = llamaClient;
         this.logger = logger;
+        this.commandPolicyEngine = commandPolicyEngine ?? CreateDefaultPolicyEngine(logger);
         this.actionRunner = actionRunner ?? new AgentActionRunner(
             llamaClient,
             executor,
             jsonExtractor,
             logger,
             commandRepository,
-            maxActionRetries);
+            maxActionRetries,
+            commandPolicyEngine: this.commandPolicyEngine);
 
         var conversationContextBuilder = contextBuilder ?? new NebulaContextBuilder();
-        promptClassifier = new PromptClassifier(llamaClient, logger);
         chatResponseService = new ChatResponseService(llamaClient);
         this.conversationContextService = conversationContextService
             ?? new ConversationContextService(
@@ -59,15 +64,15 @@ public class Manager : IManager
 
     public Guid ActiveConversationId => activeConversationId;
 
-    public async Task<string> ManageResponse(string prompt)
+    public async Task<string> ManageResponse(UserMessage message)
     {
-        var turn = await ManageConversationAsync(prompt);
+        var turn = await ManageConversationAsync(message);
         return turn.Response;
     }
 
-    public Task<ConversationTurn> ManageConversationAsync(string prompt)
+    public Task<ConversationTurn> ManageConversationAsync(UserMessage message)
     {
-        return ManageConversationAsync(prompt, progress: null, cancellationToken: default);
+        return ManageConversationAsync(message, progress: null, cancellationToken: default);
     }
 
     public Guid StartNewConversation()
@@ -78,19 +83,21 @@ public class Manager : IManager
     }
 
     public async Task<ConversationTurn> ManageConversationAsync(
-        string prompt,
+        UserMessage message,
         IProgress<ConversationTurn>? progress,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
+        ArgumentNullException.ThrowIfNull(message);
+
+        if (string.IsNullOrWhiteSpace(message.Content))
         {
-            return CreateEmptyPromptTurn(prompt);
+            return CreateEmptyPromptTurn(message);
         }
 
         var request = new ConversationRequest(
             activeConversationId,
             Guid.NewGuid(),
-            prompt,
+            message with { Content = message.Content.Trim() },
             llamaClient.SelectedModel);
 
         try
@@ -99,12 +106,15 @@ public class Manager : IManager
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.Log($"Request '{request.RequestId}' for ConversationId '{request.ConversationId}' was cancelled.");
+            logger.Log(
+                $"{ModePrefix(request.Mode)} Request '{request.RequestId}' for " +
+                $"ConversationId '{request.ConversationId}' was cancelled.");
             throw;
         }
         catch (Exception ex)
         {
-            logger.LogError($"Error managing response: {ex.Message}");
+            logger.LogError(
+                $"{ModePrefix(request.Mode)} Error managing response: {ex.Message}");
             throw;
         }
     }
@@ -121,12 +131,8 @@ public class Manager : IManager
 
     public async Task<bool> VerifyCommandSafetyAsync(Command command)
     {
-        var response = await llamaClient.GetResponseAsync(
-            $$"""
-            Response only with "Yes" or "No". Is the following command safe to execute on {{(OperatingSystem.IsWindows() ? "Windows" : "Linux")}}? Command: {{command.Run}}
-            """);
-
-        return IsAffirmativeResponse(response);
+        var decision = await commandPolicyEngine.EvaluateAsync(command.Run);
+        return decision.Decision == CommandSafetyDecisionType.Allow;
     }
 
     public async Task<string> GenerateCommandSteps(string userRequest)
@@ -143,21 +149,21 @@ public class Manager : IManager
         CancellationToken cancellationToken)
     {
         logger.Log(
-            $"Using ConversationId '{request.ConversationId}' for request '{request.RequestId}'.");
+            $"{ModePrefix(request.Mode)} Using ConversationId '{request.ConversationId}' " +
+            $"for request '{request.RequestId}'.");
 
         var conversationContext = await conversationContextService.PrepareAsync(
             request.ConversationId,
             request.Prompt,
+            request.Mode,
             cancellationToken);
-        var classification = await promptClassifier.ClassifyAsync(request.Prompt);
-        var promptRequest = request.CreatePromptRequest(classification);
+        var promptRequest = request.CreatePromptRequest();
 
         await promptAuditService.SaveAsync(promptRequest, cancellationToken);
 
         var turn = await CreateTurnAsync(
             request,
             conversationContext.ModelPrompt,
-            classification,
             progress,
             cancellationToken);
 
@@ -174,25 +180,27 @@ public class Manager : IManager
     private Task<ConversationTurn> CreateTurnAsync(
         ConversationRequest request,
         string modelPrompt,
-        ClassificationResult classification,
         IProgress<ConversationTurn>? progress,
         CancellationToken cancellationToken)
     {
-        return classification switch
+        return request.Mode switch
         {
-            ClassificationResult.Action => actionRunner.RunAsync(
+            InteractionMode.Agent => actionRunner.RunAsync(
                 request.CreateActionRequest(
                     modelPrompt,
                     maxActionStepCount,
                     maxActionRetryCount),
                 progress,
                 cancellationToken),
-            ClassificationResult.Chat => chatResponseService.GetResponseAsync(
+            InteractionMode.Chat => chatResponseService.GetResponseAsync(
                 request,
                 modelPrompt,
                 progress,
                 cancellationToken),
-            _ => Task.FromResult(request.CreateUnknownClassificationTurn())
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(request.Mode),
+                request.Mode,
+                "Unsupported interaction mode.")
         };
     }
 
@@ -210,6 +218,7 @@ public class Manager : IManager
         await promptAuditService.UpdateResponseAsync(
             request.RequestId,
             turn.Response,
+            request.Mode,
             cancellationToken);
         await conversationContextService.CompleteAsync(
             conversationContext,
@@ -218,17 +227,30 @@ public class Manager : IManager
             cancellationToken);
     }
 
-    private ConversationTurn CreateEmptyPromptTurn(string prompt)
+    private ConversationTurn CreateEmptyPromptTurn(UserMessage message)
     {
         return new ConversationTurn
         {
             ConversationId = activeConversationId,
             RequestId = Guid.Empty,
-            Prompt = prompt,
+            Prompt = message.Content,
+            Mode = message.Mode,
             ModelName = llamaClient.SelectedModel,
-            Classification = ClassificationResult.Unknown.ToString(),
+            Classification = message.Mode.ToString(),
             Response = "The prompt are empty, write something."
         };
+    }
+
+    private static string ModePrefix(InteractionMode mode) =>
+        mode == InteractionMode.Agent ? "[AGENT]" : "[CHAT]";
+
+    private static ICommandPolicyEngine CreateDefaultPolicyEngine(ILogger logger)
+    {
+        var deterministic = new DeterministicCommandClassifier();
+        var ml = new MlNetCommandClassifier();
+        return new CommandPolicyEngine(
+            new CompositeCommandClassifier(deterministic, ml),
+            message => logger.Log($"[AGENT] {message}"));
     }
 
     private static bool IsAffirmativeResponse(string rawResponse)

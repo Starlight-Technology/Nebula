@@ -1,3 +1,5 @@
+using Nebula.Core.Interactions;
+
 namespace Nebula.Agent.Data;
 
 /// <summary>
@@ -8,7 +10,8 @@ public class PromptRequest
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Prompt { get; set; } = string.Empty;
-    public string Classification { get; set; } = string.Empty; // "Action", "Chat", "Unknown"
+    public InteractionMode Mode { get; set; }
+    public string Classification { get; set; } = string.Empty;
     public string? Response { get; set; } = null;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

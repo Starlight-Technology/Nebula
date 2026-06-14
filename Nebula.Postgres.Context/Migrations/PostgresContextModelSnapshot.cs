@@ -64,6 +64,9 @@ namespace Nebula.Postgres.Context.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("ConversationContextId")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("ConversationId")
                         .HasColumnType("uuid");
 
@@ -112,6 +115,243 @@ namespace Nebula.Postgres.Context.Migrations
                     b.HasIndex("UpdatedAt");
 
                     b.ToTable("conversation_states", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.FetchedPageCache", b =>
+                {
+                    b.Property<string>("Url")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Html")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("HtmlHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("RetrievedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Url");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("fetched_page_cache", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeExperiment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CommandExecuted")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("EvidenceHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("KnowledgeItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("StdErr")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StdOut")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TestCode")
+                        .HasColumnType("text");
+
+                    b.Property<string>("VerificationKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KnowledgeItemId");
+
+                    b.ToTable("knowledge_experiments", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeFact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double>("Confidence")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Fact")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("KnowledgeItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SourceUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KnowledgeItemId");
+
+                    b.HasIndex("SourceUrl");
+
+                    b.ToTable("knowledge_facts", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double>("ClassificationConfidence")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Domain")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Examples")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<double>("FinalScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Language")
+                        .HasColumnType("text");
+
+                    b.Property<string>("NormalizedCommand")
+                        .HasColumnType("text");
+
+                    b.Property<string>("OS")
+                        .HasColumnType("text");
+
+                    b.Property<double>("SafetyScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Shell")
+                        .HasColumnType("text");
+
+                    b.Property<double>("SourceScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("SourceUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Topic")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<double>("VerificationScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Warnings")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Domain");
+
+                    b.HasIndex("FinalScore");
+
+                    b.HasIndex("Topic");
+
+                    b.ToTable("knowledge_items", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeSource", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ExtractedContent")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("KnowledgeItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Publisher")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("RetrievedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<double>("TrustScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KnowledgeItemId");
+
+                    b.HasIndex("Url");
+
+                    b.ToTable("knowledge_sources", (string)null);
                 });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.Request", b =>
@@ -212,6 +452,39 @@ namespace Nebula.Postgres.Context.Migrations
                     b.Navigation("Command");
                 });
 
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeExperiment", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.KnowledgeItem", "KnowledgeItem")
+                        .WithMany("Experiments")
+                        .HasForeignKey("KnowledgeItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("KnowledgeItem");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeFact", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.KnowledgeItem", "KnowledgeItem")
+                        .WithMany("Facts")
+                        .HasForeignKey("KnowledgeItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("KnowledgeItem");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeSource", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.KnowledgeItem", "KnowledgeItem")
+                        .WithMany("Sources")
+                        .HasForeignKey("KnowledgeItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("KnowledgeItem");
+                });
+
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.StoredCommand", b =>
                 {
                     b.HasOne("Nebula.Postgres.Context.Entities.Request", "Request")
@@ -221,6 +494,15 @@ namespace Nebula.Postgres.Context.Migrations
                         .IsRequired();
 
                     b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeItem", b =>
+                {
+                    b.Navigation("Experiments");
+
+                    b.Navigation("Facts");
+
+                    b.Navigation("Sources");
                 });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.Request", b =>

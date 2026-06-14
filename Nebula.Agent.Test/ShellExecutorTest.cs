@@ -1,4 +1,5 @@
 using Nebula.Runner;
+using Nebula.Services.Commands;
 
 namespace Nebula.Agent.Test;
 
@@ -32,6 +33,54 @@ public class ShellExecutorTest
         // Assert
         // The result should contain error information (either stderr or empty depending on OS handling)
         Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task run_command_detailed_async_must_capture_stdout_stderr_exit_code_and_timestamp()
+    {
+        var executor = new ShellExecutor();
+        var environment = new RuntimeCommandEnvironmentDetector()
+            .Detect(Environment.CurrentDirectory);
+        var command = environment.Shell == Nebula.Core.Commands.ShellKind.PowerShell
+            ? "Write-Output 'output'; [Console]::Error.WriteLine('error'); exit 7"
+            : OperatingSystem.IsWindows()
+                ? "echo output & echo error 1>&2 & exit /b 7"
+                : "echo output; echo error >&2; exit 7";
+
+        var result = await executor.RunCommandDetailedAsync(
+            command,
+            Environment.CurrentDirectory,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(7, result.ExitCode);
+        Assert.Contains("output", result.StandardOutput);
+        Assert.Contains("error", result.StandardError);
+        Assert.Equal(Path.GetFullPath(Environment.CurrentDirectory), result.WorkingDirectory);
+        Assert.NotEqual(default, result.Timestamp);
+    }
+
+    [Fact]
+    public async Task resolved_directory_command_must_execute_with_detected_shell()
+    {
+        var detector = new RuntimeCommandEnvironmentDetector();
+        var environment = detector.Detect(Environment.CurrentDirectory);
+        var parser = new CommandIntentParser();
+        var resolver = new CommandResolver();
+        var request = parser.Parse(
+            "List files in the current directory.",
+            environment.OS == Nebula.Core.Commands.OperatingSystemKind.Windows ? "dir" : "ls",
+            environment.WorkingDirectory);
+        var resolved = resolver.Resolve(request, environment);
+        var executor = new ShellExecutor(detector);
+
+        var result = await executor.RunCommandDetailedAsync(
+            resolved,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.CombinedOutput);
+        Assert.Contains("Nebula.Agent.Test.dll", result.StandardOutput);
+        Assert.Equal(resolved.DisplayCommand, result.Command);
     }
 
     [Theory]
