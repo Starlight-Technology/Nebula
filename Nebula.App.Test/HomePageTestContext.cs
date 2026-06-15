@@ -10,6 +10,7 @@ using Nebula.Agent;
 using Nebula.App.Shared.Pages;
 using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
+using Nebula.Core.Configuration;
 using Nebula.Llama.Client;
 
 namespace Nebula.App.Test;
@@ -27,6 +28,11 @@ public abstract class HomePageTestContext : BunitContext
         Services.AddSingleton(manager);
         Services.AddSingleton(llamaClient);
         Services.AddSingleton(advisor ?? new RuntimeSetupAdvisor("Test shell"));
+        Services.AddScoped(_ => new NebulaRuntimeSettings
+        {
+            MainModel = llamaClient.SelectedModel,
+            LearningModel = llamaClient.SelectedModel
+        });
         Services.AddScoped<NebulaWorkspaceState>();
 
         var module = JSInterop.SetupModule("./_content/Nebula.App.Shared/nebula-runtime.js");

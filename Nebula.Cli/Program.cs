@@ -8,6 +8,7 @@ using Nebula.Agent.Data;
 using Nebula.Core.Commands;
 using Nebula.Core.Interactions;
 using Nebula.Core.Learning;
+using Nebula.Core.MachineLearning;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
@@ -30,17 +31,47 @@ if (args.Contains("--train-command-safety", StringComparer.OrdinalIgnoreCase))
 {
     var trainingDataPath = configuration["COMMAND_SAFETY_TRAINING_DATA"]
         ?? Path.Combine(Environment.CurrentDirectory, "Nebula.Services", "Safety", "Training", "command-training-data.csv");
-    var modelPath = configuration["COMMAND_SAFETY_MODEL"]
-        ?? Path.Combine(Environment.CurrentDirectory, "models", "command-safety-classifier.zip");
-    var savedModel = new CommandSafetyTrainer().Train(trainingDataPath, modelPath);
-    Console.WriteLine($"Command safety model saved to '{savedModel}'.");
+    var pgConnection = configuration["POSTGRES_CONNECTION"]
+        ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
+    var options = new DbContextOptionsBuilder<PostgresContext>()
+        .UseNpgsql(pgConnection)
+        .Options;
+    await using var context = new PostgresContext(options);
+    await PostgresDatabaseInitializer.InitializeAsync(context);
+
+    var version = int.TryParse(
+        configuration["COMMAND_SAFETY_MODEL_VERSION"],
+        out var configuredVersion)
+        ? configuredVersion
+        : checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    var result = await new CommandSafetyTrainer().TrainAndSaveAsync(
+        trainingDataPath,
+        version,
+        new PostgresMlModelStore(context));
+
+    var fallbackModelPath =
+        configuration["Nebula:CommandSafety:FallbackModelPath"] ??
+        configuration["COMMAND_SAFETY_MODEL"];
+    if (!string.IsNullOrWhiteSpace(fallbackModelPath))
+    {
+        var fullFallbackPath = Path.GetFullPath(fallbackModelPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullFallbackPath)!);
+        await File.WriteAllBytesAsync(fullFallbackPath, result.ModelData);
+        Console.WriteLine(
+            $"Optional command safety fallback saved to '{fullFallbackPath}'.");
+    }
+
+    Console.WriteLine(
+        $"Command safety model version {result.Version} saved to PostgreSQL. " +
+        $"Accuracy={result.Metrics.Accuracy:F4}; " +
+        $"F1={result.Metrics.F1Score:F4}; active={result.Activated}.");
     return;
 }
 
 var services = new ServiceCollection();
 
 // registre suas interfaces aqui
-services.AddSingleton<ILlamaClient, LlamaClient>();
+services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
 services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
 services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
@@ -53,19 +84,21 @@ services.AddSingleton<IJsonExtractor, JsonExtractor>();
 services.AddSingleton<ILogger, ConsoleLogger>();
 services.AddSingleton<DeterministicCommandClassifier>(_ =>
     new DeterministicCommandClassifier(Environment.CurrentDirectory));
-services.AddSingleton<MlNetCommandClassifier>(provider =>
+services.AddScoped<MlNetCommandClassifier>(provider =>
     new MlNetCommandClassifier(
-        configuration["COMMAND_SAFETY_MODEL"],
+        provider.GetRequiredService<IMlModelStore>(),
+        configuration["Nebula:CommandSafety:FallbackModelPath"] ??
+            configuration["COMMAND_SAFETY_MODEL"],
         provider.GetRequiredService<ILogger>().Log));
-services.AddSingleton<ICommandClassifier>(provider =>
+services.AddScoped<ICommandClassifier>(provider =>
     new CompositeCommandClassifier(
         provider.GetRequiredService<DeterministicCommandClassifier>(),
         provider.GetRequiredService<MlNetCommandClassifier>()));
-services.AddSingleton<ICommandPolicyEngine>(provider =>
+services.AddScoped<ICommandPolicyEngine>(provider =>
     new CommandPolicyEngine(
         provider.GetRequiredService<ICommandClassifier>(),
         provider.GetRequiredService<ILogger>().Log));
-services.AddSingleton<IOperationPolicyEngine>(provider =>
+services.AddScoped<IOperationPolicyEngine>(provider =>
     new OperationPolicyEngine(
         provider.GetRequiredService<ICommandPolicyEngine>(),
         provider.GetRequiredService<ILogger>().Log));
@@ -108,6 +141,7 @@ catch (Exception ex)
 
 var pgConn = configuration["POSTGRES_CONNECTION"] ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
 services.AddDbContext<PostgresContext>(opts => opts.UseNpgsql(pgConn));
+services.AddScoped<IMlModelStore, PostgresMlModelStore>();
 services.AddScoped<ICommandRepository, PostgresCommandRepository>();
 services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
 services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();

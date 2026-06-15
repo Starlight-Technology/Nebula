@@ -65,3 +65,10 @@ export function getClientEnvironment() {
         viewportHeight: window.innerHeight || 0
     };
 }
+
+export function scrollToElement(element) {
+    element?.scrollIntoView({
+        block: "end",
+        inline: "nearest"
+    });
+}

@@ -2,9 +2,40 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
+using Nebula.Core.Configuration;
 using Nebula.Core.Learning;
 
 namespace Nebula.Services.Learning;
+
+public sealed class ConfigurableWebResearchService(
+    NebulaRuntimeSettings runtimeSettings,
+    WebResearchOptions configuredOptions,
+    FreeWebResearchService freeService,
+    BraveWebResearchService braveService,
+    DisabledWebResearchService disabledService,
+    WebResearchLogSink? logSink = null) : IWebResearchService
+{
+    public Task<IReadOnlyList<ResearchResult>> SearchAsync(
+        string topic,
+        KnowledgeDomain domain,
+        CancellationToken cancellationToken)
+    {
+        var provider = string.IsNullOrWhiteSpace(runtimeSettings.WebResearchProvider)
+            ? configuredOptions.Provider
+            : runtimeSettings.WebResearchProvider;
+
+        return provider.Trim().ToLowerInvariant() switch
+        {
+            "brave" => braveService.SearchAsync(topic, domain, cancellationToken),
+            "free" or "bing" or "binghtml" or "directdocumentation" =>
+                freeService.SearchAsync(topic, domain, cancellationToken),
+            "disabled" or "" =>
+                disabledService.SearchAsync(topic, domain, cancellationToken),
+            _ => new UnsupportedWebResearchService(provider, logSink)
+                .SearchAsync(topic, domain, cancellationToken)
+        };
+    }
+}
 
 public sealed class DisabledWebResearchService(
     WebResearchLogSink? logSink = null) : IWebResearchService

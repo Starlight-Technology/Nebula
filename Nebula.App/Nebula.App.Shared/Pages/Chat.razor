@@ -1,7 +1,8 @@
 @page "/chat"
-@implements IDisposable
+@implements IAsyncDisposable
 @inject NebulaWorkspaceState WorkspaceState
 @inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
 @using Nebula.Core.Interactions
 
 <CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell nebula-chat-page">
@@ -23,6 +24,11 @@
             <CoronaButton Variant="CoronaButtonVariant.Outlined"
                           Color="CoronaColorSemantic.Neutral"
                           Icon="@CoronaIcons.Gear"
+                          OnClick="NavigateToSettings">
+                Configurar
+            </CoronaButton>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
                           OnClick="NavigateToModels">
                 Modelos
             </CoronaButton>
@@ -127,17 +133,6 @@
                                 else if (turn.Result is null)
                                 {
                                     <div class="nebula-response-stack">
-                                        @if (!string.IsNullOrWhiteSpace(turn.StreamingResponse))
-                                        {
-                                            <section class="nebula-panel-section">
-                                                <div class="nebula-panel-section__header">
-                                                    <CoronaBadge Content="Resposta parcial" Variant="CoronaBadgeVariant.Soft" />
-                                                </div>
-
-                                                <div class="nebula-rich-text">@turn.StreamingResponse</div>
-                                            </section>
-                                        }
-
                                         @if (!string.IsNullOrWhiteSpace(turn.StreamingReasoning))
                                         {
                                             <details class="nebula-think-panel" open>
@@ -150,6 +145,17 @@
 
                                                 <div class="nebula-rich-text nebula-rich-text--reasoning">@turn.StreamingReasoning</div>
                                             </details>
+                                        }
+
+                                        @if (!string.IsNullOrWhiteSpace(turn.StreamingResponse))
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="Resposta parcial" Variant="CoronaBadgeVariant.Soft" />
+                                                </div>
+
+                                                <div class="nebula-rich-text">@turn.StreamingResponse</div>
+                                            </section>
                                         }
 
                                         @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
@@ -217,6 +223,17 @@
                                 else
                                 {
                                     <div class="nebula-response-stack">
+                                        <details class="nebula-think-panel" open="@turn.ShowReasoning">
+                                            <summary class="nebula-think-panel__summary">
+                                                <span>Raciocinio</span>
+                                                <CoronaBadge Content="@turn.Result.ModelName"
+                                                             Variant="CoronaBadgeVariant.Outlined"
+                                                             Color="CoronaColorSemantic.Neutral" />
+                                            </summary>
+
+                                            <div class="nebula-rich-text nebula-rich-text--reasoning">@NebulaWorkspaceState.GetReasoningText(turn.Result)</div>
+                                        </details>
+
                                         <section class="nebula-panel-section">
                                             <div class="nebula-panel-section__header">
                                                 <CoronaBadge Content="Resposta" Variant="CoronaBadgeVariant.Soft" />
@@ -274,17 +291,6 @@
                                             </section>
                                         }
 
-                                        <details class="nebula-think-panel" open="@turn.ShowReasoning">
-                                            <summary class="nebula-think-panel__summary">
-                                                <span>Raciocinio</span>
-                                                <CoronaBadge Content="@turn.Result.ModelName"
-                                                             Variant="CoronaBadgeVariant.Outlined"
-                                                             Color="CoronaColorSemantic.Neutral" />
-                                            </summary>
-
-                                            <div class="nebula-rich-text nebula-rich-text--reasoning">@NebulaWorkspaceState.GetReasoningText(turn.Result)</div>
-                                        </details>
-
                                         @if (turn.Result.Commands.Count > 0)
                                         {
                                             <section class="nebula-panel-section">
@@ -341,6 +347,10 @@
                         </div>
                     </article>
                 }
+
+                <div class="nebula-scroll-anchor"
+                     aria-hidden="true"
+                     @ref="scrollAnchor"></div>
             </section>
 
             <CoronaCard Class="@WorkspaceState.GetComposerCardClass()">
@@ -447,6 +457,10 @@
 </CoronaContainer>
 
 @code {
+    private ElementReference scrollAnchor;
+    private IJSObjectReference? runtimeModule;
+    private bool autoScrollRequested;
+
     protected override void OnInitialized()
     {
         WorkspaceState.Changed += HandleWorkspaceChanged;
@@ -457,9 +471,40 @@
         await WorkspaceState.EnsureRuntimeAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!autoScrollRequested)
+        {
+            return;
+        }
+
+        autoScrollRequested = false;
+
+        try
+        {
+            runtimeModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import",
+                "./_content/Nebula.App.Shared/nebula-runtime.js");
+            await runtimeModule.InvokeVoidAsync("scrollToElement", scrollAnchor);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The browser circuit closed while the chat was rendering.
+        }
+        catch (InvalidOperationException)
+        {
+            // JavaScript interop is unavailable during prerendering or disposal.
+        }
+    }
+
     private void NavigateToModels()
     {
         NavigationManager.NavigateTo("/models");
+    }
+
+    private void NavigateToSettings()
+    {
+        NavigationManager.NavigateTo("/settings");
     }
 
     private string GetModeButtonClass(InteractionMode mode)
@@ -471,11 +516,31 @@
 
     private void HandleWorkspaceChanged()
     {
-        _ = InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(() =>
+        {
+            autoScrollRequested = true;
+            StateHasChanged();
+        });
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         WorkspaceState.Changed -= HandleWorkspaceChanged;
+
+        if (runtimeModule is not null)
+        {
+            try
+            {
+                await runtimeModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The browser circuit was already disconnected during disposal.
+            }
+            catch (InvalidOperationException)
+            {
+                // The JavaScript module is no longer available.
+            }
+        }
     }
 }

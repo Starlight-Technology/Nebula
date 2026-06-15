@@ -56,6 +56,35 @@ public class LlamaClientTest
 
         Assert.NotNull(capturedPayload);
         Assert.Contains(@"""think"":false", capturedPayload, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""format"":""json""", capturedPayload, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""num_predict"":384", capturedPayload, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Extract structured knowledge only from the supplied sources.\nReturn only JSON with this shape:")]
+    [InlineData("You are Nebula's ReAct action controller.\nRespond ONLY with valid JSON and no markdown.")]
+    public async Task get_response_async_must_use_json_mode_without_thinking_for_structured_prompts(string prompt)
+    {
+        string? capturedPayload = null;
+
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"response":"{}","done":true}""", Encoding.UTF8, "application/json")
+            };
+        });
+
+        var client = new LlamaClient(new HttpClient(handler), defaultModel: "mock-model");
+
+        await client.GetResponseAsync(prompt);
+
+        Assert.NotNull(capturedPayload);
+        Assert.Contains(@"""think"":false", capturedPayload, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""format"":""json""", capturedPayload, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""num_predict"":384", capturedPayload, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -92,6 +121,39 @@ public class LlamaClientTest
         Assert.Equal(2, capturedPayloads.Count);
         Assert.Contains(@"""think"":true", capturedPayloads[0], StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"""think"":false", capturedPayloads[1], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task get_response_async_must_use_the_requested_model_override()
+    {
+        string? capturedPayload = null;
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"response":"ok","done":true}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        var client = new LlamaClient(
+            new HttpClient(handler),
+            defaultModel: "chat-model");
+
+        await client.GetResponseAsync(
+            "Extraia conhecimento",
+            "learning-model",
+            progress: null,
+            CancellationToken.None);
+
+        Assert.NotNull(capturedPayload);
+        Assert.Contains(
+            @"""model"":""learning-model""",
+            capturedPayload,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("chat-model", client.SelectedModel);
     }
 
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler

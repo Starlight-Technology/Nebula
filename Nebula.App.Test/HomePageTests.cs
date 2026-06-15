@@ -1,8 +1,11 @@
 using Bunit;
 
+using Microsoft.Extensions.DependencyInjection;
+
 using Nebula.Agent;
 using Nebula.App.Shared.Pages;
 using Nebula.App.Shared.Setup;
+using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 using Nebula.Llama.Client;
 
@@ -24,6 +27,7 @@ public sealed class HomePageTests : HomePageTestContext
                     Mode = InteractionMode.Chat,
                     ModelName = "qwen3:8b",
                     Classification = InteractionMode.Chat.ToString(),
+                    Response = "Resposta parcial do mock",
                     Reasoning = "Raciocinio parcial do mock"
                 });
 
@@ -43,6 +47,7 @@ public sealed class HomePageTests : HomePageTestContext
             Assert.Contains("Preparando resposta de conversa", component.Markup);
             Assert.Contains("Explique a arquitetura", component.Markup);
             Assert.Contains("Raciocinio parcial do mock", component.Markup);
+            AssertReasoningBeforeResponse(component);
         });
 
         completion.SetResult(new ConversationTurn
@@ -60,6 +65,7 @@ public sealed class HomePageTests : HomePageTestContext
             Assert.Contains("Resposta do mock", component.Markup);
             Assert.Contains("Raciocinio do mock", component.Markup);
             Assert.DoesNotContain("Preparando resposta de conversa", component.Markup);
+            AssertReasoningBeforeResponse(component);
         });
     }
 
@@ -181,6 +187,41 @@ public sealed class HomePageTests : HomePageTestContext
         });
     }
 
+    [Fact]
+    public void quick_settings_must_save_language_provider_and_gpu_preferences()
+    {
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Preferencias do Nebula", component.Markup);
+            Assert.Contains("Modelo de aprendizado", component.Markup);
+        });
+
+        component.Find("input[value='BingHtml']").Change("BingHtml");
+        component.FindAll(".nebula-settings-field select")[2].Change("nvidia");
+        component.FindAll(".nebula-settings-field select")[3].Change("es-ES");
+        component.FindAll("button")
+            .Single(button => button.TextContent.Contains(
+                "Salvar configuracao",
+                StringComparison.OrdinalIgnoreCase))
+            .Click();
+
+        component.WaitForAssertion(() =>
+        {
+            var settings = Services.GetRequiredService<NebulaRuntimeSettings>();
+            Assert.Equal("BingHtml", settings.WebResearchProvider);
+            Assert.Equal("nvidia", settings.AccelerationProfile);
+            Assert.Equal("es-ES", settings.ResponseLanguageCode);
+            Assert.Equal("Espanol", settings.ResponseLanguageName);
+            Assert.Contains(
+                JSInterop.Invocations,
+                invocation => invocation.Identifier == "localStorage.setItem");
+            Assert.Contains("Configuracao salva e aplicada", component.Markup);
+        });
+    }
+
     private static AngleSharp.Dom.IElement FindModeButton(
         IRenderedComponent<Chat> component,
         string label)
@@ -189,6 +230,15 @@ public sealed class HomePageTests : HomePageTestContext
             .Single(button => button.TextContent.Trim().Equals(
                 label,
                 StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void AssertReasoningBeforeResponse(
+        IRenderedComponent<Chat> component)
+    {
+        var responseStack = component.Find(".nebula-response-stack");
+        Assert.True(responseStack.Children.Length >= 2);
+        Assert.Equal("DETAILS", responseStack.Children[0].TagName);
+        Assert.Equal("SECTION", responseStack.Children[1].TagName);
     }
 
     private sealed class FakeManager : IManager

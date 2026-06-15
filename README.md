@@ -108,14 +108,18 @@ sinal auxiliar para casos ambíguos e um policy engine separado para produzir `A
 `AskApproval` ou `Block`. Se o modelo ML.NET não existir, as regras continuam funcionando
 normalmente.
 
-Para treinar ou regenerar o modelo a partir do CSV versionado:
+Para treinar ou regenerar o modelo a partir do CSV versionado e persisti-lo
+no PostgreSQL:
 
 ```powershell
 dotnet run --project Nebula.Cli -- --train-command-safety
 ```
 
-O arquivo padrão é salvo em `models/command-safety-classifier.zip`. Os caminhos podem ser
-sobrescritos pelas variáveis `COMMAND_SAFETY_TRAINING_DATA` e `COMMAND_SAFETY_MODEL`.
+O modelo ativo é carregado primeiro do PostgreSQL. O arquivo configurado em
+`Nebula:CommandSafety:FallbackModelPath` é usado apenas como fallback opcional.
+No treinamento, `COMMAND_SAFETY_MODEL` pode ser definido para também gerar esse arquivo.
+O CSV e a versão podem ser sobrescritos por `COMMAND_SAFETY_TRAINING_DATA` e
+`COMMAND_SAFETY_MODEL_VERSION`.
 
 ## Pesquisa e aprendizado gratuito
 

@@ -1,6 +1,7 @@
 using System.Text;
 
 using Nebula.Agent.Data;
+using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 
 namespace Nebula.Agent;
@@ -55,10 +56,14 @@ public class NebulaContextBuilder
         """;
 
     private readonly ConversationContextOptions options;
+    private readonly NebulaRuntimeSettings runtimeSettings;
 
-    public NebulaContextBuilder(ConversationContextOptions? options = null)
+    public NebulaContextBuilder(
+        ConversationContextOptions? options = null,
+        NebulaRuntimeSettings? runtimeSettings = null)
     {
         this.options = options ?? new ConversationContextOptions();
+        this.runtimeSettings = runtimeSettings ?? new NebulaRuntimeSettings();
     }
 
     public int RecentMessageLimit => Math.Max(1, options.MaxRecentMessages);
@@ -110,7 +115,7 @@ public class NebulaContextBuilder
         return selected;
     }
 
-    private static void AppendSystemPrompt(
+    private void AppendSystemPrompt(
         StringBuilder context,
         InteractionMode mode)
     {
@@ -121,6 +126,8 @@ public class NebulaContextBuilder
             mode == InteractionMode.Agent
                 ? AgentModePrompt.Trim()
                 : ChatModePrompt.Trim());
+        context.AppendLine();
+        context.AppendLine(runtimeSettings.BuildResponseLanguageInstruction());
         context.AppendLine();
     }
 

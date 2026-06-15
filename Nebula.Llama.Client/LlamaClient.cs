@@ -9,6 +9,7 @@ public class LlamaClient : ILlamaClient
 {
     private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
     private const string DefaultModel = "deepseek-r1:7b";
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -21,7 +22,10 @@ public class LlamaClient : ILlamaClient
 
     public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null)
     {
-        this.httpClient = httpClient ?? new HttpClient();
+        this.httpClient = httpClient ?? new HttpClient
+        {
+            Timeout = DefaultRequestTimeout
+        };
         LlamaUrl = llamaUrl
             ?? Environment.GetEnvironmentVariable("LLAMA_URL")
             ?? DefaultGenerateUrl;
@@ -47,10 +51,24 @@ public class LlamaClient : ILlamaClient
         IProgress<LlamaStreamUpdate>? progress,
         CancellationToken cancellationToken = default)
     {
+        return await GetResponseAsync(
+            prompt,
+            modelName: null,
+            progress,
+            cancellationToken);
+    }
+
+    public async Task<string> GetResponseAsync(
+        string prompt,
+        string? modelName,
+        IProgress<LlamaStreamUpdate>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
 
         return await SendGenerateRequestAsync(
             prompt,
+            modelName,
             think: !ShouldDisableThinking(prompt),
             progress: progress,
             cancellationToken: cancellationToken);
@@ -58,6 +76,7 @@ public class LlamaClient : ILlamaClient
 
     private async Task<string> SendGenerateRequestAsync(
         string prompt,
+        string? modelName,
         string? systemPrompt = null,
         bool think = true,
         IProgress<LlamaStreamUpdate>? progress = null,
@@ -65,16 +84,17 @@ public class LlamaClient : ILlamaClient
     {
         try
         {
-            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think, progress, cancellationToken);
+            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think, progress, cancellationToken);
         }
         catch (InvalidOperationException ex) when (think && IsThinkingUnsupportedError(ex.Message))
         {
-            return await SendGenerateRequestCoreAsync(prompt, systemPrompt, think: false, progress, cancellationToken);
+            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think: false, progress, cancellationToken);
         }
     }
 
     private async Task<string> SendGenerateRequestCoreAsync(
         string prompt,
+        string? modelName,
         string? systemPrompt,
         bool think,
         IProgress<LlamaStreamUpdate>? progress,
@@ -86,11 +106,17 @@ public class LlamaClient : ILlamaClient
         {
             Content = JsonContent.Create(new LlamaGenerateRequest
             {
-                Model = SelectedModel,
+                Model = string.IsNullOrWhiteSpace(modelName)
+                    ? SelectedModel
+                    : modelName.Trim(),
                 Prompt = prompt,
                 Stream = true,
                 Think = think,
-                System = systemPrompt
+                System = systemPrompt,
+                Format = ShouldUseJsonFormat(prompt) ? "json" : null,
+                Options = ShouldUseJsonFormat(prompt)
+                    ? new LlamaGenerateOptions()
+                    : null
             })
         };
 
@@ -367,8 +393,17 @@ public class LlamaClient : ILlamaClient
     {
         var normalized = prompt.TrimStart();
 
-        return normalized.StartsWith("You are a command planner.", StringComparison.Ordinal)
+        return ShouldUseJsonFormat(prompt)
             || normalized.StartsWith("Response only with \"Yes\" or \"No\".", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldUseJsonFormat(string prompt)
+    {
+        var normalized = prompt.TrimStart();
+
+        return normalized.StartsWith("You are a command planner.", StringComparison.Ordinal)
+            || normalized.Contains("Respond ONLY with valid JSON", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("Return only JSON", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsThinkingUnsupportedError(string message)
@@ -393,6 +428,23 @@ public class LlamaClient : ILlamaClient
 
         [JsonPropertyName("think")]
         public bool Think { get; set; }
+
+        [JsonPropertyName("format")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Format { get; set; }
+
+        [JsonPropertyName("options")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public LlamaGenerateOptions? Options { get; set; }
+    }
+
+    private sealed class LlamaGenerateOptions
+    {
+        [JsonPropertyName("temperature")]
+        public double Temperature { get; set; }
+
+        [JsonPropertyName("num_predict")]
+        public int NumPredict { get; set; } = 384;
     }
 
     private sealed class LlamaGenerateChunk

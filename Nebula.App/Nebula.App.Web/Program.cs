@@ -12,7 +12,9 @@ using Nebula.App.Shared.State;
 using Nebula.App.Web.Components;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Commands;
+using Nebula.Core.Configuration;
 using Nebula.Core.Learning;
+using Nebula.Core.MachineLearning;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
@@ -30,9 +32,30 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
-builder.Services.AddSingleton<ILlamaClient, LlamaClient>();
+builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
 builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
 builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Web app"));
+builder.Services.AddScoped(_ => new NebulaRuntimeSettings
+{
+    MainModel =
+        builder.Configuration["LLAMA_MODEL"] ??
+        builder.Configuration["OLLAMA_MODEL"] ??
+        string.Empty,
+    LearningModel =
+        builder.Configuration["LEARNING_MODEL"] ??
+        builder.Configuration["LLAMA_MODEL"] ??
+        builder.Configuration["OLLAMA_MODEL"] ??
+        string.Empty,
+    WebResearchProvider =
+        builder.Configuration["WebResearch:Provider"] ??
+        NebulaRuntimeSettings.DefaultWebResearchProvider,
+    ResponseLanguageCode =
+        builder.Configuration["Nebula:ResponseLanguageCode"] ??
+        NebulaRuntimeSettings.DefaultLanguageCode,
+    ResponseLanguageName =
+        builder.Configuration["Nebula:ResponseLanguageName"] ??
+        NebulaRuntimeSettings.DefaultLanguageName
+});
 builder.Services.AddScoped<NebulaWorkspaceState>();
 builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
 builder.Services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
@@ -48,19 +71,21 @@ builder.Services.AddSingleton<DeterministicCommandClassifier>(provider =>
     new DeterministicCommandClassifier(
         Environment.CurrentDirectory,
         provider.GetRequiredService<IScriptContentSafetyClassifier>()));
-builder.Services.AddSingleton<MlNetCommandClassifier>(provider =>
+builder.Services.AddScoped<MlNetCommandClassifier>(provider =>
     new MlNetCommandClassifier(
-        builder.Configuration["COMMAND_SAFETY_MODEL"],
+        provider.GetRequiredService<IMlModelStore>(),
+        builder.Configuration["Nebula:CommandSafety:FallbackModelPath"] ??
+            builder.Configuration["COMMAND_SAFETY_MODEL"],
         provider.GetRequiredService<Nebula.Agent.ILogger>().Log));
-builder.Services.AddSingleton<ICommandClassifier>(provider =>
+builder.Services.AddScoped<ICommandClassifier>(provider =>
     new CompositeCommandClassifier(
         provider.GetRequiredService<DeterministicCommandClassifier>(),
         provider.GetRequiredService<MlNetCommandClassifier>()));
-builder.Services.AddSingleton<ICommandPolicyEngine>(provider =>
+builder.Services.AddScoped<ICommandPolicyEngine>(provider =>
     new CommandPolicyEngine(
         provider.GetRequiredService<ICommandClassifier>(),
         provider.GetRequiredService<Nebula.Agent.ILogger>().Log));
-builder.Services.AddSingleton<IOperationPolicyEngine>(provider =>
+builder.Services.AddScoped<IOperationPolicyEngine>(provider =>
     new OperationPolicyEngine(
         provider.GetRequiredService<ICommandPolicyEngine>(),
         provider.GetRequiredService<Nebula.Agent.ILogger>().Log));
@@ -104,6 +129,7 @@ catch (Exception ex)
 
 var pgConn = builder.Configuration["POSTGRES_CONNECTION"] ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
 builder.Services.AddDbContext<PostgresContext>(options => options.UseNpgsql(pgConn));
+builder.Services.AddScoped<IMlModelStore, PostgresMlModelStore>();
 builder.Services.AddScoped<ICommandRepository, PostgresCommandRepository>();
 builder.Services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
 builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
@@ -118,6 +144,13 @@ builder.Services.AddScoped<IManager, Manager>();
 builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
 var app = builder.Build();
+
+await using (var migrationScope = app.Services.CreateAsyncScope())
+{
+    var postgresContext =
+        migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
+    await PostgresDatabaseInitializer.InitializeAsync(postgresContext);
+}
 
 if (app.Environment.IsDevelopment())
 {

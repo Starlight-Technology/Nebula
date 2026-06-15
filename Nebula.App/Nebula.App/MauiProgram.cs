@@ -12,7 +12,9 @@ using Nebula.Agent.Data;
 using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
 using Nebula.Core.Commands;
+using Nebula.Core.Configuration;
 using Nebula.Core.Learning;
+using Nebula.Core.MachineLearning;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
@@ -45,9 +47,30 @@ public static class MauiProgram
         builder.Logging.AddDebug();
 #endif
 
-        builder.Services.AddSingleton<ILlamaClient, LlamaClient>();
+        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
         builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
         builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
+        builder.Services.AddScoped(_ => new NebulaRuntimeSettings
+        {
+            MainModel =
+                Environment.GetEnvironmentVariable("LLAMA_MODEL") ??
+                Environment.GetEnvironmentVariable("OLLAMA_MODEL") ??
+                string.Empty,
+            LearningModel =
+                Environment.GetEnvironmentVariable("LEARNING_MODEL") ??
+                Environment.GetEnvironmentVariable("LLAMA_MODEL") ??
+                Environment.GetEnvironmentVariable("OLLAMA_MODEL") ??
+                string.Empty,
+            WebResearchProvider =
+                Environment.GetEnvironmentVariable("WebResearch__Provider") ??
+                NebulaRuntimeSettings.DefaultWebResearchProvider,
+            ResponseLanguageCode =
+                Environment.GetEnvironmentVariable("NEBULA_RESPONSE_LANGUAGE_CODE") ??
+                NebulaRuntimeSettings.DefaultLanguageCode,
+            ResponseLanguageName =
+                Environment.GetEnvironmentVariable("NEBULA_RESPONSE_LANGUAGE_NAME") ??
+                NebulaRuntimeSettings.DefaultLanguageName
+        });
         builder.Services.AddScoped<NebulaWorkspaceState>();
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
         builder.Services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
@@ -63,19 +86,23 @@ public static class MauiProgram
             new DeterministicCommandClassifier(
                 Environment.CurrentDirectory,
                 provider.GetRequiredService<IScriptContentSafetyClassifier>()));
-        builder.Services.AddSingleton<MlNetCommandClassifier>(provider =>
+        builder.Services.AddScoped<MlNetCommandClassifier>(provider =>
             new MlNetCommandClassifier(
-                Environment.GetEnvironmentVariable("COMMAND_SAFETY_MODEL"),
+                provider.GetRequiredService<IMlModelStore>(),
+                builder.Configuration[
+                    "Nebula:CommandSafety:FallbackModelPath"] ??
+                    Environment.GetEnvironmentVariable(
+                        "COMMAND_SAFETY_MODEL"),
                 provider.GetRequiredService<Agent.ILogger>().Log));
-        builder.Services.AddSingleton<ICommandClassifier>(provider =>
+        builder.Services.AddScoped<ICommandClassifier>(provider =>
             new CompositeCommandClassifier(
                 provider.GetRequiredService<DeterministicCommandClassifier>(),
                 provider.GetRequiredService<MlNetCommandClassifier>()));
-        builder.Services.AddSingleton<ICommandPolicyEngine>(provider =>
+        builder.Services.AddScoped<ICommandPolicyEngine>(provider =>
             new CommandPolicyEngine(
                 provider.GetRequiredService<ICommandClassifier>(),
                 provider.GetRequiredService<Agent.ILogger>().Log));
-        builder.Services.AddSingleton<IOperationPolicyEngine>(provider =>
+        builder.Services.AddScoped<IOperationPolicyEngine>(provider =>
             new OperationPolicyEngine(
                 provider.GetRequiredService<ICommandPolicyEngine>(),
                 provider.GetRequiredService<Agent.ILogger>().Log));
@@ -121,6 +148,7 @@ public static class MauiProgram
         var pgConn = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION")
             ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
         builder.Services.AddDbContext<PostgresContext>(options => options.UseNpgsql(pgConn));
+        builder.Services.AddScoped<IMlModelStore, PostgresMlModelStore>();
         builder.Services.AddScoped<ICommandRepository, PostgresCommandRepository>();
         builder.Services.AddScoped<IPromptRequestStore, PostgresPromptRequestRepository>();
         builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>();
@@ -135,6 +163,15 @@ public static class MauiProgram
 
         builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
-        return builder.Build();
+        var app = builder.Build();
+
+        using (var migrationScope = app.Services.CreateScope())
+        {
+            var postgresContext =
+                migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
+            PostgresDatabaseInitializer.Initialize(postgresContext);
+        }
+
+        return app;
     }
 }

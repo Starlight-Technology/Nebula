@@ -1,4 +1,5 @@
 using Nebula.Agent.Data;
+using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Test;
@@ -147,6 +148,33 @@ public sealed class NebulaContextBuilderTest
         Assert.Contains("AGENT MODE", context);
         Assert.Contains("Colete evidências", context, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("CHAT MODE", context);
+    }
+
+    [Fact]
+    public void build_must_require_the_configured_response_language()
+    {
+        var conversationId = Guid.NewGuid();
+        var currentMessage = CreateMessage(
+            conversationId,
+            ConversationRoles.User,
+            "Explain this project",
+            1);
+        var settings = new NebulaRuntimeSettings
+        {
+            ResponseLanguageCode = "es-ES",
+            ResponseLanguageName = "Espanol"
+        };
+
+        var context = new NebulaContextBuilder(
+            runtimeSettings: settings).Build(
+                conversationId,
+                state: null,
+                [currentMessage],
+                currentMessage,
+                InteractionMode.Chat);
+
+        Assert.Contains("Espanol", context);
+        Assert.Contains("es-ES", context);
     }
 
     private static ConversationMessage CreateMessage(

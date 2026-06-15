@@ -31,33 +31,9 @@ public static class WebResearchServiceCollectionExtensions
         services.AddTransient<IPageFetcher>(provider =>
             provider.GetRequiredService<CachedPageFetcher>());
         services.AddTransient<FreeSearchProvider>();
-        services.AddTransient<ISearchProvider>(provider =>
-            options.Provider.Trim().ToLowerInvariant() switch
-            {
-                "directdocumentation" =>
-                    provider.GetRequiredService<DirectDocumentationProvider>(),
-                "bing" or "binghtml" =>
-                    provider.GetRequiredService<BingHtmlSearchProvider>(),
-                _ => provider.GetRequiredService<FreeSearchProvider>()
-            });
-        services.AddTransient<FreeWebResearchService>();
-        services.AddTransient<IWebResearchService>(provider =>
-            options.Provider.Trim().ToLowerInvariant() switch
-            {
-                "brave" =>
-                    provider.GetRequiredService<BraveWebResearchService>(),
-                "free" or "bing" or "binghtml" or "directdocumentation" =>
-                    provider.GetRequiredService<FreeWebResearchService>(),
-                "disabled" or "" =>
-                    provider.GetRequiredService<DisabledWebResearchService>(),
-                "serpapi" =>
-                    new UnsupportedWebResearchService(
-                        options.Provider,
-                        provider.GetRequiredService<WebResearchLogSink>()),
-                _ => new UnsupportedWebResearchService(
-                    options.Provider,
-                    provider.GetRequiredService<WebResearchLogSink>())
-            });
+        services.AddScoped<ISearchProvider, ConfigurableSearchProvider>();
+        services.AddScoped<FreeWebResearchService>();
+        services.AddScoped<IWebResearchService, ConfigurableWebResearchService>();
 
         return services;
     }

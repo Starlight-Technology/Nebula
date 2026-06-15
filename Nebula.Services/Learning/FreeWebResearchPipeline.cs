@@ -8,9 +8,36 @@ using System.Text.RegularExpressions;
 
 using HtmlAgilityPack;
 
+using Nebula.Core.Configuration;
 using Nebula.Core.Learning;
 
 namespace Nebula.Services.Learning;
+
+public sealed class ConfigurableSearchProvider(
+    NebulaRuntimeSettings runtimeSettings,
+    WebResearchOptions configuredOptions,
+    DirectDocumentationProvider directProvider,
+    BingHtmlSearchProvider bingProvider,
+    FreeSearchProvider freeProvider) : ISearchProvider
+{
+    public Task<IReadOnlyList<SearchResult>> SearchAsync(
+        string query,
+        CancellationToken cancellationToken)
+    {
+        var provider = string.IsNullOrWhiteSpace(runtimeSettings.WebResearchProvider)
+            ? configuredOptions.Provider
+            : runtimeSettings.WebResearchProvider;
+
+        return provider.Trim().ToLowerInvariant() switch
+        {
+            "directdocumentation" =>
+                directProvider.SearchAsync(query, cancellationToken),
+            "bing" or "binghtml" =>
+                bingProvider.SearchAsync(query, cancellationToken),
+            _ => freeProvider.SearchAsync(query, cancellationToken)
+        };
+    }
+}
 
 public sealed class DirectDocumentationProvider : ISearchProvider
 {

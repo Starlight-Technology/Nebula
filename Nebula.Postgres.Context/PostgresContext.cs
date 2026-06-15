@@ -19,6 +19,7 @@ public class PostgresContext : DbContext
     public DbSet<KnowledgeSource> KnowledgeSources { get; set; } = null!;
     public DbSet<KnowledgeFact> KnowledgeFacts { get; set; } = null!;
     public DbSet<FetchedPageCache> FetchedPageCaches { get; set; } = null!;
+    public DbSet<MlModelArtifact> MlModelArtifacts { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -181,6 +182,22 @@ public class PostgresContext : DbContext
             b.Property(x => x.Html).IsRequired();
             b.Property(x => x.HtmlHash).IsRequired();
             b.HasIndex(x => x.ExpiresAt);
+        });
+
+        modelBuilder.Entity<MlModelArtifact>(b =>
+        {
+            b.ToTable("ml_model_artifacts");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.ModelData).HasColumnType("bytea").IsRequired();
+            b.Property(x => x.SchemaJson).HasColumnType("jsonb");
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.IsActive).HasDefaultValue(false);
+
+            b.HasIndex(x => new { x.Name, x.Version }).IsUnique();
+            b.HasIndex(x => x.Name)
+                .IsUnique()
+                .HasFilter("\"IsActive\" = TRUE");
         });
     }
 }

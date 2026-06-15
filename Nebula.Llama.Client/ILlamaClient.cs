@@ -13,6 +13,15 @@ public interface ILlamaClient
         IProgress<LlamaStreamUpdate>? progress,
         CancellationToken cancellationToken = default);
 
+    Task<string> GetResponseAsync(
+        string prompt,
+        string? modelName,
+        IProgress<LlamaStreamUpdate>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        return GetResponseAsync(prompt, progress, cancellationToken);
+    }
+
     Task<LlamaRuntimeState> GetRuntimeStateAsync(bool forceRefresh = false, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<LlamaModelInfo>> GetInstalledModelsAsync(bool forceRefresh = false, CancellationToken cancellationToken = default);

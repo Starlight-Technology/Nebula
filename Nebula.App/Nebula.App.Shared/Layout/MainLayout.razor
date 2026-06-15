@@ -7,6 +7,7 @@
 @implements IDisposable
 @inject ILlamaRuntimeTelemetryService RuntimeTelemetryService
 @inject CoronaThemeProvider ThemeProvider
+@inject NebulaWorkspaceState WorkspaceState
 
 <CoronaThemeCascadingValue>
     <CoronaLayoutShell DrawerTitle="Nebula"
@@ -101,6 +102,12 @@
                 Text = "Runtime",
                 Url = "/runtime",
                 Icon = CoronaIcons.Cogs
+            },
+            new CoronaNavItem
+            {
+                Text = "Configuracao",
+                Url = "/settings",
+                Icon = CoronaIcons.Gear
             }
         ];
     }
@@ -109,6 +116,7 @@
     {
         if (firstRender)
         {
+            _ = WorkspaceState.EnsureSettingsLoadedAsync();
             _ = StartTelemetryLoopAsync(telemetryCancellation.Token);
         }
 

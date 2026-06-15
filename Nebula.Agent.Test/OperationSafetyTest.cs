@@ -124,6 +124,7 @@ public sealed class OperationSafetyTest
         var policy = new CommandPolicyEngine(
             new CompositeCommandClassifier(deterministic, ml));
 
+        await ml.ClassifyAsync("an ambiguous command");
         var decision = await policy.EvaluateAsync(
             $"python \"{scriptPath}\"");
 
@@ -131,7 +132,7 @@ public sealed class OperationSafetyTest
         Assert.Contains(
             logs,
             message => message.Contains(
-                "ML.NET command model was not found",
+                "Deterministic rules remain active",
                 StringComparison.Ordinal));
     }
 

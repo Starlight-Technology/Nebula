@@ -8,6 +8,7 @@ using Nebula.Agent.Data;
 using Nebula.Agent.Domain;
 using Nebula.Agent.Infrastructure;
 using Nebula.Core.Commands;
+using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 using Nebula.Core.Learning;
 using Nebula.Core.Operations;
@@ -46,6 +47,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IExecutionEvidenceCollector evidenceCollector;
     private readonly ILearningEngine learningEngine;
     private readonly IKnowledgeQueryService knowledgeQueryService;
+    private readonly NebulaRuntimeSettings runtimeSettings;
     private readonly int defaultMaxRetriesPerStep;
     private readonly int defaultMaxSteps;
 
@@ -67,7 +69,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
         IOperationPolicyEngine? operationPolicyEngine = null,
         IExecutionEvidenceCollector? evidenceCollector = null,
         ILearningEngine? learningEngine = null,
-        IKnowledgeQueryService? knowledgeQueryService = null)
+        IKnowledgeQueryService? knowledgeQueryService = null,
+        NebulaRuntimeSettings? runtimeSettings = null)
     {
         this.llamaClient = llamaClient;
         this.executor = executor;
@@ -108,6 +111,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.knowledgeQueryService =
             knowledgeQueryService ??
             new KnowledgeQueryService(fallbackKnowledgeStore, logger);
+        this.runtimeSettings = runtimeSettings ?? new NebulaRuntimeSettings();
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -165,7 +169,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
         var decisionPrompt = CreateDecisionPrompt(
             request,
-            environmentDetector.Detect(Environment.CurrentDirectory));
+            environmentDetector.Detect(Environment.CurrentDirectory),
+            runtimeSettings.BuildResponseLanguageInstruction());
         var rawResponse = await llamaClient.GetResponseAsync(
             decisionPrompt,
             progress: null,
@@ -924,7 +929,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             var reflectionPrompt = CreateErrorReflectionPrompt(
                 execution,
                 decisionRequest.CurrentPlan,
-                session.ExecutionHistory.Entries);
+                session.ExecutionHistory.Entries,
+                runtimeSettings.BuildResponseLanguageInstruction());
             var rawResponse = await llamaClient.GetResponseAsync(
                 reflectionPrompt,
                 progress: null,
@@ -975,7 +981,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private static string CreateErrorReflectionPrompt(
         CommandExecution execution,
         string currentPlan,
-        IReadOnlyList<ExecutionHistoryEntry> history)
+        IReadOnlyList<ExecutionHistoryEntry> history,
+        string responseLanguageInstruction)
     {
         return $$"""
             You are Nebula's ErrorReflectionStep.
@@ -984,6 +991,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
             The next command must be different from the failed command.
             Diagnose the likely cause from stdout, stderr and exit code.
             Revise the failed plan step instead of continuing the old plan blindly.
+            {{responseLanguageInstruction}}
             Respond ONLY with valid JSON and no markdown.
 
             Response format:
@@ -1086,7 +1094,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     {
         return new LearningEngine(
             new DisabledWebResearchService(),
-            new LlamaKnowledgeExtractor(llamaClient, jsonExtractor),
+            new LlamaKnowledgeExtractor(llamaClient, jsonExtractor, runtimeSettings),
             new KnowledgeClassificationPipeline(
                 log: message => logger.Log($"[AGENT] {message}")),
             knowledgeStore,
@@ -1383,7 +1391,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
     private static string CreateDecisionPrompt(
         AgentActionDecisionRequest request,
-        RuntimeCommandEnvironment environment)
+        RuntimeCommandEnvironment environment,
+        string responseLanguageInstruction)
     {
         return $$"""
             Você está em AGENT MODE.
@@ -1407,6 +1416,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
             Do not propose Unix-only commands such as ls, rm, chmod, chown, grep or cat on Windows.
             Never reveal chain-of-thought, hidden reasoning, or private analysis.
             The reasoningSummary must be a concise user-visible summary of the next practical need, at most two sentences.
+            {{responseLanguageInstruction}}
             Use the previous action result and accumulated observations to correct failures.
             When RetryNumber is greater than zero, correct the same logical step instead of silently skipping it.
             Você é um agente executor. Você deve observar o resultado real de cada comando antes de agir novamente.

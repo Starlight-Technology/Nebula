@@ -4,8 +4,11 @@ using Microsoft.JSInterop;
 
 using Nebula.Agent;
 using Nebula.App.Shared.Setup;
+using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 using Nebula.Llama.Client;
+
+using System.Text.Json;
 
 namespace Nebula.App.Shared.State;
 
@@ -13,13 +16,17 @@ public sealed class NebulaWorkspaceState(
     IManager manager,
     ILlamaClient llamaClient,
     IRuntimeSetupAdvisor runtimeSetupAdvisor,
-    IJSRuntime jsRuntime) : IDisposable, IAsyncDisposable
+    IJSRuntime jsRuntime,
+    NebulaRuntimeSettings runtimeSettings) : IDisposable, IAsyncDisposable
 {
+    private const string QuickSettingsStorageKey = "nebula.quick-settings.v1";
+
     private readonly List<ConversationEntryViewModel> turns = [];
     private readonly List<LlamaPullProgress> pullUpdates = [];
 
     private IJSObjectReference? environmentModule;
     private CancellationTokenSource? activeTurnCancellationSource;
+    private bool settingsLoaded;
     private bool isDisposed;
 
     public event Action? Changed;
@@ -72,9 +79,43 @@ public sealed class NebulaWorkspaceState(
             CoronaColorSemantic.Warning)
     ];
 
+    public IReadOnlyList<ResponseLanguageOption> ResponseLanguages { get; } =
+    [
+        new("pt-BR", "Portugues (Brasil)"),
+        new("en-US", "English (United States)"),
+        new("es-ES", "Espanol"),
+        new("fr-FR", "Francais"),
+        new("de-DE", "Deutsch"),
+        new("it-IT", "Italiano")
+    ];
+
+    public IReadOnlyList<WebResearchProviderOption> WebResearchProviders { get; } =
+    [
+        new("Free", "Automatico gratuito", "Documentacao direta com fallback para busca HTML do Bing."),
+        new("DirectDocumentation", "Documentacao direta", "Usa apenas fontes oficiais conhecidas pelo Nebula."),
+        new("BingHtml", "Bing HTML", "Pesquisa publica sem chave de API."),
+        new("Brave", "Brave Search", "Requer WebResearch:ApiKey configurada no servidor."),
+        new("Disabled", "Desativado", "Impede pesquisa web e aprendizado por fontes externas.")
+    ];
+
     public IReadOnlyList<ConversationEntryViewModel> Turns => turns;
 
     public IReadOnlyList<LlamaPullProgress> PullUpdates => pullUpdates;
+
+    public NebulaRuntimeSettings RuntimeSettings { get; } = runtimeSettings;
+
+    public QuickSettingsDraft QuickSettings { get; } = new()
+    {
+        MainModel = string.IsNullOrWhiteSpace(runtimeSettings.MainModel)
+            ? llamaClient.SelectedModel
+            : runtimeSettings.MainModel,
+        LearningModel = string.IsNullOrWhiteSpace(runtimeSettings.LearningModel)
+            ? llamaClient.SelectedModel
+            : runtimeSettings.LearningModel,
+        WebResearchProvider = runtimeSettings.WebResearchProvider,
+        AccelerationProfile = runtimeSettings.AccelerationProfile,
+        ResponseLanguageCode = runtimeSettings.ResponseLanguageCode
+    };
 
     public LlamaRuntimeState? RuntimeState { get; private set; }
 
@@ -92,6 +133,8 @@ public sealed class NebulaWorkspaceState(
 
     public string? EnvironmentDetectionError { get; private set; }
 
+    public string? SettingsFeedback { get; private set; }
+
     public bool IsSending { get; private set; }
 
     public bool IsRefreshingRuntime { get; private set; }
@@ -99,6 +142,10 @@ public sealed class NebulaWorkspaceState(
     public bool IsInstallingModel { get; private set; }
 
     public bool IsDetectingEnvironment { get; private set; }
+
+    public bool IsLoadingSettings { get; private set; }
+
+    public bool IsSavingSettings { get; private set; }
 
     public bool IsRuntimeOnline => RuntimeState?.IsAvailable == true;
 
@@ -130,6 +177,136 @@ public sealed class NebulaWorkspaceState(
     public async Task SendStarterAsync(string prompt)
     {
         await SubmitPromptAsync(prompt);
+    }
+
+    public async Task EnsureSettingsLoadedAsync()
+    {
+        if (settingsLoaded || IsLoadingSettings)
+        {
+            return;
+        }
+
+        IsLoadingSettings = true;
+        NotifyChanged();
+
+        try
+        {
+            var json = await jsRuntime.InvokeAsync<string?>(
+                "localStorage.getItem",
+                QuickSettingsStorageKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var snapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(json);
+                if (snapshot is not null)
+                {
+                    RuntimeSettings.Apply(snapshot);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(RuntimeSettings.MainModel))
+            {
+                RuntimeSettings.MainModel = llamaClient.SelectedModel;
+            }
+
+            if (string.IsNullOrWhiteSpace(RuntimeSettings.LearningModel))
+            {
+                RuntimeSettings.LearningModel = RuntimeSettings.MainModel;
+            }
+
+            SyncQuickSettingsDraft();
+            await ApplyConfiguredMainModelAsync();
+            settingsLoaded = true;
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or JsonException)
+        {
+            SettingsFeedback =
+                "Nao consegui carregar as preferencias salvas. Os valores padrao continuam ativos.";
+        }
+        finally
+        {
+            IsLoadingSettings = false;
+            NotifyChanged();
+        }
+    }
+
+    public async Task SaveQuickSettingsAsync()
+    {
+        if (IsSavingSettings)
+        {
+            return;
+        }
+
+        IsSavingSettings = true;
+        SettingsFeedback = null;
+        NotifyChanged();
+
+        try
+        {
+            var language = ResponseLanguages.FirstOrDefault(option =>
+                    option.Code.Equals(
+                        QuickSettings.ResponseLanguageCode,
+                        StringComparison.OrdinalIgnoreCase))
+                ?? ResponseLanguages[0];
+            var snapshot = new NebulaRuntimeSettingsSnapshot
+            {
+                MainModel = NormalizeModelSetting(
+                    QuickSettings.MainModel,
+                    llamaClient.SelectedModel),
+                LearningModel = NormalizeModelSetting(
+                    QuickSettings.LearningModel,
+                    QuickSettings.MainModel),
+                WebResearchProvider = QuickSettings.WebResearchProvider,
+                AccelerationProfile = QuickSettings.AccelerationProfile,
+                ResponseLanguageCode = language.Code,
+                ResponseLanguageName = language.Name
+            };
+
+            RuntimeSettings.Apply(snapshot);
+            SyncQuickSettingsDraft();
+            var modelApplied = await ApplyConfiguredMainModelAsync();
+            var json = JsonSerializer.Serialize(RuntimeSettings.CreateSnapshot());
+            await jsRuntime.InvokeVoidAsync(
+                "localStorage.setItem",
+                QuickSettingsStorageKey,
+                json);
+
+            settingsLoaded = true;
+            SettingsFeedback = modelApplied
+                ? "Configuracao salva e aplicada nesta sessao."
+                : $"Configuracao salva. O modelo {RuntimeSettings.MainModel} precisa estar instalado para ser ativado.";
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException)
+        {
+            SettingsFeedback = $"Nao consegui salvar a configuracao: {ex.Message}";
+        }
+        finally
+        {
+            IsSavingSettings = false;
+            NotifyChanged();
+        }
+    }
+
+    public void UseDetectedAccelerationProfile()
+    {
+        QuickSettings.AccelerationProfile =
+            SetupRecommendation?.ProfileKey ?? NebulaRuntimeSettings.DefaultAccelerationProfile;
+        NotifyChanged();
+    }
+
+    public string GetConfiguredAccelerationCommand()
+    {
+        if (QuickSettings.AccelerationProfile.Equals(
+                NebulaRuntimeSettings.DefaultAccelerationProfile,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupRecommendation?.Command ?? "Detectar automaticamente ao abrir Runtime";
+        }
+
+        return AccelerationProfiles.FirstOrDefault(profile =>
+                profile.Key.Equals(
+                    QuickSettings.AccelerationProfile,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.Command ?? "docker compose up -d";
     }
 
     public void SelectInteractionMode(InteractionMode mode)
@@ -630,6 +807,43 @@ public sealed class NebulaWorkspaceState(
         SetupRecommendation = runtimeSetupAdvisor.BuildRecommendation(EnvironmentProbe, llamaClient.LlamaUrl);
     }
 
+    private async Task<bool> ApplyConfiguredMainModelAsync()
+    {
+        if (string.IsNullOrWhiteSpace(RuntimeSettings.MainModel) ||
+            ModelNamesMatch(llamaClient.SelectedModel, RuntimeSettings.MainModel))
+        {
+            return true;
+        }
+
+        try
+        {
+            var selected = await llamaClient.SelectModelAsync(RuntimeSettings.MainModel);
+            if (selected)
+            {
+                RuntimeState = await llamaClient.GetRuntimeStateAsync(forceRefresh: true);
+            }
+
+            return selected;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private void SyncQuickSettingsDraft()
+    {
+        QuickSettings.MainModel = NormalizeModelSetting(
+            RuntimeSettings.MainModel,
+            llamaClient.SelectedModel);
+        QuickSettings.LearningModel = NormalizeModelSetting(
+            RuntimeSettings.LearningModel,
+            QuickSettings.MainModel);
+        QuickSettings.WebResearchProvider = RuntimeSettings.WebResearchProvider;
+        QuickSettings.AccelerationProfile = RuntimeSettings.AccelerationProfile;
+        QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
+    }
+
     private void NotifyChanged()
     {
         Changed?.Invoke();
@@ -641,6 +855,13 @@ public sealed class NebulaWorkspaceState(
         return trimmed.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
             ? trimmed[..^7]
             : trimmed;
+    }
+
+    private static string NormalizeModelSetting(string? modelName, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(modelName)
+            ? fallback.Trim()
+            : modelName.Trim();
     }
 
     private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
@@ -685,6 +906,29 @@ public sealed class ConversationEntryViewModel
 }
 
 public sealed record SuggestedModelOption(string Name, string Description);
+
+public sealed class QuickSettingsDraft
+{
+    public string MainModel { get; set; } = string.Empty;
+
+    public string LearningModel { get; set; } = string.Empty;
+
+    public string WebResearchProvider { get; set; } =
+        NebulaRuntimeSettings.DefaultWebResearchProvider;
+
+    public string AccelerationProfile { get; set; } =
+        NebulaRuntimeSettings.DefaultAccelerationProfile;
+
+    public string ResponseLanguageCode { get; set; } =
+        NebulaRuntimeSettings.DefaultLanguageCode;
+}
+
+public sealed record ResponseLanguageOption(string Code, string Name);
+
+public sealed record WebResearchProviderOption(
+    string Key,
+    string Name,
+    string Description);
 
 public sealed record AccelerationProfileOption(
     string Key,
