@@ -2,6 +2,7 @@ using Nebula.Agent.Domain;
 using Nebula.Core.Commands;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
+using Nebula.Core.Safety;
 
 namespace Nebula.Agent;
 
@@ -73,6 +74,12 @@ public class CommandExecution
 
     public double ClassificationConfidence { get; set; }
 
+    public CommandSafetyDecisionType? SafetyDecision { get; set; }
+
+    public bool ApprovedByUser { get; set; }
+
+    public bool AutoApproved { get; set; }
+
     public bool Required { get; set; } = true;
 
     public bool IsCorrect { get; set; }
@@ -124,6 +131,7 @@ public enum ActionExecutionEventKind
     PlanRevised,
     DeduplicationBlocked,
     RetryScheduled,
+    ApprovalGranted,
     Completed,
     Failed,
     Unsafe,

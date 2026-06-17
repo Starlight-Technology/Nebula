@@ -102,6 +102,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 message => logger.Log($"[AGENT] {message}"));
         this.evidenceCollector =
             evidenceCollector ?? new ExecutionEvidenceCollector();
+        this.runtimeSettings = runtimeSettings ?? new NebulaRuntimeSettings();
         var fallbackKnowledgeStore = new InMemoryKnowledgeStore();
         this.learningEngine =
             learningEngine ?? CreateDefaultLearningEngine(
@@ -111,7 +112,6 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.knowledgeQueryService =
             knowledgeQueryService ??
             new KnowledgeQueryService(fallbackKnowledgeStore, logger);
-        this.runtimeSettings = runtimeSettings ?? new NebulaRuntimeSettings();
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -122,6 +122,11 @@ public sealed class AgentActionRunner : IAgentActionRunner
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Prompt);
+
+        if (request.ApprovedAction is not null)
+        {
+            return await RunApprovedActionAsync(request, progress, cancellationToken);
+        }
 
         if (TryExtractKnowledgeTopic(request.Prompt, out var knowledgeTopic))
         {
@@ -182,6 +187,52 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
         ValidateDecision(decision);
         return decision;
+    }
+
+    private async Task<ConversationTurn> RunApprovedActionAsync(
+        AgentActionRunRequest request,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken)
+    {
+        var approved = request.ApprovedAction
+            ?? throw new InvalidOperationException("Approved action is required.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(approved.Command);
+
+        var session = new AgentActionSession(
+            request,
+            progress,
+            logger,
+            llamaClient.SelectedModel,
+            defaultMaxSteps,
+            defaultMaxRetriesPerStep);
+        session.EmitReasoning(
+            "Executando um comando aprovado explicitamente pela interface.");
+
+        var action = new AgentToolAction
+        {
+            Objective = string.IsNullOrWhiteSpace(approved.Objective)
+                ? "Executar comando aprovado"
+                : approved.Objective.Trim(),
+            Command = approved.Command.Trim(),
+            OperationKind = approved.OperationKind,
+            TargetPath = approved.TargetPath,
+            WorkingDirectory = approved.WorkingDirectory,
+            RequiresSafetyReview = true
+        };
+
+        var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
+        if (actionResult.TerminalTurn is not null)
+        {
+            return actionResult.TerminalTurn;
+        }
+
+        if (actionResult.RequiresRetry)
+        {
+            return session.FailRetryLimit(actionResult.Observation);
+        }
+
+        return session.Complete(
+            $"Comando aprovado executado. {actionResult.Observation}");
     }
 
     [Obsolete("Use GenerateNextStepAsync for ReAct execution.")]
@@ -367,15 +418,18 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 cancellationToken);
             if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             {
-                session.Commands.Add(execution);
-                return artifactDecision.Decision switch
+                if (!TryApplyApprovalOverride(session, execution, artifactDecision))
                 {
-                    CommandSafetyDecisionType.Block =>
-                        ActionAttemptResult.Terminal(
-                            session.BlockUnsafeCommand(execution)),
-                    _ => ActionAttemptResult.Terminal(
-                            session.RequestCommandApproval(execution))
-                };
+                    session.Commands.Add(execution);
+                    return artifactDecision.Decision switch
+                    {
+                        CommandSafetyDecisionType.Block =>
+                            ActionAttemptResult.Terminal(
+                                session.BlockUnsafeCommand(execution)),
+                        _ => ActionAttemptResult.Terminal(
+                                session.RequestCommandApproval(execution))
+                    };
+                }
             }
         }
 
@@ -404,15 +458,23 @@ public sealed class AgentActionRunner : IAgentActionRunner
                     "CommandSafetyClassifier",
                     validation.SafetyDecision.Reasons)),
             cancellationToken);
-        validation = new CommandValidation(validation.Correct, operationDecision);
+        var commandCorrect = session.Request.ApprovedAction is not null ||
+                             validation.Correct;
+        validation = new CommandValidation(commandCorrect, operationDecision);
+        execution.IsCorrect = commandCorrect;
         execution.IsSafe =
             operationDecision.Decision == CommandSafetyDecisionType.Allow;
         execution.PassedLocalSafety = execution.IsSafe;
         execution.ClassificationSource = "CommandSafetyClassifier";
         execution.ClassificationConfidence = operationDecision.Confidence;
+        execution.SafetyDecision = operationDecision.Decision;
         execution.Notes = BuildOperationVerificationNotes(
             execution,
             operationDecision);
+
+        var approvalOverrideApplied =
+            validation.SafetyDecision.Decision == CommandSafetyDecisionType.AskApproval &&
+            TryApplyApprovalOverride(session, execution, validation.SafetyDecision);
 
         await commandAuditService.SaveVerificationAsync(
             storedCommand?.Id,
@@ -431,7 +493,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             return ActionAttemptResult.Terminal(session.BlockUnsafeCommand(execution));
         }
 
-        if (validation.SafetyDecision.Decision == CommandSafetyDecisionType.AskApproval)
+        if (validation.SafetyDecision.Decision == CommandSafetyDecisionType.AskApproval &&
+            !approvalOverrideApplied)
         {
             return ActionAttemptResult.Terminal(session.RequestCommandApproval(execution));
         }
@@ -585,7 +648,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 session.BlockUnsafeCommand(execution));
         }
 
-        if (decision.Decision == CommandSafetyDecisionType.AskApproval)
+        if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
+            !TryApplyApprovalOverride(session, execution, decision))
         {
             return ActionAttemptResult.Terminal(
                 session.RequestCommandApproval(execution));
@@ -706,7 +770,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 session.BlockUnsafeCommand(execution));
         }
 
-        if (decision.Decision == CommandSafetyDecisionType.AskApproval)
+        if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
+            !TryApplyApprovalOverride(session, execution, decision))
         {
             return ActionAttemptResult.Terminal(
                 session.RequestCommandApproval(execution));
@@ -1058,10 +1123,19 @@ public sealed class AgentActionRunner : IAgentActionRunner
         AgentActionRunRequest request,
         CancellationToken cancellationToken)
     {
+        var learningObjective = StripLearningSourceBlocks(request.Prompt);
+        var sourceFilePaths = ExtractLearningSourceBlock(
+            request.Prompt,
+            "learning_source_files");
+        var sourceUrls = ExtractLearningSourceBlock(
+            request.Prompt,
+            "learning_source_sites");
         var report = await learningEngine.LearnAsync(
             new LearningRequest(
-                request.Prompt,
-                InferKnowledgeDomain(request.Prompt)),
+                learningObjective,
+                InferKnowledgeDomain(learningObjective),
+                SourceFilePaths: sourceFilePaths,
+                SourceUrls: sourceUrls),
             cancellationToken);
         var response = report.Success
             ? BuildLearningReport(report)
@@ -1087,14 +1161,55 @@ public sealed class AgentActionRunner : IAgentActionRunner
         };
     }
 
+    private static IReadOnlyList<string> ExtractLearningSourceBlock(
+        string prompt,
+        string blockName)
+    {
+        var pattern =
+            $@"\[{Regex.Escape(blockName)}\](?<content>.*?)\[/\s*{Regex.Escape(blockName)}\]";
+        var match = Regex.Match(
+            prompt,
+            pattern,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!match.Success)
+        {
+            return [];
+        }
+
+        return match.Groups["content"].Value
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim().TrimStart('-', '*').Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string StripLearningSourceBlocks(string prompt)
+    {
+        var value = Regex.Replace(
+            prompt,
+            @"\[(?:learning_source_files|learning_source_sites)\].*?\[/\s*(?:learning_source_files|learning_source_sites)\]",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        return string.IsNullOrWhiteSpace(value)
+            ? prompt.Trim()
+            : value.Trim();
+    }
+
     private ILearningEngine CreateDefaultLearningEngine(
         IShellExecutor shellExecutor,
         ICommandPolicyEngine commandPolicyEngine,
         IKnowledgeStore knowledgeStore)
     {
+        var deterministicExtractor = new KnowledgeExtractor();
         return new LearningEngine(
             new DisabledWebResearchService(),
-            new LlamaKnowledgeExtractor(llamaClient, jsonExtractor, runtimeSettings),
+            new LlamaKnowledgeExtractor(
+                llamaClient,
+                jsonExtractor,
+                runtimeSettings,
+                deterministicExtractor,
+                message => logger.Log($"[AGENT] {message}")),
             new KnowledgeClassificationPipeline(
                 log: message => logger.Log($"[AGENT] {message}")),
             knowledgeStore,
@@ -1284,8 +1399,47 @@ public sealed class AgentActionRunner : IAgentActionRunner
         execution.PassedLocalSafety = execution.IsSafe;
         execution.ClassificationSource = classification.Source;
         execution.ClassificationConfidence = classification.Confidence;
+        execution.SafetyDecision = decision.Decision;
         execution.Notes = BuildOperationVerificationNotes(execution, decision);
     }
+
+    private bool TryApplyApprovalOverride(
+        AgentActionSession session,
+        CommandExecution execution,
+        CommandSafetyDecision decision)
+    {
+        if (decision.Decision != CommandSafetyDecisionType.AskApproval ||
+            !IsApprovalOverridableOperation(execution.OperationKind))
+        {
+            return false;
+        }
+
+        var approvedByUser = session.Request.ApprovedAction is not null;
+        var autoApproved = runtimeSettings.AutoApproveCommands;
+        if (!approvedByUser && !autoApproved)
+        {
+            return false;
+        }
+
+        execution.ApprovedByUser = approvedByUser;
+        execution.AutoApproved = !approvedByUser && autoApproved;
+        execution.SafetyDecision = decision.Decision;
+        execution.Notes = AppendApprovalNote(
+            execution.Notes,
+            execution.AutoApproved
+                ? "Aprovado automaticamente pelas preferencias do runtime."
+                : "Aprovado manualmente pela interface.");
+        session.EmitApprovalGranted(execution);
+        return true;
+    }
+
+    private static bool IsApprovalOverridableOperation(OperationKind operationKind) =>
+        operationKind is OperationKind.TerminalCommand or OperationKind.ScriptExecution;
+
+    private static string AppendApprovalNote(string? notes, string approvalNote) =>
+        string.IsNullOrWhiteSpace(notes)
+            ? approvalNote
+            : $"{notes}; {approvalNote}";
 
     private static string BuildOperationVerificationNotes(
         CommandExecution execution,
@@ -1300,6 +1454,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
         if (normalized.Contains("powershell"))
         {
             return KnowledgeDomain.PowerShell;
+        }
+
+        if (normalized.Contains("shell") ||
+            normalized.Contains("seguran") ||
+            normalized.Contains("sandbox") ||
+            normalized.Contains("comando"))
+        {
+            return KnowledgeDomain.ShellSecurity;
         }
 
         if (normalized.Contains("windows"))
@@ -1353,15 +1515,77 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
     private static string BuildLearningReport(LearningReport report)
     {
+        const int sampleLimit = 20;
+        var sourceNames = report.Sources
+            .Select(source => string.IsNullOrWhiteSpace(source.ProviderName)
+                ? source.Publisher
+                : source.ProviderName)
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var commandItems = report.Items
+            .Where(item => item.Kind == KnowledgeItemKind.Command)
+            .ToList();
+        var conceptItems = report.Items
+            .Where(item => item.Kind != KnowledgeItemKind.Command)
+            .ToList();
+        var domainSummary = report.Items
+            .GroupBy(item => item.Domain)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key.ToString(), StringComparer.Ordinal)
+            .Select(group => $"{group.Key}: {group.Count()}")
+            .ToList();
+        var commandExamples = commandItems
+            .Select(item => string.IsNullOrWhiteSpace(item.NormalizedCommand)
+                ? item.Title.Replace("CMD:", string.Empty, StringComparison.OrdinalIgnoreCase).Trim()
+                : item.NormalizedCommand)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .ToList();
+        var sampleItems = report.Items.Take(sampleLimit).ToList();
         var lines = new List<string>
         {
-            $"Itens aprendidos: {report.Items.Count}",
-            $"Fontes verificadas: {report.Sources.Count}",
-            $"Experimentos registrados: {report.Experiments.Count}"
+            $"Aprendi {report.Items.Count} itens usando fontes {string.Join(", ", sourceNames.DefaultIfEmpty("configuradas"))}.",
+            $"Criados: {report.CreatedCount}. Atualizados: {report.UpdatedCount}. Ignorados: {report.SkippedCount}.",
+            $"Documentos encontrados: {report.DocumentsFound}. Fontes registradas: {report.Sources.Count}.",
+            $"Itens perigosos identificados: {report.DangerousCount}.",
+            $"Resumo do que aprendi: {commandItems.Count} comandos e {conceptItems.Count} outros itens.",
+            $"Dominios: {string.Join(", ", domainSummary.DefaultIfEmpty("sem dominio"))}."
         };
+        if (commandExamples.Count > 0)
+        {
+            lines.Add($"Exemplos de comandos aprendidos: {string.Join(", ", commandExamples)}.");
+        }
+
+        if (report.Warnings is { Count: > 0 })
+        {
+            lines.Add("Warnings:");
+            lines.AddRange(report.Warnings.Select(warning => $"- {warning}"));
+        }
+
+        lines.Add("Amostra do que foi salvo:");
+        lines.Add(
+            report.Items.Count > sampleLimit
+                ? $"Mostrando {sampleItems.Count} de {report.Items.Count} itens aprendidos."
+                : $"Mostrando {sampleItems.Count} itens aprendidos.");
         lines.Add($"Fatos armazenados: {report.Facts?.Count ?? 0}");
-        lines.AddRange(report.Items.Select(item =>
-            $"- {item.Title}: score {item.FinalScore:F2}"));
+        lines.AddRange(sampleItems.Select(FormatLearnedItem));
+        if (report.Items.Count > sampleItems.Count)
+        {
+            lines.Add(
+                $"Mais {report.Items.Count - sampleItems.Count} itens ficaram salvos na base de conhecimento.");
+        }
+
+        if (report.ProviderDiagnostics is { Count: > 0 })
+        {
+            lines.Add("Providers consultados:");
+            lines.AddRange(report.ProviderDiagnostics.Select(diagnostic =>
+                $"- {diagnostic.ProviderName}: " +
+                $"{(diagnostic.IsConfigured ? "enabled" : "disabled")}; " +
+                $"{diagnostic.DocumentsFound} documents"));
+        }
+
         var notTestable = report.Experiments.Count(value =>
             value.VerificationKind == VerificationKind.NotTestableLocally);
         if (notTestable > 0)
@@ -1369,7 +1593,22 @@ public sealed class AgentActionRunner : IAgentActionRunner
             lines.Add($"Itens nao testaveis localmente: {notTestable}");
         }
 
+        lines.Add(
+            "Proximos passos: consultar a base de conhecimento antes de planejar comandos e manter regras deterministicas como autoridade final.");
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatLearnedItem(KnowledgeItem item)
+    {
+        var command = string.IsNullOrWhiteSpace(item.NormalizedCommand)
+            ? string.Empty
+            : $" [{item.NormalizedCommand}]";
+        var tags = string.IsNullOrWhiteSpace(item.Tags)
+            ? "sem tags"
+            : item.Tags;
+        return
+            $"- {item.Title}{command}: {item.Summary} " +
+            $"score {item.FinalScore:F2}; risco {item.RiskLevel}; tags {tags}";
     }
 
     private static readonly Regex KnowledgeQuestionRegex = new(

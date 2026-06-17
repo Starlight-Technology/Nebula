@@ -187,6 +187,19 @@ internal sealed class AgentActionSession
             command: execution.Run);
     }
 
+    public void EmitApprovalGranted(CommandExecution execution)
+    {
+        var mode = execution.AutoApproved
+            ? "automaticamente pelas preferencias do runtime"
+            : "manualmente pela interface";
+        Emit(
+            ActionExecutionEventKind.ApprovalGranted,
+            ActionExecutionStatus.Executing,
+            "Approval granted",
+            $"Comando aprovado {mode}.",
+            command: execution.Run);
+    }
+
     public void EmitActionCompleted(CommandExecution execution)
     {
         Emit(

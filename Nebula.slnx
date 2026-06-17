@@ -6,6 +6,8 @@
     <File Path="docker-compose.nvidia.yml" />
     <File Path="docker-compose.yml" />
     <File Path="ollama-start.sh" />
+    <File Path="plan.md" />
+    <File Path="README.md" />
   </Folder>
   <Project Path="Corona/Corona/Corona.csproj" />
   <Project Path="Nebula.Agent.Test/Nebula.Agent.Test.csproj" />

@@ -70,7 +70,7 @@ public sealed class MlNetCommandClassifierTest
         Assert.Contains(
             logs,
             message => message.Contains(
-                "Deterministic rules remain active",
+                "ML.NET safety model not found. Falling back to deterministic rules.",
                 StringComparison.Ordinal));
     }
 

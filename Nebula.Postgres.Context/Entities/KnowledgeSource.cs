@@ -12,6 +12,11 @@ public sealed class KnowledgeSource
 
     public string Publisher { get; set; } = string.Empty;
 
+    public string ProviderName { get; set; } = string.Empty;
+
+    public Nebula.Core.Learning.LearningSourceType SourceType { get; set; } =
+        Nebula.Core.Learning.LearningSourceType.WebResearch;
+
     public string ExtractedContent { get; set; } = string.Empty;
 
     public DateTimeOffset? PublishedAt { get; set; }

@@ -112,13 +112,21 @@ public class PostgresContext : DbContext
             b.Property(x => x.Summary).IsRequired();
             b.Property(x => x.Examples).IsRequired();
             b.Property(x => x.Warnings).IsRequired();
+            b.Property(x => x.Tags).IsRequired();
             b.Property(x => x.SourceUrl).IsRequired();
+            b.Property(x => x.SourceType).HasConversion<string>().IsRequired();
+            b.Property(x => x.SourceName).IsRequired();
+            b.Property(x => x.RiskLevel).HasConversion<string>().IsRequired();
+            b.Property(x => x.Hash).IsRequired();
+            b.Property(x => x.ValidationNotes).IsRequired();
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            b.Property(x => x.LastSeenAt).HasDefaultValueSql("now()");
 
             b.HasIndex(x => x.Domain);
             b.HasIndex(x => x.Topic);
             b.HasIndex(x => x.FinalScore);
+            b.HasIndex(x => x.Hash);
         });
 
         modelBuilder.Entity<KnowledgeExperiment>(b =>
@@ -146,6 +154,8 @@ public class PostgresContext : DbContext
             b.Property(x => x.Url).IsRequired();
             b.Property(x => x.Title).IsRequired();
             b.Property(x => x.Publisher).IsRequired();
+            b.Property(x => x.ProviderName).IsRequired();
+            b.Property(x => x.SourceType).HasConversion<string>().IsRequired();
             b.Property(x => x.ExtractedContent).IsRequired();
             b.Property(x => x.RetrievedAt).HasDefaultValueSql("now()");
 

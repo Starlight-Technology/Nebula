@@ -14,8 +14,11 @@ using KnowledgeSourceEntity =
 namespace Nebula.Postgres.Context;
 
 public sealed class PostgresKnowledgeStore(PostgresContext context)
-    : IKnowledgeStore
+    : IKnowledgeRepository
 {
+    /// <summary>
+    /// Saves a knowledge item and its source, fact, and experiment evidence.
+    /// </summary>
     public async Task SaveAsync(
         KnowledgeItem item,
         IReadOnlyList<KnowledgeSource> sources,
@@ -32,7 +35,9 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             .Include(value => value.Sources)
             .Include(value => value.Experiments)
             .Include(value => value.Facts)
-            .SingleOrDefaultAsync(value => value.Id == item.Id, cancellationToken);
+            .SingleOrDefaultAsync(
+                value => value.Id == item.Id || value.Hash == item.Hash,
+                cancellationToken);
         if (existing is null)
         {
             context.KnowledgeItems.Add(entity);
@@ -51,6 +56,9 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
         await context.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Finds trusted knowledge by domain and topic, excluding dangerous instructions.
+    /// </summary>
     public async Task<IReadOnlyList<KnowledgeItem>> FindTrustedAsync(
         KnowledgeDomain domain,
         string topic,
@@ -63,6 +71,7 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             .Where(item =>
                 item.Domain == domain &&
                 item.FinalScore >= minimumScore &&
+                !item.IsDangerousInstruction &&
                 (EF.Functions.ILike(item.Topic, $"%{normalizedTopic}%") ||
                  EF.Functions.ILike(item.Title, $"%{normalizedTopic}%")))
             .OrderByDescending(item => item.FinalScore)
@@ -71,6 +80,9 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
         return items.Select(Map).ToList();
     }
 
+    /// <summary>
+    /// Finds knowledge details with evidence and facts for diagnostics.
+    /// </summary>
     public async Task<IReadOnlyList<KnowledgeLookupResult>> FindDetailsAsync(
         string topic,
         double minimumScore = 0.75,
@@ -99,6 +111,29 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             item.Facts.Select(Map).ToList())).ToList();
     }
 
+    /// <summary>
+    /// Finds a stored knowledge item by its deterministic hash.
+    /// </summary>
+    public async Task<KnowledgeLookupResult?> FindByHashAsync(
+        string hash,
+        CancellationToken cancellationToken = default)
+    {
+        var item = await context.KnowledgeItems
+            .AsNoTracking()
+            .Include(value => value.Sources)
+            .Include(value => value.Experiments)
+            .Include(value => value.Facts)
+            .SingleOrDefaultAsync(value => value.Hash == hash, cancellationToken);
+
+        return item is null
+            ? null
+            : new KnowledgeLookupResult(
+                Map(item),
+                item.Sources.Select(Map).ToList(),
+                item.Experiments.Select(Map).ToList(),
+                item.Facts.Select(Map).ToList());
+    }
+
     private static KnowledgeItemEntity Map(KnowledgeItem item) =>
         new()
         {
@@ -111,16 +146,28 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             Summary = item.Summary,
             Examples = item.Examples,
             Warnings = item.Warnings,
+            Tags = item.Tags,
             NormalizedCommand = item.NormalizedCommand,
             Language = item.Language,
             OS = item.OS,
             Shell = item.Shell,
             SourceUrl = item.SourceUrl,
+            SourceType = item.SourceType,
+            SourceName = item.SourceName,
+            RiskLevel = item.RiskLevel,
+            ConfidenceScore = item.ConfidenceScore,
             SourceScore = item.SourceScore,
             ClassificationConfidence = item.ClassificationConfidence,
             SafetyScore = item.SafetyScore,
             VerificationScore = item.VerificationScore,
             FinalScore = item.FinalScore,
+            Hash = item.Hash,
+            LastSeenAt = item.LastSeenAt,
+            ObservationCount = item.ObservationCount,
+            IsExecutableAdvice = item.IsExecutableAdvice,
+            IsDangerousInstruction = item.IsDangerousInstruction,
+            IsValidated = item.IsValidated,
+            ValidationNotes = item.ValidationNotes,
             CreatedAt = item.CreatedAt,
             UpdatedAt = item.UpdatedAt
         };
@@ -137,16 +184,28 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             Summary = item.Summary,
             Examples = item.Examples,
             Warnings = item.Warnings,
+            Tags = item.Tags,
             NormalizedCommand = item.NormalizedCommand,
             Language = item.Language,
             OS = item.OS,
             Shell = item.Shell,
             SourceUrl = item.SourceUrl,
+            SourceType = item.SourceType,
+            SourceName = item.SourceName,
+            RiskLevel = item.RiskLevel,
+            ConfidenceScore = item.ConfidenceScore,
             SourceScore = item.SourceScore,
             ClassificationConfidence = item.ClassificationConfidence,
             SafetyScore = item.SafetyScore,
             VerificationScore = item.VerificationScore,
             FinalScore = item.FinalScore,
+            Hash = item.Hash,
+            LastSeenAt = item.LastSeenAt,
+            ObservationCount = item.ObservationCount,
+            IsExecutableAdvice = item.IsExecutableAdvice,
+            IsDangerousInstruction = item.IsDangerousInstruction,
+            IsValidated = item.IsValidated,
+            ValidationNotes = item.ValidationNotes,
             CreatedAt = item.CreatedAt,
             UpdatedAt = item.UpdatedAt
         };
@@ -159,6 +218,8 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             Url = source.Url,
             Title = source.Title,
             Publisher = source.Publisher,
+            ProviderName = source.ProviderName,
+            SourceType = source.SourceType,
             ExtractedContent = source.ExtractedContent,
             PublishedAt = source.PublishedAt,
             RetrievedAt = source.RetrievedAt,
@@ -200,6 +261,8 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             Url = source.Url,
             Title = source.Title,
             Publisher = source.Publisher,
+            ProviderName = source.ProviderName,
+            SourceType = source.SourceType,
             ExtractedContent = source.ExtractedContent,
             PublishedAt = source.PublishedAt,
             RetrievedAt = source.RetrievedAt,

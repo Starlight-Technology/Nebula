@@ -6,6 +6,8 @@ using Nebula.Agent;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
+using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 
 using System.Text.Json;
@@ -114,7 +116,8 @@ public sealed class NebulaWorkspaceState(
             : runtimeSettings.LearningModel,
         WebResearchProvider = runtimeSettings.WebResearchProvider,
         AccelerationProfile = runtimeSettings.AccelerationProfile,
-        ResponseLanguageCode = runtimeSettings.ResponseLanguageCode
+        ResponseLanguageCode = runtimeSettings.ResponseLanguageCode,
+        AutoApproveCommands = runtimeSettings.AutoApproveCommands
     };
 
     public LlamaRuntimeState? RuntimeState { get; private set; }
@@ -124,6 +127,10 @@ public sealed class NebulaWorkspaceState(
     public ClientEnvironmentProbe? EnvironmentProbe { get; private set; }
 
     public string ComposerText { get; set; } = string.Empty;
+
+    public string LearningSourceFilePathsText { get; set; } = string.Empty;
+
+    public string LearningSourceUrlsText { get; set; } = string.Empty;
 
     public InteractionMode SelectedInteractionMode { get; private set; } = InteractionMode.Chat;
 
@@ -151,6 +158,11 @@ public sealed class NebulaWorkspaceState(
 
     public bool CanSend => !IsSending && !string.IsNullOrWhiteSpace(ComposerText);
 
+    public bool CanLearnFromSources =>
+        !IsSending &&
+        (!string.IsNullOrWhiteSpace(LearningSourceFilePathsText) ||
+         !string.IsNullOrWhiteSpace(LearningSourceUrlsText));
+
     public bool IsModelBusy => IsRefreshingRuntime || IsInstallingModel || IsSending;
 
     public bool CanInstallModel => !IsModelBusy && !string.IsNullOrWhiteSpace(ModelInstallText);
@@ -177,6 +189,23 @@ public sealed class NebulaWorkspaceState(
     public async Task SendStarterAsync(string prompt)
     {
         await SubmitPromptAsync(prompt);
+    }
+
+    public async Task LearnFromSourcesAsync()
+    {
+        if (!CanLearnFromSources)
+        {
+            return;
+        }
+
+        var prompt = BuildLearningSourcesPrompt();
+        var previousMode = SelectedInteractionMode;
+        SelectedInteractionMode = InteractionMode.Agent;
+        await SubmitPromptAsync(prompt);
+        SelectedInteractionMode = previousMode;
+        LearningSourceFilePathsText = string.Empty;
+        LearningSourceUrlsText = string.Empty;
+        NotifyChanged();
     }
 
     public async Task EnsureSettingsLoadedAsync()
@@ -258,7 +287,8 @@ public sealed class NebulaWorkspaceState(
                 WebResearchProvider = QuickSettings.WebResearchProvider,
                 AccelerationProfile = QuickSettings.AccelerationProfile,
                 ResponseLanguageCode = language.Code,
-                ResponseLanguageName = language.Name
+                ResponseLanguageName = language.Name,
+                AutoApproveCommands = QuickSettings.AutoApproveCommands
             };
 
             RuntimeSettings.Apply(snapshot);
@@ -363,6 +393,35 @@ public sealed class NebulaWorkspaceState(
         activeTurnCancellationSource = turnCancellationSource;
 
         _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource);
+    }
+
+    public Task ApproveCommandAsync(CommandExecution command)
+    {
+        if (!CanApproveCommand(command))
+        {
+            return Task.CompletedTask;
+        }
+
+        var turn = new ConversationEntryViewModel
+        {
+            Prompt = $"Aprovar e executar: {command.Run}",
+            Mode = InteractionMode.Agent,
+            RequestedModel = ActiveModelName
+        };
+
+        turns.Add(turn);
+        IsSending = true;
+        SettingsFeedback = null;
+        NotifyChanged();
+
+        activeTurnCancellationSource?.Cancel();
+        activeTurnCancellationSource?.Dispose();
+
+        var turnCancellationSource = new CancellationTokenSource();
+        activeTurnCancellationSource = turnCancellationSource;
+
+        _ = CompleteApprovedCommandTurnAsync(turn, command, turnCancellationSource);
+        return Task.CompletedTask;
     }
 
     public async Task RefreshRuntimeAsync()
@@ -635,6 +694,25 @@ public sealed class NebulaWorkspaceState(
             : "nebula-composer-card nebula-composer-card--sticky";
     }
 
+    public bool CanApproveCommand(CommandExecution command)
+    {
+        return !IsSending &&
+               command.SafetyDecision == CommandSafetyDecisionType.AskApproval &&
+               !command.Executed &&
+               !command.ApprovedByUser &&
+               !command.AutoApproved &&
+               command.OperationKind is (OperationKind.TerminalCommand or
+                   OperationKind.ScriptExecution) &&
+               !string.IsNullOrWhiteSpace(command.Run);
+    }
+
+    public string GetCommandApprovalSummary()
+    {
+        return RuntimeSettings.AutoApproveCommands
+            ? "Auto-aprovacao ativa"
+            : "Aprovacao manual";
+    }
+
     public static string GetReasoningText(ConversationTurn turn)
     {
         return string.IsNullOrWhiteSpace(turn.Reasoning)
@@ -802,6 +880,86 @@ public sealed class NebulaWorkspaceState(
         }
     }
 
+    private async Task CompleteApprovedCommandTurnAsync(
+        ConversationEntryViewModel turn,
+        CommandExecution command,
+        CancellationTokenSource turnCancellationSource)
+    {
+        try
+        {
+            var progress = new InlineProgress<ConversationTurn>(partialTurn =>
+            {
+                turn.StreamingClassification = partialTurn.Classification;
+                turn.StreamingResponse = partialTurn.Response;
+                turn.StreamingReasoning = partialTurn.Reasoning;
+                turn.StreamingActionStatus = partialTurn.ActionStatus;
+                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                turn.StreamingCommands = partialTurn.Commands.ToList();
+
+                if (!isDisposed)
+                {
+                    NotifyChanged();
+                }
+            });
+
+            turn.Result = await manager.RunApprovedCommandAsync(
+                command,
+                progress,
+                turnCancellationSource.Token);
+            turn.StreamingClassification = null;
+            turn.StreamingResponse = null;
+            turn.StreamingReasoning = null;
+            turn.StreamingActionStatus = null;
+            turn.StreamingActionEvents.Clear();
+            turn.StreamingCommands.Clear();
+        }
+        catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
+        {
+            // Disposal intentionally stops the active turn without updating UI state.
+        }
+        catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested)
+        {
+            turn.StreamingClassification = null;
+            turn.StreamingResponse = null;
+            turn.StreamingReasoning = null;
+            turn.StreamingActionStatus = null;
+
+            turn.Result = new ConversationTurn
+            {
+                Prompt = turn.Prompt,
+                Mode = InteractionMode.Agent,
+                ModelName = turn.RequestedModel,
+                Classification = InteractionMode.Agent.ToString(),
+                Response = "Execucao cancelada pelo usuario.",
+                ActionStatus = ActionExecutionStatus.Cancelled,
+                Commands = turn.StreamingCommands.ToList(),
+                IsCancelled = true
+            };
+
+            turn.StreamingActionEvents.Clear();
+            turn.StreamingCommands.Clear();
+        }
+        catch (Exception ex)
+        {
+            turn.Error = ex.Message;
+        }
+        finally
+        {
+            IsSending = false;
+
+            if (ReferenceEquals(activeTurnCancellationSource, turnCancellationSource))
+            {
+                activeTurnCancellationSource.Dispose();
+                activeTurnCancellationSource = null;
+            }
+
+            if (!isDisposed)
+            {
+                NotifyChanged();
+            }
+        }
+    }
+
     private void UpdateSetupRecommendation()
     {
         SetupRecommendation = runtimeSetupAdvisor.BuildRecommendation(EnvironmentProbe, llamaClient.LlamaUrl);
@@ -842,6 +1000,7 @@ public sealed class NebulaWorkspaceState(
         QuickSettings.WebResearchProvider = RuntimeSettings.WebResearchProvider;
         QuickSettings.AccelerationProfile = RuntimeSettings.AccelerationProfile;
         QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
+        QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
     }
 
     private void NotifyChanged()
@@ -863,6 +1022,49 @@ public sealed class NebulaWorkspaceState(
             ? fallback.Trim()
             : modelName.Trim();
     }
+
+    private string BuildLearningSourcesPrompt()
+    {
+        var objective = string.IsNullOrWhiteSpace(ComposerText)
+            ? "Aprenda com as fontes adicionadas."
+            : ComposerText.Trim();
+        var files = NormalizeLines(LearningSourceFilePathsText);
+        var urls = NormalizeLines(LearningSourceUrlsText);
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine(objective);
+        if (files.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("[learning_source_files]");
+            foreach (var file in files)
+            {
+                builder.AppendLine(file);
+            }
+
+            builder.AppendLine("[/learning_source_files]");
+        }
+
+        if (urls.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("[learning_source_sites]");
+            foreach (var url in urls)
+            {
+                builder.AppendLine(url);
+            }
+
+            builder.AppendLine("[/learning_source_sites]");
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static IReadOnlyList<string> NormalizeLines(string value) =>
+        value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
     {
@@ -921,6 +1123,8 @@ public sealed class QuickSettingsDraft
 
     public string ResponseLanguageCode { get; set; } =
         NebulaRuntimeSettings.DefaultLanguageCode;
+
+    public bool AutoApproveCommands { get; set; }
 }
 
 public sealed record ResponseLanguageOption(string Code, string Name);

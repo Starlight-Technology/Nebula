@@ -7,6 +7,9 @@ namespace Nebula.Services.Learning;
 
 public sealed class KnowledgeScoreEngine : IKnowledgeScoreEngine
 {
+    /// <summary>
+    /// Calculates the final trust score from source, classification, safety, and verification signals.
+    /// </summary>
     public double Calculate(KnowledgeItem item) =>
         Math.Clamp(
             item.SourceScore * 0.35 +
@@ -19,14 +22,22 @@ public sealed class KnowledgeScoreEngine : IKnowledgeScoreEngine
 
 public sealed class KnowledgeAutomationPolicy : IKnowledgeAutomationPolicy
 {
+    /// <summary>
+    /// Returns true only when a stored item is trusted enough for automatic reuse.
+    /// </summary>
     public bool CanUseAutomatically(KnowledgeItem item) =>
-        item.FinalScore >= 0.75;
+        item.FinalScore >= 0.75 &&
+        !item.IsDangerousInstruction &&
+        item.RiskLevel is not KnowledgeRiskLevel.Dangerous;
 }
 
-public sealed class InMemoryKnowledgeStore : IKnowledgeStore
+public sealed class InMemoryKnowledgeStore : IKnowledgeRepository
 {
     private readonly List<KnowledgeLookupResult> entries = [];
 
+    /// <summary>
+    /// Saves a knowledge item and replaces any existing item with the same id or hash.
+    /// </summary>
     public Task SaveAsync(
         KnowledgeItem item,
         IReadOnlyList<KnowledgeSource> sources,
@@ -35,6 +46,37 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var existing = entries.FirstOrDefault(existing =>
+            existing.Item.Id == item.Id ||
+            (!string.IsNullOrWhiteSpace(item.Hash) &&
+             existing.Item.Hash.Equals(
+                 item.Hash,
+                 StringComparison.OrdinalIgnoreCase)) ||
+            DeduplicationKey(existing.Item).Equals(
+                DeduplicationKey(item),
+                StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            item.Id = existing.Item.Id;
+            item.CreatedAt = existing.Item.CreatedAt;
+            item.UpdatedAt = DateTimeOffset.UtcNow;
+            item.LastSeenAt = DateTimeOffset.UtcNow;
+            item.ObservationCount = Math.Max(
+                item.ObservationCount,
+                existing.Item.ObservationCount + 1);
+            foreach (var source in sources)
+            {
+                source.KnowledgeItemId = item.Id;
+            }
+
+            foreach (var fact in facts)
+            {
+                fact.KnowledgeItemId = item.Id;
+            }
+
+            experiment.KnowledgeItemId = item.Id;
+        }
+
         entries.RemoveAll(existing => existing.Item.Id == item.Id);
         entries.Add(new KnowledgeLookupResult(
             item,
@@ -44,6 +86,9 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Finds trusted knowledge by domain and topic.
+    /// </summary>
     public Task<IReadOnlyList<KnowledgeItem>> FindTrustedAsync(
         KnowledgeDomain domain,
         string topic,
@@ -56,12 +101,16 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
             .Where(item =>
                 item.Domain == domain &&
                 Matches(item, topic) &&
+                !item.IsDangerousInstruction &&
                 item.FinalScore >= minimumScore)
             .OrderByDescending(item => item.FinalScore)
             .ToList();
         return Task.FromResult(result);
     }
 
+    /// <summary>
+    /// Finds stored knowledge with sources, experiments, and facts for diagnostics.
+    /// </summary>
     public Task<IReadOnlyList<KnowledgeLookupResult>> FindDetailsAsync(
         string topic,
         double minimumScore = 0.75,
@@ -77,11 +126,50 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
         return Task.FromResult(result);
     }
 
+    /// <summary>
+    /// Finds a stored knowledge item by its deterministic learning hash.
+    /// </summary>
+    public Task<KnowledgeLookupResult?> FindByHashAsync(
+        string hash,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = entries.FirstOrDefault(entry =>
+            entry.Item.Hash.Equals(hash, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(result);
+    }
+
     private static bool Matches(KnowledgeItem item, string topic) =>
         item.Topic.Contains(topic, StringComparison.OrdinalIgnoreCase) ||
         item.Title.Contains(topic, StringComparison.OrdinalIgnoreCase) ||
         item.Content.Contains(topic, StringComparison.OrdinalIgnoreCase) ||
         item.Summary.Contains(topic, StringComparison.OrdinalIgnoreCase);
+
+    private static string DeduplicationKey(KnowledgeItem item)
+    {
+        var commandOrContent = string.IsNullOrWhiteSpace(item.NormalizedCommand)
+            ? item.Content
+            : item.NormalizedCommand;
+        if (!string.IsNullOrWhiteSpace(item.Hash))
+        {
+            return item.Hash;
+        }
+
+        return string.Join(
+            '|',
+            item.Domain,
+            item.Kind,
+            Normalize(item.Topic),
+            Normalize(item.SourceUrl),
+            Normalize(item.Title),
+            Normalize(commandOrContent));
+    }
+
+    private static string Normalize(string? value) =>
+        string.Join(' ', (value ?? string.Empty)
+            .Trim()
+            .ToLowerInvariant()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
 
 public sealed class KnowledgeClassificationPipeline : IKnowledgeClassifier
@@ -175,6 +263,11 @@ public sealed class KnowledgeClassificationPipeline : IKnowledgeClassifier
             {
                 var value when value.Contains("powershell") =>
                     KnowledgeDomain.PowerShell,
+                var value when value.Contains("shell") ||
+                                   value.Contains("sandbox") ||
+                                   value.Contains("curl") ||
+                                   value.Contains("rm -rf") =>
+                    KnowledgeDomain.ShellSecurity,
                 var value when value.Contains("python") =>
                     KnowledgeDomain.Python,
                 var value when value.Contains("dotnet") ||

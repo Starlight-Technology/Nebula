@@ -145,3 +145,64 @@ Também estão disponíveis `DirectDocumentation`, `BingHtml`, `Disabled` e o pr
 opcional `Brave`. O funcionamento padrão não depende de Brave, SerpAPI, Tavily ou chave
 paga. Quando um mecanismo devolve CAPTCHA ou nenhuma página real, o Nebula registra a
 falha e não cria fontes ou conhecimento fictícios.
+## Aprendizado offline-first
+
+O Learning Engine e offline-first. Ele aprende de texto fornecido pelo usuario,
+seeds manuais internos, providers fake usados em testes automatizados e, quando
+configurado, providers web. A ausencia de `WebResearchProvider` nao impede a
+aprendizagem: o Nebula registra um warning e usa a base local/manual.
+
+As fontes lidas passam por um extrator LLM antes de serem persistidas. A LLM
+recebe o texto do arquivo ou site em chunks e devolve JSON estruturado no formato
+do pipeline de aprendizado: `sourceUrl`, `domain`, `kind`, `title`, `content`,
+`summary`, `facts`, `examples`, `warnings`, `normalizedCommand`, `language` e
+`executableLocally`. Esse formato alimenta o classificador, o score, a base de
+conhecimento e os dados que podem ser usados pelo ML. Se a LLM falhar, devolver
+JSON invalido ou inventar URL de fonte, o Nebula ignora a saida invalida e usa
+o extrator deterministico como fallback.
+
+Seeds internos atuais:
+
+- boas praticas de seguranca para comandos shell
+- execucao segura em sandbox
+- riscos de scripts remotos
+- Python Launcher no Windows
+- .NET CLI basico
+
+Cada execucao de aprendizagem retorna um relatorio com documentos encontrados,
+itens criados, itens atualizados, itens perigosos, warnings, providers
+consultados e evidencias salvas. O conhecimento e deduplicado por hash
+deterministico, e repeticoes atualizam `LastSeenAt` e `ObservationCount`.
+
+A tela de chat permite adicionar fontes explicitas para aprendizagem:
+
+- caminhos locais para `.txt`, `.md`, `.json`, `.csv`, `.log`, `.cs`, `.py`,
+  `.doc`, `.docx` e `.pdf`
+- URLs `http` ou `https` para paginas que serao baixadas e convertidas para
+  texto visivel
+
+Listas locais de referencia de comandos em formato tabular, como
+`Comando Descricao` ou `Comando<TAB>Descricao`, sao quebradas em itens
+individuais. Cada linha reconhecida vira um conhecimento separado do tipo
+`Command`, com comando normalizado, fonte, score, risco e fatos salvos. Assim,
+um arquivo com centenas de comandos CMD pode alimentar centenas de registros
+consultaveis em vez de virar apenas um resumo generico.
+
+Arquivos `.doc`, `.docx` e `.pdf` usam extracao best-effort. Quando o conteudo
+nao puder ser extraido com seguranca, a fonte e ignorada e o relatorio informa
+quantos documentos foram lidos.
+
+Toda execucao de aprendizado retorna na conversa um resumo do que foi aprendido:
+total criado/atualizado, quantidade por tipo e dominio, exemplos de comandos,
+amostra dos itens salvos e a contagem restante quando a fonte gerar muitos
+registros.
+
+Conhecimento perigoso e armazenado como perigoso, nao como recomendacao. Ele
+pode informar decisoes futuras, mas nunca reduz a seguranca das regras
+deterministicas de comando; em caso de conflito, a regra deterministica vence.
+
+Exemplo de pedido que funciona sem internet:
+
+```text
+Aprenda boas praticas de seguranca para executar comandos shell.
+```

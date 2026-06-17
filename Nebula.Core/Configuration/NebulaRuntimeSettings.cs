@@ -19,6 +19,8 @@ public sealed class NebulaRuntimeSettings
 
     public string ResponseLanguageName { get; set; } = DefaultLanguageName;
 
+    public bool AutoApproveCommands { get; set; }
+
     public string EffectiveLearningModel =>
         string.IsNullOrWhiteSpace(LearningModel)
             ? MainModel.Trim()
@@ -42,6 +44,7 @@ public sealed class NebulaRuntimeSettings
         ResponseLanguageName = NormalizeOrDefault(
             snapshot.ResponseLanguageName,
             DefaultLanguageName);
+        AutoApproveCommands = snapshot.AutoApproveCommands;
     }
 
     public NebulaRuntimeSettingsSnapshot CreateSnapshot()
@@ -53,7 +56,8 @@ public sealed class NebulaRuntimeSettings
             WebResearchProvider = WebResearchProvider,
             AccelerationProfile = AccelerationProfile,
             ResponseLanguageCode = ResponseLanguageCode,
-            ResponseLanguageName = ResponseLanguageName
+            ResponseLanguageName = ResponseLanguageName,
+            AutoApproveCommands = AutoApproveCommands
         };
     }
 
@@ -90,4 +94,6 @@ public sealed class NebulaRuntimeSettingsSnapshot
 
     public string ResponseLanguageName { get; set; } =
         NebulaRuntimeSettings.DefaultLanguageName;
+
+    public bool AutoApproveCommands { get; set; }
 }

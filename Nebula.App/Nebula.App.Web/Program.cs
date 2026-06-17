@@ -54,7 +54,9 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
         NebulaRuntimeSettings.DefaultLanguageCode,
     ResponseLanguageName =
         builder.Configuration["Nebula:ResponseLanguageName"] ??
-        NebulaRuntimeSettings.DefaultLanguageName
+        NebulaRuntimeSettings.DefaultLanguageName,
+    AutoApproveCommands =
+        builder.Configuration.GetValue<bool>("Nebula:AutoApproveCommands")
 });
 builder.Services.AddScoped<NebulaWorkspaceState>();
 builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
@@ -98,7 +100,8 @@ builder.Services.AddSingleton<IKnowledgeClassifier>(provider =>
         provider.GetRequiredService<Nebula.Agent.ILogger>().Log));
 builder.Services.AddSingleton<IKnowledgeScoreEngine, KnowledgeScoreEngine>();
 builder.Services.AddSingleton<IKnowledgeAutomationPolicy, KnowledgeAutomationPolicy>();
-builder.Services.AddScoped<IKnowledgeExtractor, LlamaKnowledgeExtractor>();
+builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
+builder.Services.AddScoped<IKnowledgeExtractor, KnowledgeExtractor>();
 builder.Services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
 builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
 builder.Services.AddScoped<NebulaContextBuilder>();

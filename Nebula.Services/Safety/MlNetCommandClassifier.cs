@@ -111,9 +111,8 @@ public sealed class MlNetCommandClassifier : ICommandClassifier
             }
 
             log?.Invoke(
-                "Warning: No ML.NET command safety model was found in PostgreSQL " +
-                $"or at fallback path '{FallbackModelPath}'. " +
-                "Deterministic rules remain active.");
+                "Warning: ML.NET safety model not found. Falling back to deterministic rules. " +
+                $"Checked PostgreSQL and fallback path '{FallbackModelPath}'.");
         }
         finally
         {

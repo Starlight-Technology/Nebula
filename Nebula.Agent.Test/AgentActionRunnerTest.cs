@@ -2,6 +2,7 @@ using System.Text.Json;
 
 using Moq;
 using Nebula.Agent.Data;
+using Nebula.Core.Configuration;
 using Nebula.Core.Learning;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
@@ -244,21 +245,113 @@ public sealed class AgentActionRunnerTest
     public async Task run_async_must_route_learning_request_without_inventing_sources()
     {
         var llamaClientMock = CreateLlamaClientMock();
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(
+                It.Is<string>(prompt =>
+                    prompt.Contains("Extract structured knowledge", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<string?>(),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+                """
+                {
+                  "items": [
+                    {
+                      "sourceUrl": "nebula://manual-seed/python-launcher-windows",
+                      "evidenceSummary": "py can work when python is not on PATH.",
+                      "confidence": 0.94,
+                      "domain": "Python",
+                      "kind": "Command",
+                      "title": "Python Launcher no Windows",
+                      "content": "No Windows, py pode funcionar quando python nao esta no PATH.",
+                      "summary": "No Windows, py pode funcionar quando python nao esta no PATH.",
+                      "examples": ["py --version"],
+                      "warnings": [],
+                      "facts": ["py --version verifica o Python Launcher."],
+                      "normalizedCommand": "py --version",
+                      "language": "cmd",
+                      "executableLocally": true
+                    }
+                  ]
+                }
+                """);
 
         var result = await CreateRunner(llamaClientMock).RunAsync(
             CreateRequest("aprenda Python basico"),
             progress: null);
 
-        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
-        Assert.Equal(
-            "Pesquisa web não configurada. Configure WebResearch:Provider e WebResearch:ApiKey.",
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Contains("Aprendi", result.Response);
+        Assert.Contains(
+            "Web research provider is not configured",
             result.Response);
+        Assert.Contains("Python", result.Response);
         llamaClientMock.Verify(
             client => client.GetResponseAsync(
-                It.IsAny<string>(),
+                It.Is<string>(prompt =>
+                    prompt.Contains("Extract structured knowledge", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<string?>(),
                 It.IsAny<IProgress<LlamaStreamUpdate>?>(),
                 It.IsAny<CancellationToken>()),
-            Times.Never);
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task run_async_must_summarize_many_learned_items()
+    {
+        var llamaClientMock = CreateLlamaClientMock();
+        var items = Enumerable.Range(1, 25)
+            .Select(index => new KnowledgeItem
+            {
+                Domain = KnowledgeDomain.WindowsCommands,
+                Kind = KnowledgeItemKind.Command,
+                Title = $"CMD: Cmd{index}",
+                Content = $"O comando cmd{index} faz algo util.",
+                Summary = $"O comando cmd{index} faz algo util.",
+                Tags = "cmd,windows,command-reference",
+                NormalizedCommand = $"cmd{index}",
+                SourceUrl = "file:///comandos-cmd.txt",
+                SourceType = LearningSourceType.LocalFile,
+                SourceName = "LearningSourceReader",
+                RiskLevel = KnowledgeRiskLevel.Unknown,
+                FinalScore = 0.71
+            })
+            .ToList();
+        var learningEngine = new Mock<ILearningEngine>();
+        learningEngine
+            .Setup(engine => engine.LearnAsync(
+                It.IsAny<LearningRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LearningReport(
+                true,
+                null,
+                items,
+                [
+                    new KnowledgeSource
+                    {
+                        ProviderName = "LearningSourceReader",
+                        Publisher = "LearningSourceReader",
+                        SourceType = LearningSourceType.LocalFile,
+                        Url = "file:///comandos-cmd.txt",
+                        Title = "comandos-cmd.txt"
+                    }
+                ],
+                [],
+                [],
+                CreatedCount: items.Count,
+                DocumentsFound: 1));
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            learningEngine: learningEngine.Object).RunAsync(
+                CreateRequest("aprenda comandos cmd"),
+                progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Contains("Resumo do que aprendi: 25 comandos", result.Response);
+        Assert.Contains("Exemplos de comandos aprendidos: cmd1", result.Response);
+        Assert.Contains("Mostrando 20 de 25 itens aprendidos", result.Response);
+        Assert.Contains("Mais 5 itens ficaram salvos", result.Response);
     }
 
     [Fact]
@@ -826,6 +919,120 @@ public sealed class AgentActionRunnerTest
     }
 
     [Fact]
+    public async Task run_async_must_execute_approval_command_when_auto_approval_is_enabled()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests"),
+            CompleteDecision("The install command completed.", "Package installed.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        SetupAffirmativeVerification(llamaClientMock);
+
+        var executorMock = CreateExecutorMock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("installed");
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutoApproveCommands = true
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Single(result.Commands);
+        Assert.True(result.Commands[0].Executed);
+        Assert.True(result.Commands[0].AutoApproved);
+        Assert.False(result.Commands[0].ApprovedByUser);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, result.Commands[0].SafetyDecision);
+        Assert.False(result.Commands[0].IsSafe);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_execute_explicitly_approved_command_without_replanning()
+    {
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupAffirmativeVerification(llamaClientMock);
+        var executorMock = CreateExecutorMock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("installed");
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine());
+
+        var request = CreateRequest("Aprovar e executar: pip install requests");
+        request.MaxSteps = 1;
+        request.MaxRetriesPerStep = 0;
+        request.ApprovedAction = new AgentApprovedAction
+        {
+            Objective = "Install package",
+            Command = "pip install requests",
+            OperationKind = OperationKind.TerminalCommand
+        };
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Single(result.Commands);
+        Assert.True(result.Commands[0].Executed);
+        Assert.True(result.Commands[0].ApprovedByUser);
+        Assert.False(result.Commands[0].AutoApproved);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, result.Commands[0].SafetyDecision);
+        llamaClientMock.Verify(
+            client => client.GetResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_async_must_not_execute_blocked_command_even_when_approved()
+    {
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupAffirmativeVerification(llamaClientMock);
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateBlockPolicyEngine());
+
+        var request = CreateRequest("Aprovar e executar: rm -rf /");
+        request.ApprovedAction = new AgentApprovedAction
+        {
+            Objective = "Remove everything",
+            Command = "rm -rf /",
+            OperationKind = OperationKind.TerminalCommand
+        };
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Unsafe, result.ActionStatus);
+        Assert.Single(result.Commands);
+        Assert.Equal(CommandSafetyDecisionType.Block, result.Commands[0].SafetyDecision);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task run_async_must_reject_unsafe_generated_action_without_tool_invocation_or_retry()
     {
         var decisions = new Queue<string>(
@@ -918,7 +1125,9 @@ public sealed class AgentActionRunnerTest
         Mock<IShellExecutor>? executorMock = null,
         ICommandPolicyEngine? commandPolicyEngine = null,
         Mock<ILogger>? loggerMock = null,
-        IKnowledgeQueryService? knowledgeQueryService = null)
+        IKnowledgeQueryService? knowledgeQueryService = null,
+        ILearningEngine? learningEngine = null,
+        NebulaRuntimeSettings? runtimeSettings = null)
     {
         return new AgentActionRunner(
             llamaClientMock.Object,
@@ -926,7 +1135,9 @@ public sealed class AgentActionRunnerTest
             CreateJsonExtractorMock().Object,
             (loggerMock ?? CreateLoggerMock()).Object,
             commandPolicyEngine: commandPolicyEngine ?? CreateAllowPolicyEngine(),
-            knowledgeQueryService: knowledgeQueryService);
+            learningEngine: learningEngine,
+            knowledgeQueryService: knowledgeQueryService,
+            runtimeSettings: runtimeSettings);
     }
 
     private static ICommandPolicyEngine CreateAllowPolicyEngine()
@@ -940,6 +1151,34 @@ public sealed class AgentActionRunnerTest
                 CommandIntent.SafeExecuteLocal,
                 1,
                 ["Allowed by test policy."]));
+        return mock.Object;
+    }
+
+    private static ICommandPolicyEngine CreateAskApprovalPolicyEngine()
+    {
+        var mock = new Mock<ICommandPolicyEngine>();
+        mock.Setup(engine => engine.EvaluateAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, CancellationToken _) => new CommandSafetyDecision(
+                CommandSafetyDecisionType.AskApproval,
+                CommandIntent.PackageInstall,
+                0.99,
+                ["Requires approval by test policy."]));
+        return mock.Object;
+    }
+
+    private static ICommandPolicyEngine CreateBlockPolicyEngine()
+    {
+        var mock = new Mock<ICommandPolicyEngine>();
+        mock.Setup(engine => engine.EvaluateAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, CancellationToken _) => new CommandSafetyDecision(
+                CommandSafetyDecisionType.Block,
+                CommandIntent.Blocked,
+                1,
+                ["Blocked by test policy."]));
         return mock.Object;
     }
 

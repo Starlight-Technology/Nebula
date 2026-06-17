@@ -8,6 +8,9 @@ public sealed class KnowledgeQueryService(
     IKnowledgeStore store,
     ILogger logger) : IKnowledgeQueryService
 {
+    /// <summary>
+    /// Answers a knowledge-base question with stored evidence and diagnostic metadata.
+    /// </summary>
     public async Task<string> AnswerAsync(
         string topic,
         CancellationToken cancellationToken = default)
@@ -15,11 +18,11 @@ public sealed class KnowledgeQueryService(
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         var results = await store.FindDetailsAsync(
             topic.Trim(),
-            minimumScore: 0.75,
+            minimumScore: 0.60,
             cancellationToken);
         if (results.Count == 0)
         {
-            return $"Não há conhecimento confiável armazenado sobre '{topic.Trim()}'.";
+            return $"Não há conhecimento armazenado sobre '{topic.Trim()}'.";
         }
 
         logger.Log(

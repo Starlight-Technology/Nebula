@@ -11,9 +11,12 @@
                 <CoronaBadge Content="@WorkspaceState.RuntimeSettings.ResponseLanguageCode"
                              Variant="CoronaBadgeVariant.Outlined"
                              Color="CoronaColorSemantic.Neutral" />
+                <CoronaBadge Content="@WorkspaceState.GetCommandApprovalSummary()"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@(WorkspaceState.RuntimeSettings.AutoApproveCommands ? CoronaColorSemantic.Warning : CoronaColorSemantic.Neutral)" />
             </CoronaStack>
             <h2>Preferencias do Nebula</h2>
-            <p>Configure modelos, pesquisa web, aceleracao e o idioma usado nas respostas da LLM.</p>
+            <p>Configure modelos, pesquisa web, aprovacoes de comandos, aceleracao e o idioma usado nas respostas da LLM.</p>
         </div>
 
         <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
@@ -107,6 +110,26 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Execucao de comandos</h3>
+                        <p>Controle quando o agente pode continuar depois que a policy pede confirmacao explicita.</p>
+                    </div>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.AutoApproveCommands ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.AutoApproveCommands"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.AutoApproveCommands = args.Value is true)" />
+                        <span>
+                            <strong>Auto-aprovar comandos que pedem confirmacao</strong>
+                            <small>Comandos classificados como bloqueados continuam impedidos pela policy.</small>
+                        </span>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>GPU e runtime</h3>
                         <p>A preferencia gera o comando correto. A troca efetiva exige reiniciar a stack do Ollama com o perfil escolhido.</p>
                     </div>
@@ -185,6 +208,10 @@
                     <div class="nebula-status-row">
                         <span>Navegador de pesquisa</span>
                         <strong>@GetProviderName()</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Aprovacao de comandos</span>
+                        <strong>@(WorkspaceState.QuickSettings.AutoApproveCommands ? "Auto-aprovar" : "Manual")</strong>
                     </div>
                     <div class="nebula-status-row">
                         <span>Aceleracao</span>

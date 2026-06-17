@@ -69,7 +69,12 @@ public static class MauiProgram
                 NebulaRuntimeSettings.DefaultLanguageCode,
             ResponseLanguageName =
                 Environment.GetEnvironmentVariable("NEBULA_RESPONSE_LANGUAGE_NAME") ??
-                NebulaRuntimeSettings.DefaultLanguageName
+                NebulaRuntimeSettings.DefaultLanguageName,
+            AutoApproveCommands =
+                bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_COMMANDS"),
+                    out var autoApproveCommands) &&
+                autoApproveCommands
         });
         builder.Services.AddScoped<NebulaWorkspaceState>();
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
@@ -115,7 +120,8 @@ public static class MauiProgram
                 provider.GetRequiredService<Agent.ILogger>().Log));
         builder.Services.AddSingleton<IKnowledgeScoreEngine, KnowledgeScoreEngine>();
         builder.Services.AddSingleton<IKnowledgeAutomationPolicy, KnowledgeAutomationPolicy>();
-        builder.Services.AddScoped<IKnowledgeExtractor, LlamaKnowledgeExtractor>();
+        builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
+        builder.Services.AddScoped<IKnowledgeExtractor, KnowledgeExtractor>();
         builder.Services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
         builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
         builder.Services.AddScoped<NebulaContextBuilder>();

@@ -7,6 +7,7 @@ public enum KnowledgeDomain
     WindowsCommands,
     PowerShell,
     LinuxCommands,
+    ShellSecurity,
     Python,
     DotNet,
     Mathematics,
@@ -37,6 +38,26 @@ public enum VerificationKind
     NotTestableLocally
 }
 
+public enum KnowledgeRiskLevel
+{
+    Safe,
+    LowRisk,
+    MediumRisk,
+    HighRisk,
+    Dangerous,
+    Unknown
+}
+
+public enum LearningSourceType
+{
+    UserProvidedText,
+    ManualSeed,
+    FakeResearch,
+    WebResearch,
+    LocalFile,
+    ExistingKnowledgeBase
+}
+
 public sealed class KnowledgeItem
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -57,6 +78,8 @@ public sealed class KnowledgeItem
 
     public string Warnings { get; set; } = string.Empty;
 
+    public string Tags { get; set; } = string.Empty;
+
     public string? NormalizedCommand { get; set; }
 
     public string? Language { get; set; }
@@ -67,6 +90,16 @@ public sealed class KnowledgeItem
 
     public string SourceUrl { get; set; } = string.Empty;
 
+    public LearningSourceType SourceType { get; set; } =
+        LearningSourceType.WebResearch;
+
+    public string SourceName { get; set; } = string.Empty;
+
+    public KnowledgeRiskLevel RiskLevel { get; set; } =
+        KnowledgeRiskLevel.Unknown;
+
+    public double ConfidenceScore { get; set; }
+
     public double SourceScore { get; set; }
 
     public double ClassificationConfidence { get; set; }
@@ -76,6 +109,20 @@ public sealed class KnowledgeItem
     public double VerificationScore { get; set; }
 
     public double FinalScore { get; set; }
+
+    public string Hash { get; set; } = string.Empty;
+
+    public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public int ObservationCount { get; set; } = 1;
+
+    public bool IsExecutableAdvice { get; set; }
+
+    public bool IsDangerousInstruction { get; set; }
+
+    public bool IsValidated { get; set; }
+
+    public string ValidationNotes { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
@@ -118,6 +165,11 @@ public sealed class KnowledgeSource
     public string Title { get; set; } = string.Empty;
 
     public string Publisher { get; set; } = string.Empty;
+
+    public string ProviderName { get; set; } = string.Empty;
+
+    public LearningSourceType SourceType { get; set; } =
+        LearningSourceType.WebResearch;
 
     public string ExtractedContent { get; set; } = string.Empty;
 
@@ -197,6 +249,8 @@ public sealed class KnowledgeItemDraft
 
     public List<string> Facts { get; set; } = [];
 
+    public List<string> Tags { get; set; } = [];
+
     public string? NormalizedCommand { get; set; }
 
     public string? Language { get; set; }
@@ -212,9 +266,20 @@ public sealed record KnowledgeClassification(
     string Source,
     IReadOnlyList<string> Reasons);
 
+public sealed record KnowledgeRiskAssessment(
+    KnowledgeRiskLevel RiskLevel,
+    double ConfidenceScore,
+    bool IsExecutableAdvice,
+    bool IsDangerousInstruction,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Reasons);
+
 public sealed record LearningRequest(
     string Topic,
-    KnowledgeDomain Domain);
+    KnowledgeDomain Domain,
+    string? UserProvidedText = null,
+    IReadOnlyList<string>? SourceFilePaths = null,
+    IReadOnlyList<string>? SourceUrls = null);
 
 public sealed record LearningReport(
     bool Success,
@@ -222,10 +287,90 @@ public sealed record LearningReport(
     IReadOnlyList<KnowledgeItem> Items,
     IReadOnlyList<KnowledgeSource> Sources,
     IReadOnlyList<KnowledgeExperiment> Experiments,
-    IReadOnlyList<KnowledgeFact>? Facts = null);
+    IReadOnlyList<KnowledgeFact>? Facts = null,
+    int CreatedCount = 0,
+    int UpdatedCount = 0,
+    int SkippedCount = 0,
+    int DangerousCount = 0,
+    int DocumentsFound = 0,
+    IReadOnlyList<string>? Warnings = null,
+    IReadOnlyList<string>? Errors = null,
+    IReadOnlyList<LearningProviderDiagnostic>? ProviderDiagnostics = null);
 
 public sealed record KnowledgeLookupResult(
     KnowledgeItem Item,
     IReadOnlyList<KnowledgeSource> Sources,
     IReadOnlyList<KnowledgeExperiment> Experiments,
     IReadOnlyList<KnowledgeFact> Facts);
+
+public sealed record KnowledgeEvidence(
+    string SourceTitle,
+    string? SourceUri,
+    string ProviderName,
+    DateTimeOffset RetrievedAt,
+    string Excerpt,
+    double ConfidenceScore);
+
+public sealed record LearningSourceDocument(
+    string Title,
+    string Content,
+    string? SourceUri,
+    string ProviderName,
+    DateTimeOffset RetrievedAt,
+    LearningSourceType SourceType);
+
+public sealed class LearningOptions
+{
+    public string Objective { get; init; } = string.Empty;
+
+    public KnowledgeDomain Domain { get; init; } = KnowledgeDomain.General;
+
+    public string? UserProvidedText { get; init; }
+
+    public IReadOnlyList<string> SourceFilePaths { get; init; } = [];
+
+    public IReadOnlyList<string> SourceUrls { get; init; } = [];
+
+    public bool IncludeManualSeeds { get; init; } = true;
+
+    public bool IncludeWebResearch { get; init; } = true;
+
+    public IReadOnlyList<LearningSourceDocument> AdditionalDocuments { get; init; } = [];
+
+    /// <summary>
+    /// Creates orchestrator options from the public learning request contract.
+    /// </summary>
+    public static LearningOptions FromRequest(LearningRequest request) =>
+        new()
+        {
+            Objective = request.Topic,
+            Domain = request.Domain,
+            UserProvidedText = request.UserProvidedText,
+            SourceFilePaths = request.SourceFilePaths ?? [],
+            SourceUrls = request.SourceUrls ?? []
+        };
+}
+
+public sealed record LearningProviderDiagnostic(
+    string ProviderName,
+    LearningSourceType SourceType,
+    bool IsConfigured,
+    int DocumentsFound,
+    string? Message);
+
+public sealed record LearningResult(
+    bool Success,
+    string Message,
+    int CreatedCount,
+    int UpdatedCount,
+    int SkippedCount,
+    int DangerousCount,
+    int DocumentsFound,
+    IReadOnlyList<KnowledgeItem> KnowledgeItems,
+    IReadOnlyList<KnowledgeSource> Sources,
+    IReadOnlyList<KnowledgeExperiment> Experiments,
+    IReadOnlyList<KnowledgeFact> Facts,
+    IReadOnlyList<KnowledgeEvidence> Evidence,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<LearningProviderDiagnostic> ProviderDiagnostics);

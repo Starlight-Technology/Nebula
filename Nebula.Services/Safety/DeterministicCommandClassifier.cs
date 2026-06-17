@@ -81,6 +81,11 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
             return Result(command, CommandIntent.Blocked, 1.00, "The command attempts to bypass or disable the safety policy.");
         }
 
+        if (RemoteScriptExecutionRegex().IsMatch(normalized))
+        {
+            return Result(command, CommandIntent.Blocked, 1.00, "The command downloads remote content and executes it directly.");
+        }
+
         if (CatastrophicDeleteRegex().IsMatch(normalized) || DiskFormatRegex().IsMatch(normalized))
         {
             return Result(command, CommandIntent.Blocked, 1.00, "The command can destroy a system, home directory, or disk.");
@@ -127,6 +132,12 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
         if (GlobalEnvironmentRegex().IsMatch(normalized))
         {
             return Result(command, CommandIntent.NeedsApproval, 0.95, "The command changes global environment or PATH configuration.");
+        }
+
+        if (TryGetDirectoryCreationTarget(command, out var directoryTarget) &&
+            !IsInsideWorkspace(directoryTarget))
+        {
+            return Result(command, CommandIntent.NeedsApproval, 0.98, $"The directory target is outside the workspace: {directoryTarget}");
         }
 
         if (TryGetWriteTarget(command, out var target) && !IsInsideWorkspace(target))
@@ -179,9 +190,15 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
             return Result(command, CommandIntent.SafeExecuteLocal, 0.96, "The Python command is limited to an inspected local script or a simple print expression.");
         }
 
+        if (TryGetDirectoryCreationTarget(command, out var directoryTarget) &&
+            IsInsideWorkspace(directoryTarget))
+        {
+            return Result(command, CommandIntent.SafeWriteLocal, 0.97, "The command creates a directory inside the workspace or controlled temp root.");
+        }
+
         if (TryGetWriteTarget(command, out var target)
             && IsAllowedWorkspaceFile(target)
-            && SafeFileCreationRegex().IsMatch(command))
+            && SafeFileWriteRegex().IsMatch(command))
         {
             return Result(command, CommandIntent.SafeWriteLocal, 0.97, "The command creates an allowed text or source file inside the workspace.");
         }
@@ -281,8 +298,24 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
             return true;
         }
 
+        var setContent = SetContentTargetRegex().Match(command);
+        if (setContent.Success)
+        {
+            target = CleanPath(setContent.Groups["path"].Value);
+            return true;
+        }
+
         target = string.Empty;
         return false;
+    }
+
+    private static bool TryGetDirectoryCreationTarget(
+        string command,
+        out string target)
+    {
+        var match = DirectoryCreationRegex().Match(command);
+        target = match.Success ? CleanPath(match.Groups["path"].Value) : string.Empty;
+        return match.Success;
     }
 
     private static string CleanPath(string path) => path.Trim().Trim('"', '\'');
@@ -303,7 +336,10 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
     [GeneratedRegex(@"(?:ignore|bypass|disable|evade|circumvent|burle|ignore|desative).{0,30}(?:policy|safety|seguran[cç]a|prote[cç][aã]o)|(?:sem|without).{0,15}(?:approval|confirma[cç][aã]o)", RegexOptions.IgnoreCase)]
     private static partial Regex PolicyBypassRegex();
 
-    [GeneratedRegex(@"(?:rm\s+-[^\r\n]*r[^\r\n]*f[^\r\n]*(?:/\s*$|~|\$home|/home)|del\s+/s\s+/q\s+[a-z]:\\(?:\s|$)|remove-item[^\r\n]*-recurse[^\r\n]*-force[^\r\n]*[a-z]:\\|(?:rm|del|remove-item)[^\r\n]*(?:/etc|/usr|/var|windows\\system32|home inteiro|entire home))", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:curl|wget|invoke-webrequest|iwr|invoke-restmethod)[^\r\n|;&]*https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|iex|invoke-expression)\b|https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|iex|invoke-expression)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex RemoteScriptExecutionRegex();
+
+    [GeneratedRegex(@"(?:rm\s+-[^\r\n]*r[^\r\n]*f[^\r\n]*(?:/\s*$|~|\$home|/home)|del\s+/s\s+/q\s+[a-z]:\\(?:users?|documents and settings|windows|system32)?(?:\\|\s|$)|remove-item[^\r\n]*-recurse[^\r\n]*-force[^\r\n]*[a-z]:\\(?:users?|documents and settings|windows|system32)?(?:\\|\s|$)|(?:rm|del|remove-item)[^\r\n]*(?:/etc|/usr|/var|windows\\system32|home inteiro|entire home))", RegexOptions.IgnoreCase)]
     private static partial Regex CatastrophicDeleteRegex();
 
     [GeneratedRegex(@"(?:^|\s)(?:format(?:\.com)?\s+[a-z]:|mkfs(?:\.|\s)|diskpart\b|dd\s+if=.*\s+of=/dev/)", RegexOptions.IgnoreCase)]
@@ -357,11 +393,17 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
     [GeneratedRegex(@"(?:>>|>|out-file\s+)(?:\s*)([^;&|>]+)$", RegexOptions.IgnoreCase)]
     private static partial Regex RedirectTargetRegex();
 
-    [GeneratedRegex(@"^(?:(?:echo|printf)\s+[^;&|`$]+\s*(?:>>|>)\s*[^;&|]+|(?:touch|new-item)\s+(?:-[a-z]+\s+)*(?:-path\s+)?[^;&|]+)$", RegexOptions.IgnoreCase)]
-    private static partial Regex SafeFileCreationRegex();
+    [GeneratedRegex(@"^(?:(?:echo|printf)\s+[^;&|`$]+\s*(?:>>|>)\s*[^;&|]+|(?:touch|new-item)\s+(?:-[a-z]+\s+)*(?:-path\s+)?[^;&|]+|set-content\s+(?:-path\s+)?[^;&|]+\s+-value\s+[^;&|`]+)$", RegexOptions.IgnoreCase)]
+    private static partial Regex SafeFileWriteRegex();
 
     [GeneratedRegex(@"^(?:touch|new-item)\s+(?:-[a-z]+\s+)*(?:-path\s+)?([^;&|]+)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileCreationRegex();
+
+    [GeneratedRegex(@"^set-content\s+(?:-path\s+)?(?<path>[^;&|]+?)\s+-value\s+[^;&|`]+$", RegexOptions.IgnoreCase)]
+    private static partial Regex SetContentTargetRegex();
+
+    [GeneratedRegex(@"^(?:mkdir\s+(?:-p\s+)?(?<path>[^;&|]+)|new-item\s+(?=.*(?:-itemtype\s+directory|directory))(?=.*-path\s+).*?-path\s+(?<path>[^;&|]+))$", RegexOptions.IgnoreCase)]
+    private static partial Regex DirectoryCreationRegex();
 
     [GeneratedRegex(@"^(?:(?:rm\s+-rf|rmdir\s+/s\s+/q|remove-item\s+-recurse\s+-force)\s+)?(?:(?:\./)?(?:bin|obj)(?:\s+(?:\./)?(?:bin|obj))?|(?:find|dotnet\s+clean).*(?:bin|obj))$", RegexOptions.IgnoreCase)]
     private static partial Regex WorkspaceBuildCleanupRegex();

@@ -215,8 +215,9 @@ public sealed class ScriptContentSafetyClassifier : IScriptContentSafetyClassifi
                 }
             }
 
+            var codeLine = PythonStringLiteralRegex.Replace(line, "\"\"");
             if (Regex.IsMatch(
-                line,
+                codeLine,
                 @"\b(?:from|def|class|lambda|with|while|for|try|except|finally|yield)\b",
                 RegexOptions.IgnoreCase))
             {
@@ -224,7 +225,8 @@ public sealed class ScriptContentSafetyClassifier : IScriptContentSafetyClassifi
             }
         }
 
-        foreach (Match match in PythonCallRegex.Matches(content))
+        var codeWithoutStrings = PythonStringLiteralRegex.Replace(content, "\"\"");
+        foreach (Match match in PythonCallRegex.Matches(codeWithoutStrings))
         {
             var call = match.Groups["call"].Value;
             if (call is "print" or "json.dumps" or "os.getcwd")
@@ -343,6 +345,10 @@ public sealed class ScriptContentSafetyClassifier : IScriptContentSafetyClassifi
 
     private static readonly Regex PythonCallRegex = new(
         @"(?<![\w.])(?<call>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(",
+        RegexOptions.Compiled);
+
+    private static readonly Regex PythonStringLiteralRegex = new(
+        @"(?s)("""".*?""""|'''.*?'''|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*')",
         RegexOptions.Compiled);
 
     private static readonly Regex CSharpCallRegex = new(

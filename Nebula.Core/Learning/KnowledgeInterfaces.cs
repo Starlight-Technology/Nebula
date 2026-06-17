@@ -45,6 +45,23 @@ public interface IWebResearchService
         CancellationToken cancellationToken);
 }
 
+public interface IResearchProvider
+{
+    string Name { get; }
+
+    LearningSourceType SourceType { get; }
+
+    bool IsConfigured { get; }
+
+    /// <summary>
+    /// Searches this provider for documents that can support the learning objective.
+    /// </summary>
+    Task<IReadOnlyList<LearningSourceDocument>> SearchAsync(
+        string objective,
+        KnowledgeDomain domain,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IKnowledgeExtractor
 {
     Task<IReadOnlyList<KnowledgeItemDraft>> ExtractAsync(
@@ -58,6 +75,31 @@ public interface IKnowledgeClassifier
 {
     Task<KnowledgeClassification> ClassifyAsync(
         KnowledgeItemDraft draft,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IKnowledgeRiskClassifier
+{
+    /// <summary>
+    /// Classifies the operational risk of an extracted knowledge draft.
+    /// </summary>
+    KnowledgeRiskAssessment Classify(KnowledgeItemDraft draft);
+}
+
+public interface ILearningSourceReader
+{
+    /// <summary>
+    /// Reads local files and converts their contents into learning source documents.
+    /// </summary>
+    Task<IReadOnlyList<LearningSourceDocument>> ReadFilesAsync(
+        IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Downloads explicit web pages and converts their contents into learning source documents.
+    /// </summary>
+    Task<IReadOnlyList<LearningSourceDocument>> ReadSitesAsync(
+        IReadOnlyList<string> siteUrls,
         CancellationToken cancellationToken = default);
 }
 
@@ -91,6 +133,26 @@ public interface IKnowledgeStore
     Task<IReadOnlyList<KnowledgeLookupResult>> FindDetailsAsync(
         string topic,
         double minimumScore = 0.75,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IKnowledgeRepository : IKnowledgeStore
+{
+    /// <summary>
+    /// Finds a knowledge item and its evidence by deterministic hash.
+    /// </summary>
+    Task<KnowledgeLookupResult?> FindByHashAsync(
+        string hash,
+        CancellationToken cancellationToken = default);
+}
+
+public interface ILearningOrchestrator
+{
+    /// <summary>
+    /// Coordinates provider lookup, extraction, risk classification, deduplication, and persistence.
+    /// </summary>
+    Task<LearningResult> LearnAsync(
+        LearningOptions options,
         CancellationToken cancellationToken = default);
 }
 

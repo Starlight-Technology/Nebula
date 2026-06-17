@@ -7,6 +7,8 @@ using Nebula.App.Shared.Pages;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
+using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 
 namespace Nebula.App.Test;
@@ -188,6 +190,139 @@ public sealed class HomePageTests : HomePageTestContext
     }
 
     [Fact]
+    public void learn_sources_button_must_send_files_and_sites_to_agent_mode()
+    {
+        UserMessage? receivedMessage = null;
+        var manager = new FakeManager
+        {
+            ManageConversationAsyncHandler = (message, _, _) =>
+            {
+                receivedMessage = message;
+                return Task.FromResult(new ConversationTurn
+                {
+                    Prompt = message.Content,
+                    Mode = message.Mode,
+                    ModelName = "qwen3:8b",
+                    Classification = message.Mode.ToString(),
+                    Response = "Aprendi fontes adicionadas."
+                });
+            }
+        };
+
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+        component.Find(".nebula-composer__input")
+            .Input("Aprenda com estes materiais");
+        component.FindAll(".nebula-learning-sources__input")[0]
+            .Input(@"C:\docs\manual.txt");
+        component.FindAll(".nebula-learning-sources__input")[1]
+            .Input("https://example.test/learn");
+        FindButton(component, "Aprender fontes").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.NotNull(receivedMessage);
+            Assert.Equal(InteractionMode.Agent, receivedMessage!.Mode);
+            Assert.Contains(
+                "[learning_source_files]",
+                receivedMessage.Content);
+            Assert.Contains(
+                @"C:\docs\manual.txt",
+                receivedMessage.Content);
+            Assert.Contains(
+                "[learning_source_sites]",
+                receivedMessage.Content);
+            Assert.Contains(
+                "https://example.test/learn",
+                receivedMessage.Content);
+        });
+    }
+
+    [Fact]
+    public void approve_command_button_must_execute_the_pending_command()
+    {
+        CommandExecution? approvedCommand = null;
+        var pendingCommand = new CommandExecution
+        {
+            Id = 1,
+            Attempt = 1,
+            Objective = "Install package",
+            Run = "pip install requests",
+            OperationKind = OperationKind.TerminalCommand,
+            SafetyDecision = CommandSafetyDecisionType.AskApproval,
+            Notes = "decision=AskApproval"
+        };
+        var manager = new FakeManager
+        {
+            ManageConversationAsyncHandler = (message, _, _) =>
+                Task.FromResult(new ConversationTurn
+                {
+                    Prompt = message.Content,
+                    Mode = InteractionMode.Agent,
+                    ModelName = "qwen3:8b",
+                    Classification = InteractionMode.Agent.ToString(),
+                    Response = "O passo 1 requer confirmacao explicita.",
+                    ActionStatus = ActionExecutionStatus.AwaitingApproval,
+                    Commands = [pendingCommand]
+                }),
+            RunApprovedCommandAsyncHandler = (command, _, _) =>
+            {
+                approvedCommand = command;
+                return Task.FromResult(new ConversationTurn
+                {
+                    Prompt = $"Aprovar e executar: {command.Run}",
+                    Mode = InteractionMode.Agent,
+                    ModelName = "qwen3:8b",
+                    Classification = InteractionMode.Agent.ToString(),
+                    Response = "Comando aprovado executado.",
+                    ActionStatus = ActionExecutionStatus.Completed,
+                    Commands =
+                    [
+                        new CommandExecution
+                        {
+                            Id = 1,
+                            Attempt = 1,
+                            Objective = command.Objective,
+                            Run = command.Run,
+                            OperationKind = command.OperationKind,
+                            SafetyDecision = CommandSafetyDecisionType.AskApproval,
+                            ApprovedByUser = true,
+                            Executed = true,
+                            ExitCode = 0,
+                            Output = "ok"
+                        }
+                    ]
+                });
+            }
+        };
+
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+        FindModeButton(component, "Agente").Click();
+        component.Find("textarea").Input("Instale requests");
+        FindButton(component, "Enviar").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Executar aprovado", component.Markup);
+            Assert.Contains("Aguardando aprovacao", component.Markup);
+            Assert.Contains("Policy: AskApproval", component.Markup);
+        });
+
+        FindButton(component, "Executar aprovado").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.NotNull(approvedCommand);
+            Assert.Equal("pip install requests", approvedCommand!.Run);
+            Assert.Contains("Comando aprovado executado", component.Markup);
+            Assert.Contains("Aprovacao: manual", component.Markup);
+        });
+    }
+
+    [Fact]
     public void quick_settings_must_save_language_provider_and_gpu_preferences()
     {
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
@@ -200,6 +335,7 @@ public sealed class HomePageTests : HomePageTestContext
         });
 
         component.Find("input[value='BingHtml']").Change("BingHtml");
+        component.Find("input[type='checkbox']").Change(true);
         component.FindAll(".nebula-settings-field select")[2].Change("nvidia");
         component.FindAll(".nebula-settings-field select")[3].Change("es-ES");
         component.FindAll("button")
@@ -215,6 +351,7 @@ public sealed class HomePageTests : HomePageTestContext
             Assert.Equal("nvidia", settings.AccelerationProfile);
             Assert.Equal("es-ES", settings.ResponseLanguageCode);
             Assert.Equal("Espanol", settings.ResponseLanguageName);
+            Assert.True(settings.AutoApproveCommands);
             Assert.Contains(
                 JSInterop.Invocations,
                 invocation => invocation.Identifier == "localStorage.setItem");
@@ -255,6 +392,17 @@ public sealed class HomePageTests : HomePageTestContext
                 Response = "Resposta padrao"
             });
 
+        public Func<CommandExecution, IProgress<ConversationTurn>?, CancellationToken, Task<ConversationTurn>> RunApprovedCommandAsyncHandler { get; set; }
+            = (command, _, _) => Task.FromResult(new ConversationTurn
+            {
+                Prompt = $"Aprovar e executar: {command.Run}",
+                Mode = InteractionMode.Agent,
+                ModelName = "qwen3:8b",
+                Classification = InteractionMode.Agent.ToString(),
+                Response = "Comando aprovado executado.",
+                ActionStatus = ActionExecutionStatus.Completed
+            });
+
         public Task<ConversationTurn> ManageConversationAsync(UserMessage message)
         {
             return ManageConversationAsync(message, progress: null, cancellationToken: default);
@@ -266,6 +414,14 @@ public sealed class HomePageTests : HomePageTestContext
             CancellationToken cancellationToken = default)
         {
             return ManageConversationAsyncHandler(message, progress, cancellationToken);
+        }
+
+        public Task<ConversationTurn> RunApprovedCommandAsync(
+            CommandExecution command,
+            IProgress<ConversationTurn>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            return RunApprovedCommandAsyncHandler(command, progress, cancellationToken);
         }
 
         public Task<string> ManageResponse(UserMessage message)

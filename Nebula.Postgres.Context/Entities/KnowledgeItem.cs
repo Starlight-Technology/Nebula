@@ -22,6 +22,8 @@ public sealed class KnowledgeItem
 
     public string Warnings { get; set; } = string.Empty;
 
+    public string Tags { get; set; } = string.Empty;
+
     public string? NormalizedCommand { get; set; }
 
     public string? Language { get; set; }
@@ -32,6 +34,16 @@ public sealed class KnowledgeItem
 
     public string SourceUrl { get; set; } = string.Empty;
 
+    public LearningSourceType SourceType { get; set; } =
+        LearningSourceType.WebResearch;
+
+    public string SourceName { get; set; } = string.Empty;
+
+    public KnowledgeRiskLevel RiskLevel { get; set; } =
+        KnowledgeRiskLevel.Unknown;
+
+    public double ConfidenceScore { get; set; }
+
     public double SourceScore { get; set; }
 
     public double ClassificationConfidence { get; set; }
@@ -41,6 +53,20 @@ public sealed class KnowledgeItem
     public double VerificationScore { get; set; }
 
     public double FinalScore { get; set; }
+
+    public string Hash { get; set; } = string.Empty;
+
+    public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public int ObservationCount { get; set; } = 1;
+
+    public bool IsExecutableAdvice { get; set; }
+
+    public bool IsDangerousInstruction { get; set; }
+
+    public bool IsValidated { get; set; }
+
+    public string ValidationNotes { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

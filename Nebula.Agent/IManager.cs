@@ -15,6 +15,11 @@ public interface IManager
         IProgress<ConversationTurn>? progress,
         CancellationToken cancellationToken = default);
 
+    Task<ConversationTurn> RunApprovedCommandAsync(
+        CommandExecution command,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken = default);
+
     Guid StartNewConversation();
 
     Task<string> GenerateCommandSteps(string userRequest);

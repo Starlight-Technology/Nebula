@@ -14,13 +14,15 @@ namespace Nebula.Agent.Test;
 public sealed class LearningEngineTest
 {
     [Fact]
-    public async Task learning_without_web_provider_must_return_clear_error_and_no_sources()
+    public async Task learning_without_web_provider_must_use_manual_seeds()
     {
-        var extractor = new Mock<IKnowledgeExtractor>();
         var engine = new LearningEngine(
             new DisabledWebResearchService(),
-            extractor.Object,
-            new Mock<IKnowledgeClassifier>().Object,
+            new KnowledgeExtractor(),
+            new KnowledgeClassificationPipeline(
+                Path.Combine(
+                    Path.GetTempPath(),
+                    $"missing-knowledge-{Guid.NewGuid():N}.zip")),
             new InMemoryKnowledgeStore(),
             new Mock<ISafeExperimentRunner>().Object,
             new KnowledgeScoreEngine(),
@@ -31,18 +33,14 @@ public sealed class LearningEngineTest
                 "Python basico",
                 KnowledgeDomain.Python));
 
-        Assert.False(report.Success);
-        Assert.Equal(
-            "Pesquisa web não configurada. Configure WebResearch:Provider e WebResearch:ApiKey.",
-            report.Error);
-        Assert.Empty(report.Sources);
-        extractor.Verify(
-            value => value.ExtractAsync(
-                It.IsAny<string>(),
-                It.IsAny<KnowledgeDomain>(),
-                It.IsAny<IReadOnlyList<ResearchResult>>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
+        Assert.True(report.Success, report.Error);
+        Assert.True(report.DocumentsFound > 0);
+        Assert.True(report.CreatedCount > 0);
+        Assert.Contains(
+            report.Warnings!,
+            warning => warning.Contains(
+                "Web research provider is not configured",
+                StringComparison.Ordinal));
     }
 
     [Theory]

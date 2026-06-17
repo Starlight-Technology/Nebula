@@ -23,6 +23,7 @@ internal sealed class CommandValidationService(
         var safetyDecision = await commandPolicyEngine.EvaluateAsync(execution.Run, cancellationToken);
         execution.IsSafe = safetyDecision.Decision == CommandSafetyDecisionType.Allow;
         execution.PassedLocalSafety = execution.IsSafe;
+        execution.SafetyDecision = safetyDecision.Decision;
         execution.Notes = BuildVerificationNotes(execution, safetyDecision);
 
         return new CommandValidation(execution.IsCorrect, safetyDecision);

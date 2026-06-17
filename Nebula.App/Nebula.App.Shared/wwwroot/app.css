@@ -438,6 +438,11 @@ pre {
     cursor: pointer;
 }
 
+.nebula-settings-option--wide {
+    width: 100%;
+    box-sizing: border-box;
+}
+
 .nebula-settings-option.is-selected {
     border-color: rgba(56, 198, 180, 0.55);
     box-shadow: inset 0 0 0 1px rgba(56, 198, 180, 0.2);
@@ -1031,6 +1036,50 @@ pre {
 
 .nebula-composer__input::placeholder {
     color: var(--nebula-soft);
+}
+
+.nebula-learning-sources {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    padding: 0.75rem;
+}
+
+.nebula-learning-sources summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.nebula-learning-sources__grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    margin: 0.75rem 0;
+}
+
+.nebula-learning-sources__grid label {
+    display: grid;
+    gap: 0.35rem;
+    font-size: 0.875rem;
+}
+
+.nebula-learning-sources__input {
+    width: 100%;
+    min-height: 5rem;
+    resize: vertical;
+    outline: none;
+    background: rgba(10, 12, 14, 0.74);
+    color: var(--nebula-text);
+    border-radius: var(--nebula-radius);
+    padding: 0.75rem;
+    font: inherit;
+    line-height: 1.5;
+    box-sizing: border-box;
+    border: 1px solid var(--nebula-border-strong);
+}
+
+.nebula-learning-sources__input:focus {
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
 }
 
 .nebula-composer__hint {

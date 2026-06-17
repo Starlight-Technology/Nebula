@@ -119,6 +119,43 @@ public class Manager : IManager
         }
     }
 
+    public Task<ConversationTurn> RunApprovedCommandAsync(
+        CommandExecution command,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Run);
+
+        var prompt = $"Executar comando aprovado: {command.Run}";
+        logger.Log(
+            $"[AGENT] User approved command for ConversationId '{activeConversationId}': {command.Run}");
+
+        return actionRunner.RunAsync(
+            new AgentActionRunRequest
+            {
+                ConversationId = activeConversationId,
+                RequestId = Guid.NewGuid(),
+                Prompt = prompt,
+                Mode = InteractionMode.Agent,
+                ChatHistoryContext =
+                    $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}",
+                ModelName = llamaClient.SelectedModel,
+                MaxSteps = 1,
+                MaxRetriesPerStep = 0,
+                ApprovedAction = new AgentApprovedAction
+                {
+                    Objective = command.Objective,
+                    Command = command.Run,
+                    OperationKind = command.OperationKind,
+                    TargetPath = command.TargetPath,
+                    WorkingDirectory = command.WorkingDirectory
+                }
+            },
+            progress,
+            cancellationToken);
+    }
+
     public async Task<bool> VerifyCommandCorrectAsync(Command command)
     {
         var response = await llamaClient.GetResponseAsync(

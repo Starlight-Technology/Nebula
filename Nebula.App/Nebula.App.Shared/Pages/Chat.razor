@@ -4,6 +4,7 @@
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JSRuntime
 @using Nebula.Core.Interactions
+@using Nebula.Core.Safety
 
 <CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell nebula-chat-page">
     <section class="nebula-screen-header">
@@ -311,15 +312,45 @@
                                                                     <code>@command.Run</code>
                                                                 </div>
 
-                                                                <CoronaBadge Content="@(command.Skipped ? "Ignorado" : command.Executed ? "Executado" : "Bloqueado")"
-                                                                             Variant="CoronaBadgeVariant.Soft"
-                                                                             Color="@(command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
+                                                                <CoronaStack Direction="CoronaStackDirection.Row"
+                                                                             Wrap="CoronaStackWrap.Wrap"
+                                                                             Align="CoronaStackAlign.Center"
+                                                                             Justify="CoronaStackJustify.End"
+                                                                             Spacing=".5rem">
+                                                                    <CoronaBadge Content="@(command.Skipped ? "Ignorado" : command.Executed ? "Executado" : command.SafetyDecision == CommandSafetyDecisionType.AskApproval ? "Aguardando aprovacao" : "Bloqueado")"
+                                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                                 Color="@(command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
+
+                                                                    @if (WorkspaceState.CanApproveCommand(command))
+                                                                    {
+                                                                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                                                                      Size="CoronaComponentSize.Small"
+                                                                                      Color="CoronaColorSemantic.Warning"
+                                                                                      Icon="@CoronaIcons.Check"
+                                                                                      OnClick="@(() => WorkspaceState.ApproveCommandAsync(command))">
+                                                                            Executar aprovado
+                                                                        </CoronaButton>
+                                                                    }
+                                                                </CoronaStack>
                                                             </div>
 
                                                             <div class="nebula-step-card__checks">
                                                                 <span>Corretude: @NebulaWorkspaceState.FormatBoolean(command.IsCorrect)</span>
                                                                 <span>Seguranca do modelo: @NebulaWorkspaceState.FormatBoolean(command.IsSafe)</span>
                                                                 <span>Seguranca local: @NebulaWorkspaceState.FormatBoolean(command.PassedLocalSafety)</span>
+                                                                @if (command.SafetyDecision is CommandSafetyDecisionType safetyDecision)
+                                                                {
+                                                                    <span>Policy: @safetyDecision</span>
+                                                                }
+
+                                                                @if (command.AutoApproved)
+                                                                {
+                                                                    <span>Aprovacao: automatica</span>
+                                                                }
+                                                                else if (command.ApprovedByUser)
+                                                                {
+                                                                    <span>Aprovacao: manual</span>
+                                                                }
                                                             </div>
 
                                                             @if (!string.IsNullOrWhiteSpace(command.Notes))
@@ -385,6 +416,34 @@
                               @bind="WorkspaceState.ComposerText"
                               @bind:event="oninput"></textarea>
 
+                    <details class="nebula-learning-sources">
+                        <summary>Fontes de aprendizado</summary>
+                        <div class="nebula-learning-sources__grid">
+                            <label>
+                                <span>Arquivos locais</span>
+                                <textarea class="nebula-learning-sources__input"
+                                          placeholder="C:\docs\guia.txt&#10;C:\docs\manual.pdf"
+                                          @bind="WorkspaceState.LearningSourceFilePathsText"
+                                          @bind:event="oninput"></textarea>
+                            </label>
+                            <label>
+                                <span>Sites</span>
+                                <textarea class="nebula-learning-sources__input"
+                                          placeholder="https://learn.microsoft.com/...&#10;https://docs.python.org/..."
+                                          @bind="WorkspaceState.LearningSourceUrlsText"
+                                          @bind:event="oninput"></textarea>
+                            </label>
+                        </div>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Size="CoronaComponentSize.Small"
+                                      Color="CoronaColorSemantic.Primary"
+                                      Disabled="@(!WorkspaceState.CanLearnFromSources)"
+                                      OnClick="WorkspaceState.LearnFromSourcesAsync">
+                            Aprender fontes
+                        </CoronaButton>
+                    </details>
+
                     <div class="nebula-composer__footer">
                         <p class="nebula-composer__hint">Sessao atual com @WorkspaceState.Turns.Count turno(s).</p>
 
@@ -449,6 +508,10 @@
                     <div class="nebula-status-row">
                         <span>Endpoint</span>
                         <code>@WorkspaceState.LlamaUrl</code>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Aprovacao</span>
+                        <strong>@WorkspaceState.GetCommandApprovalSummary()</strong>
                     </div>
                 </div>
             </CoronaCard>
