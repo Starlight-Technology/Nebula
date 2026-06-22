@@ -27,7 +27,7 @@ public sealed class ConfigurableWebResearchService(
         return provider.Trim().ToLowerInvariant() switch
         {
             "brave" => braveService.SearchAsync(topic, domain, cancellationToken),
-            "free" or "bing" or "binghtml" or "directdocumentation" =>
+            "free" or "searxng" or "bing" or "binghtml" or "directdocumentation" =>
                 freeService.SearchAsync(topic, domain, cancellationToken),
             "disabled" or "" =>
                 disabledService.SearchAsync(topic, domain, cancellationToken),

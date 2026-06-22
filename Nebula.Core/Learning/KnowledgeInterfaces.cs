@@ -7,6 +7,14 @@ public interface ISearchProvider
         CancellationToken cancellationToken);
 }
 
+public interface IWebSearchOrchestrator
+{
+    Task<IReadOnlyList<SearchResult>> SearchAsync(
+        string query,
+        int maxResults,
+        CancellationToken cancellationToken);
+}
+
 public interface IPageFetcher
 {
     Task<PageContent> FetchAsync(

@@ -91,3 +91,22 @@ public sealed class WebResearchOptions
             : defaultValue;
     }
 }
+
+public sealed class SearXngSearchOptions
+{
+    public const string SectionName = "Research:SearXng";
+
+    public bool Enabled { get; set; } = true;
+
+    public string BaseUrl { get; set; } = "http://localhost:8080";
+
+    public int MaxResults { get; set; } = 10;
+
+    public int TimeoutSeconds { get; set; } = 20;
+
+    public string Language { get; set; } = "pt-BR";
+
+    public int SafeSearch { get; set; } = 1;
+
+    public string Categories { get; set; } = "general";
+}

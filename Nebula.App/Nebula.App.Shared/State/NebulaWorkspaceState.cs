@@ -93,8 +93,9 @@ public sealed class NebulaWorkspaceState(
 
     public IReadOnlyList<WebResearchProviderOption> WebResearchProviders { get; } =
     [
-        new("Free", "Automatico gratuito", "Documentacao direta com fallback para busca HTML do Bing."),
+        new("Free", "Automatico gratuito", "Documentacao direta, SearXNG e fallback para Bing HTML."),
         new("DirectDocumentation", "Documentacao direta", "Usa apenas fontes oficiais conhecidas pelo Nebula."),
+        new("SearXng", "SearXNG", "Pesquisa gratuita em instancia local/self-hosted."),
         new("BingHtml", "Bing HTML", "Pesquisa publica sem chave de API."),
         new("Brave", "Brave Search", "Requer WebResearch:ApiKey configurada no servidor."),
         new("Disabled", "Desativado", "Impede pesquisa web e aprendizado por fontes externas.")

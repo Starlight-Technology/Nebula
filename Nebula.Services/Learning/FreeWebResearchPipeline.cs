@@ -18,6 +18,7 @@ public sealed class ConfigurableSearchProvider(
     WebResearchOptions configuredOptions,
     DirectDocumentationProvider directProvider,
     BingHtmlSearchProvider bingProvider,
+    SearXngSearchProvider searXngProvider,
     FreeSearchProvider freeProvider) : ISearchProvider
 {
     public Task<IReadOnlyList<SearchResult>> SearchAsync(
@@ -32,6 +33,8 @@ public sealed class ConfigurableSearchProvider(
         {
             "directdocumentation" =>
                 directProvider.SearchAsync(query, cancellationToken),
+            "searxng" =>
+                searXngProvider.SearchAsync(query, cancellationToken),
             "bing" or "binghtml" =>
                 bingProvider.SearchAsync(query, cancellationToken),
             _ => freeProvider.SearchAsync(query, cancellationToken)
@@ -270,7 +273,7 @@ public sealed class BingHtmlSearchProvider(
 
 public sealed class FreeSearchProvider(
     DirectDocumentationProvider directProvider,
-    BingHtmlSearchProvider bingProvider,
+    IWebSearchOrchestrator webSearchOrchestrator,
     WebResearchOptions options,
     WebResearchLogSink? logSink = null) : ISearchProvider
 {
@@ -293,19 +296,10 @@ public sealed class FreeSearchProvider(
                 .ToList();
         }
 
-        IReadOnlyList<SearchResult> web;
-        try
-        {
-            web = await bingProvider.SearchAsync(query, cancellationToken);
-        }
-        catch (Exception ex) when (
-            ex is HttpRequestException or TaskCanceledException)
-        {
-            logSink?.Write(
-                $"[AGENT] Web research: Bing HTML search failed; " +
-                $"continuing with direct documentation. error={ex.Message}");
-            web = [];
-        }
+        var web = await webSearchOrchestrator.SearchAsync(
+            query,
+            Math.Clamp(options.MaxResults, 1, 20),
+            cancellationToken);
 
         return direct
             .Concat(web)

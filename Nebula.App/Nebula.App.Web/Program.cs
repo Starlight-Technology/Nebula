@@ -170,6 +170,41 @@ app.UseHttpsRedirection();
 app.UseAntiforgery();
 app.MapStaticAssets();
 
+app.MapGet(
+    "/api/research/search",
+    async (
+        string q,
+        ISearchProvider searchProvider,
+        NebulaRuntimeSettings runtimeSettings,
+        WebResearchOptions webResearchOptions,
+        CancellationToken cancellationToken) =>
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Results.BadRequest(new
+            {
+                error = "Query string parameter 'q' is required."
+            });
+        }
+
+        var providerName = string.IsNullOrWhiteSpace(
+            runtimeSettings.WebResearchProvider)
+            ? webResearchOptions.Provider
+            : runtimeSettings.WebResearchProvider;
+        var results = await searchProvider.SearchAsync(
+            q,
+            cancellationToken);
+
+        return Results.Ok(new ResearchSearchResponse(
+            q,
+            results.Select(result => new ResearchSearchResult(
+                providerName,
+                result.Title,
+                result.Url,
+                result.Snippet,
+                result.SearchScore)).ToList()));
+    });
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
     .AddInteractiveWebAssemblyRenderMode()
@@ -178,3 +213,14 @@ app.MapRazorComponents<App>()
         typeof(Nebula.App.Web.Client._Imports).Assembly);
 
 app.Run();
+
+public sealed record ResearchSearchResponse(
+    string Query,
+    IReadOnlyList<ResearchSearchResult> ProviderResults);
+
+public sealed record ResearchSearchResult(
+    string Provider,
+    string Title,
+    string Url,
+    string Snippet,
+    double Score);

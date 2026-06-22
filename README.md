@@ -124,7 +124,8 @@ O CSV e a versão podem ser sobrescritos por `COMMAND_SAFETY_TRAINING_DATA` e
 ## Pesquisa e aprendizado gratuito
 
 O Learning Engine usa `WebResearch:Provider=Free` por padrão. Esse modo consulta primeiro
-documentação oficial conhecida e usa busca HTML do Bing apenas como fallback, sem API key.
+documentação oficial conhecida, depois SearXNG self-hosted quando configurado, e usa
+busca HTML do Bing apenas como fallback, sem API key.
 As páginas são baixadas por HTTP, limitadas a uma requisição por segundo por domínio,
 extraídas com HtmlAgilityPack e armazenadas no cache PostgreSQL por sete dias.
 
@@ -133,18 +134,35 @@ extraídas com HtmlAgilityPack e armazenadas no cache PostgreSQL por sete dias.
   "WebResearch": {
     "Provider": "Free",
     "ApiKey": "",
-    "MaxResults": 5,
+    "MaxResults": 10,
     "TimeoutSeconds": 20,
     "CacheDays": 7,
     "RateLimitMilliseconds": 1000
+  },
+  "Research": {
+    "SearXng": {
+      "Enabled": true,
+      "BaseUrl": "http://localhost:8080",
+      "MaxResults": 10,
+      "TimeoutSeconds": 20
+    }
   }
 }
 ```
 
-Também estão disponíveis `DirectDocumentation`, `BingHtml`, `Disabled` e o provider
+Também estão disponíveis `DirectDocumentation`, `SearXng`, `BingHtml`, `Disabled` e o provider
 opcional `Brave`. O funcionamento padrão não depende de Brave, SerpAPI, Tavily ou chave
 paga. Quando um mecanismo devolve CAPTCHA ou nenhuma página real, o Nebula registra a
 falha e não cria fontes ou conhecimento fictícios.
+
+Para subir o SearXNG local:
+
+```powershell
+docker compose up -d searxng
+```
+
+Teste a API JSON em `http://localhost:8080/search?q=dotnet&format=json`.
+Veja mais em `docs/research-searxng.md`.
 ## Aprendizado offline-first
 
 O Learning Engine e offline-first. Ele aprende de texto fornecido pelo usuario,
