@@ -88,6 +88,36 @@ public class InMemoryConversationMemoryRepository : IConversationMemoryStore
         return Task.FromResult(savedState);
     }
 
+    public Task<IReadOnlyList<ConversationSummary>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (limit <= 0)
+        {
+            return Task.FromResult<IReadOnlyList<ConversationSummary>>([]);
+        }
+
+        lock (gate)
+        {
+            IReadOnlyList<ConversationSummary> result = statesByConversationId.Values
+                .Select(state =>
+                {
+                    var messageCount = messagesByConversationId.TryGetValue(state.ConversationId, out var messages)
+                        ? messages.Count
+                        : 0;
+
+                    return ConversationSummary.FromState(Clone(state), messageCount);
+                })
+                .OrderByDescending(summary => summary.UpdatedAt)
+                .Take(limit)
+                .ToList();
+
+            return Task.FromResult(result);
+        }
+    }
+
     private static ConversationMessage Clone(ConversationMessage message)
     {
         return new ConversationMessage

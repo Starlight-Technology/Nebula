@@ -1,3 +1,4 @@
+using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 
 namespace Nebula.Agent;
@@ -20,7 +21,20 @@ public interface IManager
         IProgress<ConversationTurn>? progress,
         CancellationToken cancellationToken = default);
 
+    Task<ConversationTurn> RunApprovedCommandAsync(
+        CommandExecution command,
+        IProgress<ConversationTurn>? progress,
+        ApprovalScope scope,
+        CancellationToken cancellationToken = default);
+
+    Task<ConversationTurn> ResumeTaskAsync(
+        AgentRun run,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken = default);
+
     Guid StartNewConversation();
+
+    Guid SelectConversation(Guid conversationId);
 
     Task<string> GenerateCommandSteps(string userRequest);
 

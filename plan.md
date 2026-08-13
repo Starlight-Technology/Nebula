@@ -4,74 +4,74 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Principios
 
-- [ ] Todo resultado importante deve ser verificavel por evidencias reais: arquivos criados, testes executados, logs, screenshots, builds ou artefatos.
-- [ ] O agente deve agir em ciclos pequenos: entender, planejar, executar, observar, corrigir e finalizar.
-- [ ] Autonomia nao deve significar falta de controle: comandos perigosos continuam bloqueados, comandos sensiveis pedem aprovacao e o usuario pode ativar auto-aprovacao consciente.
-- [ ] A UI deve refletir o estado real do sistema: plano atual, comandos pendentes, aprovacoes, execucao, falhas, retries e conclusao.
-- [ ] O Nebula deve preferir ferramentas deterministicas sempre que possivel: compiladores, testes, linters, parsers, formatadores e scanners antes de julgamento subjetivo da LLM.
-- [ ] Memoria e aprendizado devem ser auditaveis, com fonte, confianca, data, experimento e resultado observado.
+- [x] Todo resultado importante deve ser verificavel por evidencias reais: arquivos criados, testes executados, logs, screenshots, builds ou artefatos.
+- [x] O agente deve agir em ciclos pequenos: entender, planejar, executar, observar, corrigir e finalizar.
+- [x] Autonomia nao deve significar falta de controle: comandos perigosos continuam bloqueados, comandos sensiveis pedem aprovacao e o usuario pode ativar auto-aprovacao consciente.
+- [x] A UI deve refletir o estado real do sistema: plano atual, comandos pendentes, aprovacoes, execucao, falhas, retries e conclusao.
+- [x] O Nebula deve preferir ferramentas deterministicas sempre que possivel: compiladores, testes, linters, parsers, formatadores e scanners antes de julgamento subjetivo da LLM.
+- [x] Memoria e aprendizado devem ser auditaveis, com fonte, confianca, data, experimento e resultado observado.
 
 ## Fase 1 - Fundacao de agente confiavel
 
-- [ ] Criar um modelo de `TaskSession` persistente para representar objetivos longos, passos, status, artefatos e decisoes.
-- [ ] Separar claramente estados de execucao: planejando, aguardando aprovacao, executando, observando, corrigindo, bloqueado, completo e cancelado.
-- [ ] Persistir o plano de acao do agente no banco, nao apenas no turno de conversa.
-- [ ] Adicionar retomada de tarefas interrompidas, com contexto de plano, arquivos alterados e ultima observacao.
-- [ ] Criar um painel de "missao atual" na UI com checklist vivo, progresso e proximas acoes.
-- [ ] Registrar todos os comandos com working directory, shell, exit code, stdout, stderr, decisao de seguranca e aprovacao.
-- [ ] Adicionar uma visao de auditoria para comandos aprovados manualmente ou automaticamente.
+- [x] Criar um modelo de `TaskSession` persistente para representar objetivos longos, passos, status, artefatos e decisoes (`AgentRun` + `IAgentRunStore` com passos, plano, artefatos e aprovacoes).
+- [x] Separar claramente estados de execucao: planejando, aguardando aprovacao, executando, observando, corrigindo, bloqueado, completo e cancelado (`ActionExecutionStatus` com `Observing`, `Correcting` e `Blocked` emitidos no fluxo real).
+- [x] Persistir o plano de acao do agente no banco, nao apenas no turno de conversa (`agent_runs.CurrentPlan`, checkpoints no loop).
+- [x] Adicionar retomada de tarefas interrompidas, com contexto de plano, arquivos alterados e ultima observacao (`IManager.ResumeTaskAsync` + botao na tela `/agent-runs`).
+- [x] Criar um painel de "missao atual" na UI com checklist vivo, progresso e proximas acoes (card no side rail do Chat com plano, comandos executados, artefatos e aprovacoes).
+- [x] Registrar todos os comandos com working directory, shell, exit code, stdout, stderr, decisao de seguranca e aprovacao (`commands` + `agent_step_records` expandidos).
+- [x] Adicionar uma visao de auditoria para comandos aprovados manualmente ou automaticamente (tela `/audit`).
 
 ## Fase 2 - Escrita de projetos completos
 
-- [ ] Criar templates de projeto por linguagem e framework: .NET, Blazor, Node, React, Python, CLI, API, worker e scripts simples.
-- [ ] Implementar deteccao automatica de stack existente por arquivos: `.sln`, `.csproj`, `package.json`, `pyproject.toml`, `requirements.txt`, `Dockerfile`.
-- [ ] Criar uma camada de "workspace map" que indexa arquivos, modulos, testes, dependencias e comandos conhecidos.
-- [ ] Ensinar o agente a gerar uma especificacao tecnica antes de criar projetos grandes.
-- [ ] Adicionar modo "criar projeto completo" com etapas padrao: requisitos, arquitetura, scaffold, implementacao, testes, build, smoke test e resumo.
-- [ ] Fazer o agente criar e atualizar README, scripts de setup, exemplos de uso e notas de execucao.
-- [ ] Adicionar suporte a multi-file patches planejados, com revisao antes de aplicar quando o risco for alto.
-- [ ] Criar validadores por stack para garantir que arquivos essenciais existem e comandos basicos funcionam.
+- [x] Criar templates de projeto por linguagem e framework: .NET, Blazor, Node, React, Python, CLI, API, worker e scripts simples (`ProjectTemplateCatalog`: dotnet-console, dotnet-api, python-script, python-package, node-cli).
+- [x] Implementar deteccao automatica de stack existente por arquivos: `.sln`, `.csproj`, `package.json`, `pyproject.toml`, `requirements.txt`, `Dockerfile` (`DeterministicStackDetector` + `WorkspaceMapService`).
+- [x] Criar uma camada de "workspace map" que indexa arquivos, modulos, testes, dependencias e comandos conhecidos (`IWorkspaceMapService` injetado no decision prompt).
+- [x] Ensinar o agente a gerar uma especificacao tecnica antes de criar projetos grandes (regra `PROJECT_SPEC.md` no prompt do planner).
+- [x] Adicionar modo "criar projeto completo" com etapas padrao: requisitos, arquitetura, scaffold, implementacao, testes, build, smoke test e resumo (`OperationKind.ProjectScaffold` + `IProjectScaffolder` + validacao pos-scaffold).
+- [x] Fazer o agente criar e atualizar README, scripts de setup, exemplos de uso e notas de execucao (templates incluem README e `.gitignore`).
+- [x] Adicionar suporte a multi-file patches planejados, com revisao antes de aplicar quando o risco for alto (`OperationKind.PlannedPatch` + `plannedFiles` no JSON de decisao + `IPlannedPatchApplier`; arquivos com extensao de script ou fora das raizes permitidas pedem aprovacao antes de aplicar).
+- [x] Criar validadores por stack para garantir que arquivos essenciais existem e comandos basicos funcionam (`IProjectStackValidator`).
 
 ## Fase 3 - Execucao robusta de scripts e ferramentas
 
-- [ ] Criar um executor detalhado unico para comandos, scripts, escrita de arquivo e leitura de arquivo.
-- [ ] Adicionar suporte a timeouts configuraveis por tipo de comando.
-- [ ] Capturar stdout e stderr em streaming para a UI durante execucao longa.
-- [ ] Detectar prompts interativos e interromper com mensagem clara quando o comando exigir input manual.
-- [ ] Adicionar sandbox opcional por workspace para execucao de comandos mais arriscados.
-- [ ] Criar allowlists por projeto para comandos frequentes: build, test, format, lint, docker compose, migrations e scripts locais.
-- [ ] Adicionar approvals granulares: aprovar uma vez, aprovar nesta conversa, aprovar neste workspace e auto-aprovar categoria.
-- [ ] Registrar hash de scripts criados pelo agente antes de executar.
+- [x] Criar um executor detalhado unico para comandos, scripts, escrita de arquivo e leitura de arquivo.
+- [x] Adicionar suporte a timeouts configuraveis por tipo de comando (`CommandTimeoutSeconds` para terminais e `ScriptTimeoutSeconds` para scripts, com falha clara e retry quando estourado).
+- [x] Capturar stdout e stderr em streaming para a UI durante execucao longa (`IShellOutputObserver` + `IStreamingShellExecutor` no `ShellExecutor` por linha, fuso de linhas consecutivas por comando em `session.EmitStreamOutput` e `ActionExecutionEventKind.StreamOutput` renderizado como evento no Chat).
+- [x] Detectar prompts interativos e interromper com mensagem clara quando o comando exigir input manual (`InteractivePromptDetector` no `ShellExecutor`: leitura incremental de stdout/stderr, padroes como `[y/N]`, `Press any key`, `Continue?`, `Password:`; graca de 250 ms para processo sair sozinho; encerra com exit code -1 e orienta reformular o comando de forma nao-interativa; stdin redirecionado vazio para comandos nao-interativos).
+- [x] Adicionar sandbox opcional por workspace para execucao de comandos mais arriscados (comandos `TerminalCommand` que a policy marcaria como `AskApproval` executam dentro de container Docker isolado quando habilitado: `SandboxMode`/`SandboxImage`/`SandboxMemoryLimitMb`/`SandboxCpuLimit` em `NebulaRuntimeSettings`; `DockerCommandSandbox` usa `--rm --network none --cap-drop ALL --security-opt no-new-privileges`, monta o workspace como `/workspace:rw`, sem limites quando nao configurados; shells inelegiveis (Cmd/Unknown), outras operacoes e o fluxo com aprovacao manual/auto continuam como antes; `CommandExecution.Sandboxed` marca a execucao e a nota registra o sandbox).
+- [x] Criar allowlists por projeto para comandos frequentes: build, test, format, lint, docker compose, migrations e scripts locais (`ICommandAllowlistService`/`CommandAllowlistService` persistindo em `workspace_memory` via `WorkspaceMemoryKind.AllowlistedCommand`, normalização de comando, derruba `AskApproval` de `TerminalCommand`/`ScriptExecution` após o override manual/auto; campo de allowlist por workspace em `Settings.razor`).
+- [x] Adicionar approvals granulares: aprovar uma vez, aprovar nesta conversa, aprovar neste workspace e auto-aprovar categoria (`ApprovalScope` Once/Conversation/Workspace/Category dentro de `AgentApprovedAction`; em memória por conversa no `Manager` via `ConversationApprovedCommands`; workspace persiste na allowlist; categoria mapeada de `CommandIntent` para `Nebula:AutoApproveCategories`; seletor de escopo no card de aprovação do Chat).
+- [x] Registrar hash de scripts criados pelo agente antes de executar.
 
 ## Fase 4 - Ciclo de qualidade estilo Codex
 
-- [ ] Criar um "Definition of Done" configuravel por tipo de tarefa.
-- [ ] Exigir build ou teste antes de marcar tarefas de codigo como completas.
-- [ ] Adicionar formatacao automatica quando houver formatador conhecido.
-- [ ] Adicionar lint e analise estatica por stack quando disponivel.
-- [ ] Gerar relatorio final com arquivos alterados, comandos executados, testes rodados e riscos restantes.
-- [ ] Implementar revisao automatica do proprio diff antes de finalizar.
-- [ ] Detectar alteracoes do usuario no meio da execucao e evitar sobrescrever sem reconciliar.
-- [ ] Criar modo "repair loop" para corrigir falhas de build/test ate limite configuravel.
+- [x] Criar um "Definition of Done" configuravel (`RequireDeterministicVerification`, global por enquanto; desligar pula a verificacao deterministica no fechamento).
+- [x] Exigir build ou teste antes de marcar tarefas de codigo como completas (`DeterministicVerificationService` + gate no `AgentActionRunner`).
+- [x] Adicionar formatacao automatica quando houver formatador conhecido (`.NET`: check `dotnet format --verify-no-changes` no DoD; correcao com `dotnet format` permitida pela policy deterministica).
+- [x] Adicionar lint e analise estatica por stack quando disponivel (`LintCommand` no stack: `dotnet format` para .NET e `npm run lint` para Node quando o script existe; falha de lint reprova o DoD com mensagem de correcao).
+- [x] Gerar relatorio final com arquivos alterados, comandos executados, testes rodados e riscos restantes.
+- [x] Implementar revisao automatica do proprio diff antes de finalizar (`IGitDiffService` + secoes de diff e alteracoes fora da acao do agente no `FinalReport`).
+- [x] Detectar alteracoes do usuario no meio da execucao e evitar sobrescrever sem reconciliar (`ConcurrentModificationGuard`: arquivo alterado apos o inicio do run pede aprovacao antes de sobrescrever, incluindo patches multi-arquivo).
+- [x] Criar modo "repair loop" para corrigir falhas de build/test ate limite configuravel (`MaxVerificationRetries`: falha do DoD volta para o agente corrigir; depois do limite, falha terminal com mensagem clara).
 
 ## Fase 5 - Planejamento autonomo avancado
 
-- [ ] Substituir planos livres por um schema estruturado de plano com etapas, dependencias, criterios de sucesso e riscos.
+- [x] Substituir planos livres por um schema estruturado de plano com etapas, dependencias, criterios de sucesso e riscos (`AgentActionDecision.Plan` + `AgentPlanStep` com `id`/`description`/`dependsOn`/`status`, schema `plan` no JSON de decisao e render `#id [status] (depends on x)` na UI).
 - [ ] Permitir que o agente decomponha tarefas grandes em subtarefas com checkpoints.
 - [ ] Adicionar estimativa de risco por etapa: baixo, medio, alto e critico.
-- [ ] Implementar replanejamento quando uma observacao contradiz o plano.
+- [x] Implementar replanejamento quando uma observacao contradiz o plano.
 - [ ] Criar memoria de estrategias que funcionaram por stack e tipo de erro.
 - [ ] Adicionar comparacao entre opcoes de arquitetura antes de implementar mudancas grandes.
 - [ ] Criar capacidade de "dry run": mostrar plano e comandos previstos sem executar.
-- [ ] Implementar politicas de parada para loops repetitivos, erros identicos e baixa confianca.
+- [x] Implementar politicas de parada para loops repetitivos, erros identicos e baixa confianca.
 
 ## Fase 6 - Memoria, aprendizado e conhecimento
 
 - [ ] Indexar documentacao do projeto, README, comentarios publicos e exemplos internos.
-- [ ] Criar memoria por workspace: comandos que funcionam, portas usadas, setup, stack, padroes e convencoes.
+- [x] Criar memoria por workspace: comandos que funcionam, portas usadas, setup, stack, padroes e convencoes (`WorkspaceMemoryService` + `IWorkspaceMemoryStore` com `WorkspaceMemoryKind` WorkingCommand/UsedPort/Script/Note, `PostgresWorkspaceMemoryStore` com upsert por `{workspace, kind, key}` e resumo no decision prompt).
 - [ ] Criar memoria por usuario: preferencias de estilo, idioma, nivel de detalhe e tolerancia a autonomia.
-- [ ] Adicionar avaliacao de confianca para cada item aprendido.
-- [ ] Guardar evidencias de aprendizado: fonte, experimento, resultado e data.
+- [x] Adicionar avaliacao de confianca para cada item aprendido.
+- [x] Guardar evidencias de aprendizado: fonte, experimento, resultado e data.
 - [ ] Implementar esquecimento ou revalidacao de conhecimento antigo.
 - [ ] Criar busca semantica local para codigo e conhecimento.
 - [ ] Usar conhecimento aprendido para reduzir tentativas repetidas e melhorar comandos sugeridos.
@@ -80,9 +80,9 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 - [ ] Criar uma tela "Agent Run" dedicada com plano, terminal, arquivos, aprovacoes e evidencias.
 - [ ] Mostrar comandos em tempo real com status: pendente, aguardando aprovacao, executando, passou, falhou ou bloqueado.
-- [ ] Permitir aprovar comandos direto do card do passo.
+- [x] Permitir aprovar comandos direto do card do passo.
 - [ ] Permitir editar comando antes de aprovar.
-- [ ] Mostrar por que a policy pediu aprovacao ou bloqueou.
+- [x] Mostrar por que a policy pediu aprovacao ou bloqueou.
 - [ ] Criar timeline de eventos do agente com filtros.
 - [ ] Adicionar painel de artefatos criados: arquivos, scripts, logs, screenshots e relatorios.
 - [ ] Criar modo compacto para acompanhar execucoes longas sem poluir a conversa.
@@ -96,7 +96,7 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [ ] Integrar screenshots automaticos para UI depois de mudancas frontend.
 - [ ] Detectar portas ocupadas e escolher alternativas automaticamente.
 - [ ] Adicionar geracao de migrations com aprovacao explicita.
-- [ ] Criar "project doctor" para diagnosticar ambiente, SDKs, Docker, banco, Ollama e dependencias.
+- [x] Criar "project doctor" para diagnosticar ambiente, SDKs, Docker, banco, Ollama e dependencias.
 
 ## Fase 9 - Capacidades multimodais e artefatos
 
@@ -110,13 +110,13 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 ## Fase 10 - Seguranca e governanca
 
 - [ ] Separar policy de comandos por perfis: conservador, padrao, autonomo e laboratorio.
-- [ ] Exigir aprovacao para rede, instalacao de pacotes, escrita fora do workspace, processos persistentes e alteracoes globais.
-- [ ] Bloquear exfiltracao de credenciais, leitura de segredos e destruicao ampla de dados.
-- [ ] Criar logs auditaveis para todas as decisoes de seguranca.
-- [ ] Adicionar redacao automatica de segredos em logs exibidos na UI.
+- [x] Exigir aprovacao para rede, instalacao de pacotes, escrita fora do workspace, processos persistentes e alteracoes globais.
+- [x] Bloquear exfiltracao de credenciais, leitura de segredos e destruicao ampla de dados.
+- [x] Criar logs auditaveis para todas as decisoes de seguranca.
+- [x] Adicionar redacao automatica de segredos em logs exibidos na UI.
 - [ ] Criar simulador de policy para explicar como um comando seria classificado antes de executar.
-- [ ] Permitir configuracao por workspace das categorias auto-aprovadas.
-- [ ] Criar testes de regressao para comandos perigosos conhecidos.
+- [x] Permitir configuracao por workspace das categorias auto-aprovadas (categorias por workspace persistidas em `workspace_memory` via `WorkspaceMemoryKind.AutoApprovedCategory` + `IWorkspaceCategoryPolicyService`, combinadas com as globais no override; escopo Category de aprovacao grava no workspace, nao global).
+- [x] Criar testes de regressao para comandos perigosos conhecidos.
 
 ## Fase 11 - Avaliacao e benchmarks
 
@@ -140,13 +140,14 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Backlog Tecnico Imediato
 
-- [ ] Criar `IAgentRunStore` para persistir execucoes longas.
-- [ ] Criar `AgentRun`, `AgentStepRecord`, `AgentArtifactRecord` e `AgentApprovalRecord`.
-- [ ] Mover logica de aprovacao para um servico dedicado, por exemplo `ICommandApprovalService`.
+- [x] Criar `IAgentRunStore` para persistir execucoes longas.
+- [x] Criar `AgentRun`, `AgentStepRecord`, `AgentArtifactRecord` e `AgentApprovalRecord`.
+- [x] Mover logica de aprovacao para um servico dedicado, por exemplo `ICommandApprovalService`.
 - [ ] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas.
-- [ ] Adicionar testes para aprovacao por categoria e por workspace.
+- [x] Adicionar testes para aprovacao por categoria e por workspace.
 - [ ] Criar componente Blazor reutilizavel para cards de comando.
-- [ ] Criar tela `/agent-runs`.
+- [x] Criar tela `/agent-runs`.
+- [x] Criar tela `/audit` para auditoria de aprovacoes.
 - [ ] Criar worker de execucao para nao prender o ciclo de renderizacao da UI.
 - [ ] Criar eventos de progresso fortemente tipados em vez de depender de texto.
 - [ ] Criar fixture de projeto temporario para testes end-to-end do agente.
@@ -154,7 +155,7 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 ## Marcos de Entrega
 
 - [ ] Marco 1: UI mostra plano vivo, comandos, aprovacoes e evidencias.
-- [ ] Marco 2: Nebula cria scripts simples, executa e corrige falhas automaticamente.
+- [x] Marco 2: Nebula cria scripts simples, executa e corrige falhas automaticamente.
 - [ ] Marco 3: Nebula cria um projeto pequeno completo com testes e README.
 - [ ] Marco 4: Nebula altera um projeto existente seguindo padroes locais e passando testes.
 - [ ] Marco 5: Nebula retoma uma tarefa interrompida sem perder contexto.

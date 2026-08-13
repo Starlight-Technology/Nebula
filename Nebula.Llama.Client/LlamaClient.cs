@@ -9,7 +9,7 @@ public class LlamaClient : ILlamaClient
 {
     private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
     private const string DefaultModel = "deepseek-r1:7b";
-    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultRequestTimeout = Timeout.InfiniteTimeSpan;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -74,21 +74,43 @@ public class LlamaClient : ILlamaClient
             cancellationToken: cancellationToken);
     }
 
+    public async Task<string> GetStructuredResponseAsync(
+        string prompt,
+        object? jsonSchema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
+
+        if (jsonSchema is null)
+        {
+            return await GetResponseAsync(prompt, progress: null, cancellationToken);
+        }
+
+        return await SendGenerateRequestAsync(
+            prompt,
+            modelName: null,
+            think: false,
+            format: jsonSchema,
+            progress: null,
+            cancellationToken: cancellationToken);
+    }
+
     private async Task<string> SendGenerateRequestAsync(
         string prompt,
         string? modelName,
         string? systemPrompt = null,
         bool think = true,
+        object? format = null,
         IProgress<LlamaStreamUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think, progress, cancellationToken);
+            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think, format, progress, cancellationToken);
         }
         catch (InvalidOperationException ex) when (think && IsThinkingUnsupportedError(ex.Message))
         {
-            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think: false, progress, cancellationToken);
+            return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think: false, format, progress, cancellationToken);
         }
     }
 
@@ -97,10 +119,14 @@ public class LlamaClient : ILlamaClient
         string? modelName,
         string? systemPrompt,
         bool think,
+        object? format,
         IProgress<LlamaStreamUpdate>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
+
+        var jsonFormat = format
+            ?? (ShouldUseJsonFormat(prompt) ? "json" : null);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl)
         {
@@ -113,9 +139,12 @@ public class LlamaClient : ILlamaClient
                 Stream = true,
                 Think = think,
                 System = systemPrompt,
-                Format = ShouldUseJsonFormat(prompt) ? "json" : null,
-                Options = ShouldUseJsonFormat(prompt)
-                    ? new LlamaGenerateOptions()
+                Format = jsonFormat,
+                Options = jsonFormat is not null
+                    ? new LlamaGenerateOptions
+                    {
+                        NumPredict = format is null ? 384 : 2048
+                    }
                     : null
             })
         };
@@ -210,6 +239,22 @@ public class LlamaClient : ILlamaClient
                 LastError = ex.Message,
                 InstalledModels = []
             };
+        }
+    }
+
+    public async Task<string?> GetServerVersionAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await httpClient.GetAsync(BuildApiUrl("version"), cancellationToken);
+            await EnsureSuccessAsync(response);
+
+            var payload = await response.Content.ReadFromJsonAsync<LlamaVersionResponse>(JsonOptions, cancellationToken);
+            return payload?.Version;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -431,7 +476,7 @@ public class LlamaClient : ILlamaClient
 
         [JsonPropertyName("format")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Format { get; set; }
+        public object? Format { get; set; }
 
         [JsonPropertyName("options")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -463,6 +508,12 @@ public class LlamaClient : ILlamaClient
     {
         [JsonPropertyName("models")]
         public List<LlamaModelInfo>? Models { get; set; }
+    }
+
+    private sealed class LlamaVersionResponse
+    {
+        [JsonPropertyName("version")]
+        public string? Version { get; set; }
     }
 
     private sealed class LlamaPullRequest

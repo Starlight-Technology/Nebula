@@ -28,6 +28,26 @@ public interface ICommandRepository
     Task<StoredCommand> UpdateExecutionAsync(Guid commandId, bool executed, string? result, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Updates a command's full execution details after it runs.
+    /// </summary>
+    Task<StoredCommand> UpdateExecutionDetailsAsync(
+        Guid commandId,
+        bool executed,
+        string? result,
+        int? exitCode,
+        string? standardOutput,
+        string? standardError,
+        DateTimeOffset? executedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves commands that were approved (manually or automatically),
+    /// ordered by most recent execution, with pagination. Used by the
+    /// approval audit screen.
+    /// </summary>
+    Task<IEnumerable<StoredCommand>> GetApprovedCommandsAsync(int skip = 0, int take = 100, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves commands by OS type (Windows, Linux, macOS).
     /// Useful for analyzing command distribution by platform.
     /// </summary>

@@ -3,8 +3,11 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 
 using Nebula.Agent;
+using Nebula.Agent.Data;
 using Nebula.App.Shared.Pages;
 using Nebula.App.Shared.Setup;
+using Nebula.App.Shared.State;
+using Nebula.Core.Agent;
 using Nebula.Core.Configuration;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
@@ -369,13 +372,198 @@ public sealed class HomePageTests : HomePageTestContext
                 StringComparison.OrdinalIgnoreCase));
     }
 
-    private static void AssertReasoningBeforeResponse(
+private static void AssertReasoningBeforeResponse(
         IRenderedComponent<Chat> component)
     {
         var responseStack = component.Find(".nebula-response-stack");
         Assert.True(responseStack.Children.Length >= 2);
         Assert.Equal("DETAILS", responseStack.Children[0].TagName);
         Assert.Equal("SECTION", responseStack.Children[1].TagName);
+    }
+
+    [Fact]
+    public async Task chat_page_must_render_saved_conversations_in_history_rail()
+    {
+        var repository = new InMemoryConversationMemoryRepository();
+        var conversationId = Guid.NewGuid();
+        await repository.UpsertStateAsync(new ConversationState
+        {
+            ConversationId = conversationId,
+            CurrentGoal = "Refatorar o modulo de seguranca",
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        Services.AddSingleton<IConversationMemoryRepository>(repository);
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+
+        var component = Render<Chat>();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Historico", component.Markup);
+            Assert.Contains("Refatorar o modulo de seguranca", component.Markup);
+        });
+    }
+
+    [Fact]
+    public async Task chat_page_must_open_conversation_when_history_item_is_clicked()
+    {
+        var repository = new InMemoryConversationMemoryRepository();
+        var conversationId = Guid.NewGuid();
+        await repository.UpsertStateAsync(new ConversationState
+        {
+            ConversationId = conversationId,
+            CurrentGoal = "Conversa salva",
+            UpdatedAt = DateTime.UtcNow
+        });
+        await repository.AddMessageAsync(new ConversationMessage
+        {
+            ConversationId = conversationId,
+            Role = ConversationRoles.User,
+            Content = "primeira pergunta"
+        });
+        await repository.AddMessageAsync(new ConversationMessage
+        {
+            ConversationId = conversationId,
+            Role = ConversationRoles.Assistant,
+            Content = "primeira resposta"
+        });
+
+        var manager = new FakeManager();
+        Services.AddSingleton<IConversationMemoryRepository>(repository);
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Conversa salva", component.Markup);
+        });
+
+        component.Find(".nebula-history-item").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Equal(conversationId, manager.ActiveConversationId);
+            Assert.Contains("primeira pergunta", component.Markup);
+            Assert.Contains("primeira resposta", component.Markup);
+        });
+    }
+
+    [Fact]
+    public void chat_page_must_show_mission_panel_with_plan_when_agent_turn_is_active()
+    {
+        var manager = new FakeManager
+        {
+            ManageConversationAsyncHandler = (_, _, _) => Task.FromResult(new ConversationTurn
+            {
+                Prompt = "Crie um script hello.py",
+                Mode = InteractionMode.Agent,
+                ModelName = "qwen3:8b",
+                Classification = InteractionMode.Agent.ToString(),
+                Response = "Script criado.",
+                ActionStatus = ActionExecutionStatus.Completed,
+                CurrentPlan = "1. Create hello.py - completed.\n2. Verify with Get-ChildItem - completed."
+            })
+        };
+
+        RegisterPageServices(manager, new FakeLlamaClient());
+
+        var component = Render<Chat>();
+        Services.GetRequiredService<NebulaWorkspaceState>().SelectInteractionMode(InteractionMode.Agent);
+
+        component.Find("textarea").Input("Crie um script hello.py");
+        FindButton(component, "Enviar").Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Missao atual", component.Markup);
+            Assert.Contains("Concluido", component.Markup);
+            Assert.Contains("1. Create hello.py - completed.", component.Markup);
+            Assert.Contains("2. Verify with Get-ChildItem - completed.", component.Markup);
+        });
+    }
+
+    [Fact]
+    public void audit_page_must_render_approved_commands_from_repository()
+    {
+        var repository = new FakeCommandRepository
+        {
+            Approved =
+            [
+                new StoredCommand
+                {
+                    Id = Guid.NewGuid(),
+                    Objective = "List files",
+                    Command = "Get-ChildItem",
+                    OsType = "Windows",
+                    WorkingDirectory = "C:\\work",
+                    Shell = "powershell",
+                    SafetyDecision = "Allow",
+                    ApprovedByUser = true,
+                    Executed = true,
+                    ExitCode = 0,
+                    ExecutedAt = DateTimeOffset.UtcNow,
+                    CreatedAt = DateTime.UtcNow
+                }
+            ]
+        };
+        Services.AddSingleton<ICommandRepository>(repository);
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+
+        var component = Render<Audit>();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.Contains("Get-ChildItem", component.Markup);
+            Assert.Contains("Manual", component.Markup);
+            Assert.Contains("List files", component.Markup);
+            Assert.Contains("Allow", component.Markup);
+            Assert.Contains("powershell", component.Markup);
+        });
+    }
+
+    private sealed class FakeCommandRepository : ICommandRepository
+    {
+        public List<StoredCommand> Approved { get; set; } = [];
+
+        public Task<StoredCommand> SaveAsync(StoredCommand command, CancellationToken cancellationToken = default)
+            => Task.FromResult(command);
+
+        public Task<StoredCommand?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult<StoredCommand?>(null);
+
+        public Task<IEnumerable<StoredCommand>> GetByRequestIdAsync(Guid requestId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IEnumerable<StoredCommand>>(new List<StoredCommand>());
+
+        public Task<StoredCommand> UpdateExecutionAsync(Guid commandId, bool executed, string? result, CancellationToken cancellationToken = default)
+            => Task.FromResult(new StoredCommand { Id = commandId });
+
+        public Task<StoredCommand> UpdateExecutionDetailsAsync(
+            Guid commandId,
+            bool executed,
+            string? result,
+            int? exitCode,
+            string? standardOutput,
+            string? standardError,
+            DateTimeOffset? executedAt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new StoredCommand { Id = commandId, Executed = executed });
+
+        public Task<IEnumerable<StoredCommand>> GetApprovedCommandsAsync(int skip = 0, int take = 100, CancellationToken cancellationToken = default)
+            => Task.FromResult<IEnumerable<StoredCommand>>(Approved);
+
+        public Task<IEnumerable<StoredCommand>> GetByOsTypeAsync(string osType, CancellationToken cancellationToken = default)
+            => Task.FromResult<IEnumerable<StoredCommand>>(new List<StoredCommand>());
+
+        public Task<IEnumerable<StoredCommand>> GetExecutedCommandsAsync(int skip = 0, int take = 100, CancellationToken cancellationToken = default)
+            => Task.FromResult<IEnumerable<StoredCommand>>(Approved);
+
+        public Task<CommandVerification> SaveVerificationAsync(CommandVerification verification, CancellationToken cancellationToken = default)
+            => Task.FromResult(verification);
+
+        public Task<CommandVerification?> GetVerificationAsync(Guid commandId, CancellationToken cancellationToken = default)
+            => Task.FromResult<CommandVerification?>(null);
     }
 
     private sealed class FakeManager : IManager
@@ -424,6 +612,34 @@ public sealed class HomePageTests : HomePageTestContext
             return RunApprovedCommandAsyncHandler(command, progress, cancellationToken);
         }
 
+        public Task<ConversationTurn> RunApprovedCommandAsync(
+            CommandExecution command,
+            IProgress<ConversationTurn>? progress,
+            ApprovalScope scope,
+            CancellationToken cancellationToken = default)
+        {
+            return RunApprovedCommandAsyncHandler(command, progress, cancellationToken);
+        }
+
+        public Func<AgentRun, IProgress<ConversationTurn>?, CancellationToken, Task<ConversationTurn>> ResumeTaskAsyncHandler { get; set; }
+            = (run, _, _) => Task.FromResult(new ConversationTurn
+            {
+                Prompt = run.Prompt,
+                Mode = InteractionMode.Agent,
+                ModelName = "qwen3:8b",
+                Classification = InteractionMode.Agent.ToString(),
+                Response = "Tarefa retomada.",
+                ActionStatus = ActionExecutionStatus.Completed
+            });
+
+        public Task<ConversationTurn> ResumeTaskAsync(
+            AgentRun run,
+            IProgress<ConversationTurn>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            return ResumeTaskAsyncHandler(run, progress, cancellationToken);
+        }
+
         public Task<string> ManageResponse(UserMessage message)
         {
             return Task.FromResult(message.Content);
@@ -432,6 +648,12 @@ public sealed class HomePageTests : HomePageTestContext
         public Guid StartNewConversation()
         {
             ActiveConversationId = Guid.NewGuid();
+            return ActiveConversationId;
+        }
+
+        public Guid SelectConversation(Guid conversationId)
+        {
+            ActiveConversationId = conversationId;
             return ActiveConversationId;
         }
 
@@ -502,6 +724,11 @@ public sealed class HomePageTests : HomePageTestContext
                     }
                 ]
             });
+        }
+
+        public Task<string?> GetServerVersionAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<string?>("0.24.0");
         }
 
         public Task<IReadOnlyList<LlamaModelInfo>> GetInstalledModelsAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)

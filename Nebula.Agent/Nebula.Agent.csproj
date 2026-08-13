@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Nebula.Agent.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
     <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
     <ProjectReference Include="..\Nebula.Services\Nebula.Services.csproj" />
@@ -16,10 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
-    <PackageReference Include="MongoDB.Driver" Version="3.9.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
   </ItemGroup>
 
 </Project>

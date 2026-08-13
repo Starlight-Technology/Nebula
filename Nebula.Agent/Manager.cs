@@ -1,8 +1,12 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.RegularExpressions;
 
 using Nebula.Agent.Application;
 using Nebula.Agent.Data;
+using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
+using Nebula.Core.Memory;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
@@ -21,6 +25,8 @@ public class Manager : IManager
     private readonly PromptRequestAuditService promptAuditService;
     private readonly int maxActionRetryCount;
     private readonly int maxActionStepCount;
+    private readonly ConcurrentDictionary<Guid, HashSet<string>>
+        approvedCommandsByConversation = new();
     private Guid activeConversationId = Guid.NewGuid();
 
     public Manager(
@@ -32,7 +38,7 @@ public class Manager : IManager
         IPromptRequestRepository? promptRepository = null,
         IConversationMemoryRepository? conversationMemoryRepository = null,
         NebulaContextBuilder? contextBuilder = null,
-        int maxActionRetries = 5,
+        int maxActionRetries = AgentActionRunRequest.DefaultMaxRetriesPerStep,
         int maxActionSteps = AgentActionRunRequest.DefaultMaxSteps,
         IAgentActionRunner? actionRunner = null,
         IConversationContextService? conversationContextService = null,
@@ -82,6 +88,18 @@ public class Manager : IManager
         return activeConversationId;
     }
 
+    public Guid SelectConversation(Guid conversationId)
+    {
+        if (conversationId == Guid.Empty)
+        {
+            throw new ArgumentException("Conversation id cannot be empty.", nameof(conversationId));
+        }
+
+        activeConversationId = conversationId;
+        logger.Log($"Switched to ConversationId '{activeConversationId}'.");
+        return activeConversationId;
+    }
+
     public async Task<ConversationTurn> ManageConversationAsync(
         UserMessage message,
         IProgress<ConversationTurn>? progress,
@@ -98,7 +116,15 @@ public class Manager : IManager
             activeConversationId,
             Guid.NewGuid(),
             message with { Content = message.Content.Trim() },
-            llamaClient.SelectedModel);
+            llamaClient.SelectedModel)
+        {
+            ConversationApprovedCommands =
+                approvedCommandsByConversation.TryGetValue(
+                    activeConversationId,
+                    out var approved)
+                    ? approved.ToList()
+                    : null
+        };
 
         try
         {
@@ -115,13 +141,49 @@ public class Manager : IManager
         {
             logger.LogError(
                 $"{ModePrefix(request.Mode)} Error managing response: {ex.Message}");
+#if DEBUG
+            var debugInfo = $"**{ModePrefix(request.Mode)} Erro:** {ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}";
+            return new ConversationTurn
+            {
+                ConversationId = request.ConversationId,
+                RequestId = request.RequestId,
+                Prompt = request.Prompt,
+                Mode = request.Mode,
+                ModelName = llamaClient.SelectedModel,
+                Response = debugInfo,
+                ActionStatus = ActionExecutionStatus.Failed,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.Failed,
+                        Status = ActionExecutionStatus.Failed,
+                        Title = "Debug error",
+                        Message = debugInfo
+                    }
+                ],
+                IsCancelled = false
+            };
+#else
             throw;
+#endif
         }
     }
 
     public Task<ConversationTurn> RunApprovedCommandAsync(
         CommandExecution command,
         IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken = default) =>
+        RunApprovedCommandAsync(
+            command,
+            progress,
+            ApprovalScope.Once,
+            cancellationToken);
+
+    public Task<ConversationTurn> RunApprovedCommandAsync(
+        CommandExecution command,
+        IProgress<ConversationTurn>? progress,
+        ApprovalScope scope,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -129,7 +191,17 @@ public class Manager : IManager
 
         var prompt = $"Executar comando aprovado: {command.Run}";
         logger.Log(
-            $"[AGENT] User approved command for ConversationId '{activeConversationId}': {command.Run}");
+            $"[AGENT] User approved command for ConversationId '{activeConversationId}' " +
+            $"(scope {scope}): {command.Run}");
+
+        var normalized = CommandNormalization.Normalize(command.Run);
+        if (scope == ApprovalScope.Conversation)
+        {
+            approvedCommandsByConversation
+                .GetOrAdd(activeConversationId, static _ => new HashSet<string>(
+                    StringComparer.OrdinalIgnoreCase))
+                .Add(normalized);
+        }
 
         return actionRunner.RunAsync(
             new AgentActionRunRequest
@@ -143,14 +215,58 @@ public class Manager : IManager
                 ModelName = llamaClient.SelectedModel,
                 MaxSteps = 1,
                 MaxRetriesPerStep = 0,
+                ConversationApprovedCommands =
+                    approvedCommandsByConversation.TryGetValue(
+                        activeConversationId,
+                        out var approved)
+                        ? approved.ToList()
+                        : null,
                 ApprovedAction = new AgentApprovedAction
                 {
                     Objective = command.Objective,
                     Command = command.Run,
                     OperationKind = command.OperationKind,
                     TargetPath = command.TargetPath,
-                    WorkingDirectory = command.WorkingDirectory
+                    PlannedFiles = command.PlannedFiles,
+                    WorkingDirectory = command.WorkingDirectory,
+                    Scope = scope
                 }
+            },
+            progress,
+            cancellationToken);
+    }
+
+    public Task<ConversationTurn> ResumeTaskAsync(
+        AgentRun run,
+        IProgress<ConversationTurn>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        logger.Log(
+            $"[AGENT] Resuming task '{run.Prompt}' for ConversationId '{activeConversationId}' " +
+            $"from run '{run.Id}' (previous status: {run.Status}).");
+
+        return actionRunner.RunAsync(
+            new AgentActionRunRequest
+            {
+                ConversationId = activeConversationId,
+                RequestId = Guid.NewGuid(),
+                Prompt = run.Prompt,
+                Mode = InteractionMode.Agent,
+                ChatHistoryContext = BuildResumeContext(run),
+                ModelName = string.IsNullOrWhiteSpace(run.ModelName)
+                    ? llamaClient.SelectedModel
+                    : run.ModelName,
+                MaxSteps = maxActionStepCount,
+                MaxRetriesPerStep = maxActionRetryCount,
+                WorkspaceRoot = run.WorkspaceRoot,
+                ConversationApprovedCommands =
+                    approvedCommandsByConversation.TryGetValue(
+                        activeConversationId,
+                        out var approved)
+                        ? approved.ToList()
+                        : null
             },
             progress,
             cancellationToken);
@@ -280,6 +396,47 @@ public class Manager : IManager
 
     private static string ModePrefix(InteractionMode mode) =>
         mode == InteractionMode.Agent ? "[AGENT]" : "[CHAT]";
+
+    private static string BuildResumeContext(AgentRun run)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("[resumed_task]");
+        sb.AppendLine(
+            "This task was interrupted and is being resumed. Continue from where it stopped " +
+            "using the plan and the last observation below. Do not restart from scratch.");
+        sb.AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(run.CurrentPlan))
+        {
+            sb.AppendLine("Previous plan:");
+            sb.AppendLine(run.CurrentPlan);
+            sb.AppendLine();
+        }
+
+        var lastStep = run.Steps.LastOrDefault();
+        if (lastStep is not null)
+        {
+            sb.AppendLine(
+                $"Last step: {lastStep.Step}.{lastStep.Attempt} {lastStep.Objective} " +
+                $"(success: {lastStep.Success})");
+            if (!string.IsNullOrWhiteSpace(lastStep.Command))
+            {
+                sb.AppendLine($"Last command: {lastStep.Command}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(lastStep.StandardOutput))
+            {
+                sb.AppendLine($"Last output: {lastStep.StandardOutput}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(lastStep.StandardError))
+            {
+                sb.AppendLine($"Last error: {lastStep.StandardError}");
+            }
+        }
+
+        return sb.ToString();
+    }
 
     private static ICommandPolicyEngine CreateDefaultPolicyEngine(ILogger logger)
     {

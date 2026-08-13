@@ -63,21 +63,38 @@ Use these categories when describing Nebula:
 | Chat mode | Implemented | `InteractionMode.Chat`, `Manager`, `ChatResponseService`, `NebulaContextBuilder`, UI selector in `Nebula.App.Shared/Pages/Chat.razor`. |
 | Agent mode | Implemented | `InteractionMode.Agent`, `AgentActionRunner`, `AgentActionSession`, ReAct JSON decision flow, execution history, evidence, retries, approvals. |
 | ReAct planning/execution loop | Implemented | `AgentActionRunner.RunAsync`, `GenerateDecisionAsync`, `ExecuteActionAsync`, retry and failure paths in tests. |
-| Shell command execution | Implemented | `ShellExecutor`, `CommandResolver`, `RuntimeCommandEnvironmentDetector`, command tests. |
+| Shell command execution | Implemented | `ShellExecutor`, `CommandResolver`, `RuntimeCommandEnvironmentDetector`, `InteractivePromptDetector` (encerra comandos que esperam input manual com mensagem clara e exit code -1), command tests. |
 | File read/write operations | Implemented | `OperationKind.FileRead`, `OperationKind.FileWrite`, `ExecuteFileReadAsync`, `ExecuteFileWriteAsync`, operation safety tests. |
 | Script content and script execution | Implemented with safety limits | `OperationKind.ScriptContent`, `OperationKind.ScriptExecution`, `ScriptContentSafetyClassifier`, `SessionArtifactPolicy`. |
 | Human approval | Partial | UI can approve pending terminal/script commands; `AskApproval` exists. Approval scope is narrow and not a durable approval workflow. |
-| Auto-approval | Partial | `NebulaRuntimeSettings.AutoApproveCommands` is supported; use only in trusted development scenarios. |
+| Approval override service | Implemented | `ICommandApprovalService`/`CommandApprovalService` (`ApprovalOverrideSource` None/Manual/Conversation/Workspace/Category/Auto, `ApprovalOverrideInput`, `ApprovalScope` Once/Conversation/Workspace/Category, `EvaluateOverride` com precedencia Manual > Conversation > Categoria > Auto); `ApprovalOverrideResult.CanProceed`; overridable kinds sao `TerminalCommand`, `ScriptExecution`, `FileRead`; categorias via `CategorizeIntent` (package-install, network-access, privileged-operation, destructive-operation, data-exfiltration, read-only, write-local, execute-local, blocked, needs-approval); normalizacao de comando compartilhada `CommandNormalization.Normalize` (lowercase + espacos colapsados). |
+| Granular approval scope | Implemented | `ApprovalScope` no `AgentApprovedAction` + select na UI (Once/Conversation/Workspace/Category): Once aprova so a acao; Conversation rastreia comandos por conversa em memoria no `Manager` (`approvedCommandsByConversation` -> `ConversationApprovedCommands` no request -> `AgentActionSession.ApprovedCommandsForConversation`); Workspace salva o comando na allowlist do workspace (mesma persistencia/`AddAsync` do allowlist) e nota "Aprovado manualmente e salvo na allowlist deste workspace."; Category adiciona a categoria as categorias auto-aprovadas DO workspace (`IWorkspaceCategoryPolicyService`), nao global, e nota "Aprovado manualmente; a categoria 'x' agora e auto-aprovada neste workspace.". |
+| Per-workspace auto-approve categories | Implemented | `IWorkspaceCategoryPolicyService`/`WorkspaceCategoryPolicyService` (categorias auto-aprovadas por workspace, kind `WorkspaceMemoryKind.AutoApprovedCategory` na tabela `workspace_memory`, normalizacao `CommandNormalization.Normalize`, `AddAsync` idempotente); no runner (`AgentActionRunner.TryApplyApprovalOverrideAsync`) as categorias do workspace sao carregadas (`ListAsync`) e combinadas com as globais (`NebulaRuntimeSettings.AutoApproveCategories`) na avaliacao do override (`ApprovalOverrideInput.WorkspaceAutoApproveCategories`, check unificado no `CommandApprovalService.EvaluateOverride`); registro via DI nas 3 raizes (`AddScoped`); UI: campo em `Settings.razor` + `NebulaWorkspaceState.LoadWorkspaceCategoriesAsync`/`AddWorkspaceCategoryAsync`. |
+| Auto-approval | Partial | `NebulaRuntimeSettings.AutoApproveCommands` is supported; use only in trusted development scenarios. Categorias explicitas (`AutoApproveCategories`) sao o caminho preferido de auto-aprovacao seletiva. |
+| Command deduplication | Implemented | `CommandDeduplication` in `Nebula.Agent/Domain/ExecutionHistory.cs` blocks repeated success or repeated failures when the normalized command and workspace (file/environment fingerprints) are unchanged; explicit retry justification allows. |
+| Workspace memory | Implemented | `IWorkspaceMemoryStore`/`WorkspaceMemoryService` (`WorkspaceMemoryKind` WorkingCommand/UsedPort/Script/Note/AllowlistedCommand), stores `PostgresWorkspaceMemoryStore` (table `workspace_memory`, unique `{workspace, kind, key}`) and `InMemoryWorkspaceMemoryStore`; successful commands (exit 0) are recorded, ports detected via regex `(?:localhost\|127\.0\.0\.1):(\d{2,5})`, and memory summary feeds the decision prompt. |
+| Per-workspace command allowlist | Implemented | `ICommandAllowlistService`/`CommandAllowlistService` (comandos frequentes do workspace — build, test, format, lint, migrations — que pulam a aprovacao para aquele workspace); persiste em `workspace_memory` via `WorkspaceMemoryKind.AllowlistedCommand` (normalizacao: lowercase + espacos colapsados, `AddAsync` idempotente, `ListAsync` por workspace); no runner (`AgentActionRunner.TryApplyWorkspaceAllowlist`) so derruba decisoes `AskApproval` de `TerminalCommand`/`ScriptExecution` apos o fluxo de override manual/auto (que tem prioridade), marca `AutoApproved=true` e nota "Aprovado pela allowlist deste workspace" (nota preservada por `ApplyToolResult` via `AppendApprovalNote`); registro via DI nas 3 raizes (`AddScoped`); UI: campo em `Settings.razor` + `NebulaWorkspaceState.LoadAllowlistAsync`/`AddAllowlistCommandAsync` usando `ResolvedWorkspace.Root`. |
+| Structured plan JSON | Implemented | `AgentActionDecision.Plan` + `AgentPlanStep` (id/description/dependsOn/status); session `ApplyPlan`/`MarkPlanStepCompleted`/`BuildCurrentPlan` renders `#id [status] (depends on x)`; `plan` property in decision JSON schema. |
+| Streaming tool output to UI | Implemented | `IShellOutputObserver`/`IStreamingShellExecutor` (`ShellExecutor` streams stdout/stderr line by line), `session.EmitStreamOutput` fuses consecutive lines per command, `ActionExecutionEventKind.StreamOutput` rendered as agente evento na UI. |
 | Deterministic command safety | Implemented | `DeterministicCommandClassifier`, `CommandPolicyEngine`, `OperationPolicyEngine`, safety matrix tests. |
 | ML.NET command safety classifier | Implemented as advisory | `MlNetCommandClassifier`, `CommandSafetyTrainer`, `PostgresMlModelStore`. ML never authorizes execution by itself. |
 | PostgreSQL persistence | Implemented | `PostgresContext`, EF migrations, stores for prompts, conversations, commands, knowledge, fetched pages, ML artifacts. |
 | MongoDB persistence | Legacy/complementary | Mongo prompt/conversation stores exist and are conditionally registered after a ping. PostgreSQL is the durable primary path in current app setup. |
 | Conversation history/context | Implemented | `ConversationContextService`, `NebulaContextBuilder`, conversation state/message repositories. |
-| Persistent agent run/task session store | Planned | `plan.md` mentions `TaskSession`, `IAgentRunStore`, `AgentRun`, `AgentStepRecord`; no current implementation found. |
+| Persistent agent run/task session store | Implemented | `AgentRun`/`AgentStepRecord`/`AgentArtifactRecord`/`AgentApprovalRecord` + `IAgentRunStore`/`PostgresAgentRunStore` (tables `agent_runs`, `agent_step_records`, `agent_artifacts`, `agent_approvals`), checkpoints no meio do loop, `GetUnfinishedRunsAsync`; `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) restaurado em `Manager.ResumeTaskAsync`. |
 | Learning from local/user sources | Implemented | `LearningEngine`, `LearningOrchestrator`, `LearningSourceReader`, knowledge tests. |
+| RAG no Chat mode | Implemented | `ConversationContextService.AugmentWithKnowledgeAsync` injeta conhecimento armazenado (`IKnowledgeQueryService.AnswerAsync`) no `ModelPrompt` do Chat como bloco `[knowledge]` (max 3000 chars, truncado), somente em `InteractionMode.Chat`; log `[CHAT] Injected ...`; falha nao fatal volta ao prompt original. |
+| LLM como extractor no path padrao | Implemented | `IKnowledgeExtractor` nos 3 roots e registrado como `LlamaKnowledgeExtractor` (via DI factory) com `fallbackExtractor: new KnowledgeExtractor()` deterministico; se o LLM falhar (offline, JSON invalido) cai no fallback determinístico. |
+| Aprendizado pos-tarefa via sintese LLM | Implemented | `IPostTaskLearningService`/`PostTaskLearningService` (`Nebula.Agent/Application/PostTaskLearningService.cs`): apos `session.Complete` no `RunCoreAsync`, hook `TryLearnFromPostTaskAsync` monta `PostTaskRunSnapshot` (comandos bem-sucedidos + artefatos criados), sintetiza resumo com o LLM (`LlamaKnowledgeExtractor`-style, com fallback deterministico) e persiste `KnowledgeItem` Kind `Procedure` (tags `task-summary,post-task,auto-learned`) via `IKnowledgeStore.SaveAsync`; hook nao-fatal (try/catch). |
+| Automation policy ligada | Implemented | `IKnowledgeAutomationPolicy`/`KnowledgeAutomationPolicy` agora e consultada: `IKnowledgeQueryService.AnswerForAutomationAsync` filtra por `CanUseAutomatically` (FinalScore >= 0.75, nao-dangerous) e `AgentActionRunner.QueryRelevantKnowledgeAsync` usa essa rota para injetar conhecimento automatico no planner do Agent. |
 | Web research | Implemented | Direct docs, SearXNG, Bing HTML, Brave optional, configurable/free providers. |
 | Safe experiment runner | Partial | `ISafeExperimentRunner` and `SafeExperimentRunner` exist, but the current learning orchestrator records source-only experiments instead of invoking it. |
-| Generic tool/plugin registry | Not found | Agent operations are hardcoded by `OperationKind` and `AgentActionRunner`. No general `ITool`/tool catalog was found. |
+| Project templates/scaffolding | Implemented | `IProjectTemplateCatalog`/`ProjectTemplateCatalog` (dotnet-console, dotnet-api, python-script, python-package, node-cli), `IProjectScaffolder`/`ProjectScaffolder` (raiz restrita a workspace/temp), `OperationKind.ProjectScaffold` + `AgentToolAction.TemplateId` + JSON schema, dispatch em `ExecuteProjectScaffoldAsync`. |
+| Workspace map | Implemented | `IWorkspaceMapService`/`WorkspaceMapService` indexa arquivos, modulos, testes, dependencias e comandos conhecidos; `BuildSummary` injetado no decision prompt; `IProjectStackValidator` valida arquivos essenciais por template. |
+| Reference workspace | Implemented | `ReferenceWorkspace.Resolve` (`Nebula.Core/Projects/ReferenceWorkspace.cs`) define a pasta do projeto em que o agente trabalha: caminho explicito e criado quando faltar (mesmo vazio) ou workspace novo vazio em `%TEMP%/nebula-workspace` quando nada for especificado; `NebulaRuntimeSettings.WorkspaceRoot` (config `Nebula:WorkspaceRoot`, env `NEBULA_WORKSPACE_ROOT`) → `UserMessage.WorkspaceRoot` → `ConversationRequest` → `AgentActionRunRequest.WorkspaceRoot` → `AgentActionSession.WorkspaceRoot`; o runner usa o workspace resolvido no lugar de `Environment.CurrentDirectory` (detecção de operação, ambiente, `ResolveSessionWorkingDirectory`, workspace map/memory no decision prompt); `AgentRun.WorkspaceRoot` persistido em `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) e restaurado em `Manager.ResumeTaskAsync`; UI: campo em `Settings.razor` + `QuickSettings.WorkspaceRoot` persistido em `nebula.quick-settings.v1` + `WorkspaceState.ResolvedWorkspace`. |
+| Multi-file planned patches | Implemented | `OperationKind.PlannedPatch` + `AgentToolAction.PlannedFiles` (`plannedFiles` [{path, content}] no JSON de decisao), `IPlannedPatchApplier`/`PlannedPatchApplier` (raiz restrita a workspace/temp, arquivos relativos ao target, path traversal bloqueado), classificacao agregada por arquivo (`FileWriteSafetyClassifier`); extensao de script ou arquivo fora das raizes pedem aprovacao antes de aplicar (revisao visivel nas Notes do card). |
+| Self-programming loop (DoD, lint/format, timeouts, diff review, overwrite guard, repair loop) | Implemented | `RequireDeterministicVerification` (gate no `VerifyCompletionDeterministicallyAsync`), `WorkspaceStack.LintCommand` (`.NET` `dotnet format --verify-no-changes --no-restore`; Node `npm run lint` quando o script existe; falha reprova o DoD e `dotnet format` e permitido pela policy para corrigir), `CommandTimeoutSeconds`/`ScriptTimeoutSeconds` (`CreateToolCancellationToken` com falha clara e retry), `IGitDiffService`/`GitDiffService` (read-only: `rev-parse`, `diff --name-only`, `diff --stat`) com secoes de diff e aviso de alteracoes fora da acao no `FinalReport`, `ConcurrentModificationGuard` (arquivo alterado apos `RunStartedUtc` pede aprovacao antes de sobrescrever, incluindo patches), `MaxVerificationRetries` (repair loop: falha do DoD volta para o agente corrigir; limite de correcoes seguidas configuravel). |
+| Optional per-workspace Docker sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw`, imagem default `mcr.microsoft.com/powershell:lts`; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
 | OpenClaw integration | Not found | No `OpenClaw` references were found outside the user request. |
 | Redis/SQLite/queues/background worker | Not found | No Redis, SQLite, Hangfire, Quartz, `BackgroundService`, `IHostedService`, or queue worker implementation found. |
 | Web app Docker service | Partial | Dockerfile exists and `nebula-web` service is present but commented in `docker-compose.yml`. Docker daemon was unavailable during build validation. |
@@ -306,6 +323,8 @@ Supported operation kinds are defined in `Nebula.Core/Operations`:
 - `FileRead`
 - `ScriptContent`
 - `ScriptExecution`
+- `ProjectScaffold`
+- `PlannedPatch`
 - `Research`
 - `Learning`
 - `Chat`
@@ -325,6 +344,8 @@ Actions can include:
 - `operationKind`
 - `content`
 - `targetPath`
+- `templateId`
+- `plannedFiles` (array of `{path, content}` for `PlannedPatch`; paths are relative to `targetPath`)
 - `language`
 - `workingDirectory`
 - `retryJustification`
@@ -344,22 +365,59 @@ Command execution path:
    timestamp, shell, and working directory.
 7. Evidence is recorded on the current `ConversationTurn`.
 
-`ShellExecutor` uses `ProcessStartInfo` with redirected stdout/stderr and
-`UseShellExecute=false`. Cancellation kills the process tree.
+`ShellExecutor` uses `ProcessStartInfo` with redirected stdout/stderr/stdin and
+`UseShellExecute=false`. Cancellation kills the process tree. Output is read
+incrementally through `InteractivePromptDetector`: when a command starts waiting
+for manual input (`[y/N]`, `Press any key to continue`, `Continue?`, `Password:`,
+pagers like `More?`, etc.), the process is terminated with a clear message and
+exit code `-1`, telling the agent to reformulate the command non-interactively
+(after a 250 ms grace period so commands that merely print a prompt can exit on
+their own).
+
+When `SandboxMode.Docker` is enabled and none of the approval override paths
+apply, a `TerminalCommand` that policy would classify as `AskApproval` is routed
+to `ICommandSandbox` (`DockerCommandSandbox`) instead of requesting approval:
+the resolved command runs inside a disposable container with no network and no
+Linux capabilities, with the workspace mounted read-write at `/workspace` and
+optional memory/CPU limits; `CommandExecution.Sandboxed` marks the execution.
+Only PowerShell/Bash/Sh shells are eligible; Cmd/Unknown shells, non-terminal
+operations, and the manual/auto-approval flows run exactly as before. Before
+running, the sandbox unwraps host shell wrappers (`powershell -Command "..."` /
+`bash -c "..."`) so the inner payload runs directly inside the `pwsh`/`bash`
+container shell, and translates absolute host workspace paths to `/workspace` so
+commands that reference the mounted workspace can find their files in the
+container.
 
 ### File reads
 
 File reads are allowed only when policy classifies them as safe. Sensitive paths
 or names such as `.env`, `.ssh`, private keys, credentials, tokens, API keys, and
-password-like names are blocked as data exfiltration. Reads outside the workspace
-require approval but are not currently covered by the narrow approval override path.
+password-like names are blocked as data exfiltration. Non-sensitive reads outside
+the workspace are allowed automatically (read-only); reads under operating system
+roots (Windows, Program Files, System32) require approval. File reads are covered
+by the approval override path (manual or auto-approval) when approval is required.
+The `FileRead` operation kind only needs `targetPath` (a shell command is optional),
+which lets the agent inspect backups or other external directories.
 
 ### File writes and script content
 
 Safe local writes are limited by extension and location. The current allowlist
 includes `.txt`, `.md`, `.json`, `.cs`, and `.py` inside the workspace or the
-controlled temp root. PowerShell/batch/cmd script files require approval. Other
-extensions are blocked.
+controlled temp root (auto-`Allow`). PowerShell/batch/cmd script files and any
+other extension outside the allowlist now require user approval on the host
+instead of being silently blocked.
+
+With `SandboxMode.Docker` enabled, file creations (plain `FileWrite` and
+`PlannedPatch`) whose target path is inside the active workspace are allowed
+automatically without approval, because the workspace is mounted on the sandbox
+and the execution of such files is isolated in the container. Content or targets
+that are still blocked even with the sandbox enabled:
+
+- Sensitive material (`.env`, `.ssh`, `id_rsa`, credentials, tokens, API keys,
+  password-like paths): `DataExfiltration`/`Block`.
+- Targets outside the workspace or controlled temp roots: approval required.
+- Concurrent-modification guard (file modified on disk after the run started):
+  still escalated to approval (`ConcurrentModificationGuard`).
 
 Script content is separately inspected for destructive APIs, subprocess/network
 usage, prompt-injection text, and sensitive data patterns.
@@ -376,6 +434,76 @@ Research/learning requests are routed before the normal ReAct command loop:
 
 - Knowledge queries such as "what do you know about..." use `KnowledgeQueryService`.
 - Learning/research intents call `LearningEngine`.
+
+### Project scaffolding
+
+Project creation uses `OperationKind.ProjectScaffold`:
+
+1. The planner emits a `ProjectScaffold` action with `templateId` (e.g.
+   `dotnet-console`, `dotnet-api`, `python-script`, `python-package`, `node-cli`)
+   and `targetPath`.
+2. `ProjectScaffoldSafetyClassifier` limits targets to the workspace root or the
+   controlled temp root; anything else is `NeedsApproval`.
+3. `ProjectScaffolder` writes the curated template files deterministically
+   (template content is code, not LLM output).
+4. `ProjectStackValidator` checks that essential files were created.
+5. Verification commands (build/test) are returned to the planner as the next
+   steps, but they are not executed automatically.
+
+The decision prompt also receives a workspace map summary
+(`IWorkspaceMapService`), including detected stack, files, modules, test files,
+dependencies, and known commands, so the planner can reuse existing structure.
+For large projects the prompt instructs the planner to write a `PROJECT_SPEC.md`
+before code files.
+
+### Planned multi-file patches
+
+Changing or creating several files in one step uses `OperationKind.PlannedPatch`:
+
+1. The planner emits a `PlannedPatch` action with `targetPath` (the patch root)
+   and `plannedFiles` (`[{path, content}]`, paths relative to the root).
+2. `ExecutePlannedPatchAsync` classifies every file with `FileWriteSafetyClassifier`
+   and aggregates: any blocked file blocks the whole patch, any approval-required
+   file (script extensions, paths outside the allowed roots) sends the whole patch
+   to review before anything is applied.
+3. `PlannedPatchApplier` writes all files with roots restricted to the workspace or
+   the controlled temp directory; relative paths that escape the target directory
+   (`..`) or absolute paths are refused (defense in depth).
+4. Evidence, artifacts per file, and an observation listing applied files are
+   recorded; the approval card shows the file list in `Notes` for review.
+
+`AgentApprovedAction` carries `PlannedFiles` so an approved patch can be replayed
+without the LLM.
+
+### Self-programming loop (DoD, timeouts, diff review, overwrite guard)
+
+Closing a task uses a deterministic Definition of Done:
+
+1. When `Nebula:RequireDeterministicVerification` is true (default), completion is
+   only accepted after `DeterministicVerificationService` verifies the workspace
+   (build/test commands selected by stack). Setting it to false skips the gate.
+2. If the detected stack declares a lint/format command (`WorkspaceStack.LintCommand`),
+   the lint check runs after a successful build/test: `.NET` uses
+   `dotnet format --verify-no-changes --no-restore` and Node uses `npm run lint`
+   when a `lint` script exists in `package.json`. A failing lint check fails the
+   DoD with a clear message; the agent can then fix formatting with `dotnet format`
+   (explicitly allowed by the deterministic command classifier).
+3. `CommandTimeoutSeconds` (terminal commands) and `ScriptTimeoutSeconds` (script
+   execution) bound runtime; a timed-out tool call produces a clear failure,
+   records evidence with exit code `-1`, and the agent can retry. `0` disables.
+4. After the run, `IGitDiffService` (`GitDiffService`, read-only git commands
+   outside the safety pipeline) appends `## Diff do working tree`,
+   `## Arquivos alterados no working tree`, and a warning section listing files
+   changed outside the agent's action to the `FinalReport`.
+5. `ConcurrentModificationGuard` compares each write target against
+   `session.RunStartedUtc`: if a file existed before the run and was modified on
+   disk after the run started (and was not created by the agent this run), the
+   write is escalated to approval instead of silently overwriting. It applies to
+   file writes, script content, and planned patches.
+6. When the DoD gate fails, the failure observation goes back to the agent so it
+   can repair (build/test fix loop). `MaxVerificationRetries` caps consecutive
+   verification failures (default 2; `0` = rely on the step retry limit only);
+   exceeding it fails the run with a clear message.
 
 ## Safety Model
 
@@ -405,8 +533,8 @@ It blocks or escalates:
 - Broad destructive operations outside known build artifacts.
 
 It allows a narrow set of read-only and controlled local operations, including
-simple directory listing, location commands, safe `dotnet build`/`dotnet test`,
-simple Python scripts, and safe writes in allowed locations.
+simple directory listing, location commands, safe `dotnet build`/`dotnet test`/
+`dotnet format`, simple Python scripts, and safe writes in allowed locations.
 
 ### ML.NET command classifier
 
@@ -511,6 +639,7 @@ Current tables include:
 - `knowledge_experiments`
 - `fetched_page_cache`
 - `ml_model_artifacts`
+- `workspace_memory` (unique `{workspace, kind, key}`)
 
 `PostgresDatabaseInitializer` contains compatibility logic for older baseline
 tables and then runs EF migrations. Treat migrations as the authoritative schema.
@@ -685,6 +814,14 @@ contain local secrets and should be treated carefully.
 | `Nebula:ResponseLanguageCode` | Response language code | Runtime setting |
 | `Nebula:ResponseLanguageName` | Response language name | Runtime setting |
 | `Nebula:AutoApproveCommands` | Auto-approve approval-required commands | Development-only safety-sensitive setting |
+| `Nebula:RequireDeterministicVerification` | DoD gate: require deterministic build/test verification before completion | true (env: `NEBULA_REQUIRE_DETERMINISTIC_VERIFICATION`) |
+| `Nebula:CommandTimeoutSeconds` | Max runtime for terminal commands before kill + retry | 300 (env: `NEBULA_COMMAND_TIMEOUT_SECONDS`; 0 disables) |
+| `Nebula:ScriptTimeoutSeconds` | Max runtime for script executions before kill + retry | 300 (env: `NEBULA_SCRIPT_TIMEOUT_SECONDS`; 0 disables) |
+| `Nebula:MaxVerificationRetries` | Repair loop limit: consecutive DoD verification failures allowed before failing the run | 2 (env: `NEBULA_MAX_VERIFICATION_RETRIES`; 0 = no dedicated limit) |
+| `Nebula:Sandbox:Mode` | Docker sandbox switch for approval-required terminal commands (`Disabled`/`Docker`) | `Disabled` (env: `NEBULA_SANDBOX_MODE`) |
+| `Nebula:Sandbox:Image` | Sandbox container image | `mcr.microsoft.com/powershell:lts` (env: `NEBULA_SANDBOX_IMAGE`) |
+| `Nebula:Sandbox:MemoryLimitMb` | Optional sandbox memory limit in MB (0 = no limit) | 0 (env: `NEBULA_SANDBOX_MEMORY_LIMIT_MB`) |
+| `Nebula:Sandbox:CpuLimit` | Optional sandbox CPU limit (0 = no limit) | 0 (env: `NEBULA_SANDBOX_CPU_LIMIT`) |
 | `COMMAND_SAFETY_TRAINING_DATA` | Command safety CSV path | `Nebula.Services/Safety/Training/command-training-data.csv` |
 | `COMMAND_SAFETY_MODEL` | Optional fallback ML model path | Used by trainer/classifier fallback |
 | `COMMAND_SAFETY_MODEL_VERSION` | Optional trained model version | Timestamp fallback |
@@ -776,6 +913,9 @@ dotnet build Nebula.slnx --no-restore
 
 Validation result on 2026-06-22: timed out after about 184 seconds without a useful
 diagnostic. Targeted builds below passed.
+
+Validation result on 2026-08-04: full solution build succeeded with 0 warnings and
+0 errors.
 
 ```powershell
 dotnet build Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-restore -v minimal
@@ -899,6 +1039,30 @@ There is no generic tool registry. To add a new operation:
 6. Add UI rendering if users need to see operation details.
 7. Add tests for planning, safety, execution, evidence, retries, and failure handling.
 
+### Add a project template
+
+Project templates live in `Nebula.Services/Projects/ProjectTemplateCatalog.cs`.
+
+1. Add a new `ProjectTemplate` entry (unique `Id`, `Stack`, `Files`, essential files,
+   verification commands, keywords for `Suggest` matching).
+2. Template content is deterministic code, never LLM output. Keep it small and
+   buildable (compiles or parses out of the box).
+3. Add tests in `Nebula.Agent.Test/Projects/ProjectTemplateCatalogTest.cs`
+   (and scaffold coverage in `ProjectScaffolderTest` when file layout changes).
+4. The planner prompt automatically lists all templates from the catalog, so no
+   prompt edit is required for a new template.
+
+### Change the workspace map
+
+Primary files:
+
+- `Nebula.Services/Projects/WorkspaceMapService.cs`
+- `Nebula.Core/Projects/WorkspaceMap.cs`
+
+Keep the map bounded (depth and file caps), skip generated directories
+(`bin`, `obj`, `node_modules`, etc.), and keep `BuildSummary` compact so it fits
+the decision prompt budget.
+
 ### Add another LLM provider
 
 The current concrete provider is Ollama through `LlamaClient`.
@@ -946,7 +1110,8 @@ whether execution is allowed.
 These are current gaps or cautions confirmed by inspection.
 
 - The full `dotnet build Nebula.slnx --no-restore` command timed out locally
-  without diagnostics, while targeted project builds passed.
+  without diagnostics on 2026-06-22; on 2026-08-04 the full solution build
+  succeeded with 0 warnings and 0 errors.
 - Docker Compose config validates without a running daemon, but Docker image build
   could not be validated because Docker Desktop's Linux engine was unavailable.
 - The `nebula-web` compose service is commented out.
@@ -960,7 +1125,9 @@ These are current gaps or cautions confirmed by inspection.
   PostgreSQL is also active.
 - Learning verification is source-only in the active path. Automatic safe execution
   of learned commands is not confirmed in current repository state.
-- Persistent `TaskSession`/`AgentRun` storage is planned but not implemented.
+- Persistent `AgentRun` storage is implemented (checkpoints, plan, artifacts, approvals). Resume support exists via `IManager.ResumeTaskAsync` and the `/agent-runs` screen; a dedicated `ICommandApprovalService` is not yet extracted.
+- Project scaffolding is implemented with curated templates (`ProjectScaffold`). Multi-file planned patches (`PlannedPatch`) are implemented with review before apply for risky files; the generic tool/plugin catalog is still not confirmed.
+- The self-programming loop is implemented (DoD gate, lint/format check by stack, timeouts by command type, read-only git diff review in the `FinalReport`, concurrent-modification guard, `MaxVerificationRetries` repair loop). The DoD setting is global rather than per-task-type; the git diff review is appended on the normal (non-approved-action) run path.
 - A generic agent tool/plugin catalog is not confirmed in current repository state.
 - OpenClaw integration is not confirmed in current repository state.
 - Redis, SQLite, queues, hosted workers, SerpAPI, and Tavily integrations are not
@@ -988,8 +1155,10 @@ Points needing human confirmation:
 - `Nebula.Postgres.Context/Migrations/`: schema history.
 - `Nebula.Services/Safety/Training/command-training-data.csv`: ML training data.
 - `Nebula.Agent/Application/AgentActionRunner.cs`: central agent execution path.
+- `Nebula.Agent/Infrastructure/GitDiffService.cs`: read-only working-tree diff used in the final report.
 - `Nebula.Agent/Safety/*`: safety-critical policy.
 - `Nebula.Runner/ShellExecutor.cs`: process execution.
+- `Nebula.Runner/CommandSandbox.cs`: Docker sandbox execution for approval-required terminal commands.
 - `Nebula.App/Nebula.App.Shared/State/NebulaWorkspaceState.cs`: UI orchestration and local settings.
 - `Corona/`: git submodule; avoid accidental broad edits.
 

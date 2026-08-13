@@ -84,6 +84,44 @@ public class PostgresConversationMemoryRepository(PostgresContext context) : ICo
         return Map(entity);
     }
 
+    public async Task<IReadOnlyList<ConversationSummary>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        var states = await context.ConversationStates
+            .AsNoTracking()
+            .OrderByDescending(state => state.UpdatedAt)
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        if (states.Count == 0)
+        {
+            return [];
+        }
+
+        var conversationIds = states.Select(state => state.ConversationId).ToList();
+
+        var messageCounts = await context.ConversationMessages
+            .AsNoTracking()
+            .Where(message => conversationIds.Contains(message.ConversationId))
+            .GroupBy(message => message.ConversationId)
+            .Select(group => new { ConversationId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(entry => entry.ConversationId, entry => entry.Count, cancellationToken);
+
+        return states
+            .Select(state =>
+                ConversationSummary.FromState(
+                    Map(state),
+                    messageCounts.TryGetValue(state.ConversationId, out var count) ? count : 0))
+            .OrderByDescending(summary => summary.UpdatedAt)
+            .ToList();
+    }
+
     private static ConversationMessage Map(PostgresConversationMessage entity)
     {
         return new ConversationMessage

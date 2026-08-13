@@ -20,6 +20,28 @@ public class StoredCommand
 
     public string? ExecutionResult { get; set; }
 
+    public string? WorkingDirectory { get; set; }
+
+    public string? Shell { get; set; }
+
+    public int? ExitCode { get; set; }
+
+    public string? StandardOutput { get; set; }
+
+    public string? StandardError { get; set; }
+
+    public string? SafetyDecision { get; set; }
+
+    public bool ApprovedByUser { get; set; }
+
+    public bool AutoApproved { get; set; }
+
+    public bool Skipped { get; set; }
+
+    public bool Required { get; set; } = true;
+
+    public DateTimeOffset? ExecutedAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

@@ -12,6 +12,8 @@ public enum OperationKind
     ScriptExecution,
     Research,
     Learning,
+    ProjectScaffold,
+    PlannedPatch,
     Unknown
 }
 

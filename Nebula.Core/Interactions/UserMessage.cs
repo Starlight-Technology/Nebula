@@ -8,4 +8,5 @@ public enum InteractionMode
 
 public sealed record UserMessage(
     string Content,
-    InteractionMode Mode);
+    InteractionMode Mode,
+    string? WorkspaceRoot = null);

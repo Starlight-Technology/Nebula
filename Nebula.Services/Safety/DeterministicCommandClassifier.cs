@@ -109,6 +109,11 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
 
     private CommandClassification? ClassifyApprovalRequired(string command, string normalized)
     {
+        if (GitWriteRegex().IsMatch(normalized))
+        {
+            return Result(command, CommandIntent.NeedsApproval, 0.97, "The command mutates the git repository state and requires approval.");
+        }
+
         if (PackageInstallRegex().IsMatch(normalized))
         {
             return Result(command, CommandIntent.PackageInstall, 0.99, "Package installation changes the local dependency set and may run third-party code.");
@@ -165,6 +170,11 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
 
     private CommandClassification? ClassifyAllowed(string command, string normalized)
     {
+        if (GitReadOnlyRegex().IsMatch(normalized))
+        {
+            return Result(command, CommandIntent.SafeReadOnly, 0.98, "The git command only reads repository state.");
+        }
+
         if (SimpleOutputRegex().IsMatch(command))
         {
             return Result(command, CommandIntent.SafeExecuteLocal, 0.99, "The command contains only simple local output or arithmetic.");
@@ -182,7 +192,7 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
 
         if (DotnetSafeRegex().IsMatch(command))
         {
-            return Result(command, CommandIntent.SafeExecuteLocal, 0.99, "dotnet build and dotnet test are explicitly allowed.");
+            return Result(command, CommandIntent.SafeExecuteLocal, 0.99, "dotnet build, test and format are explicitly allowed.");
         }
 
         if (PythonInlinePrintRegex().IsMatch(command) || IsSimplePythonScript(command))
@@ -375,7 +385,7 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
     [GeneratedRegex(@"^(?:cat|type|get-content(?:\s+-(?:literal)?path)?)\s+(?!.*(?:https?://))[^;&|<>`]+$", RegexOptions.IgnoreCase)]
     private static partial Regex LocalFileReadRegex();
 
-    [GeneratedRegex(@"^dotnet\s+(?:build|test)(?:\s+[^;&|]*)?$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^dotnet\s+(?:build|test|format)(?:\s+[^;&|]*)?$", RegexOptions.IgnoreCase)]
     private static partial Regex DotnetSafeRegex();
 
     [GeneratedRegex(@"^(?:python|python3|py)\s+-c\s+['""]\s*print\s*\([^;&|]*\)\s*['""]$", RegexOptions.IgnoreCase)]
@@ -410,6 +420,12 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
 
     [GeneratedRegex(@"^(?:[a-z]:[\\/]|\\\\)", RegexOptions.IgnoreCase)]
     private static partial Regex WindowsAbsolutePathRegex();
+
+    [GeneratedRegex(@"^(?:git|git\.exe)\s+(?:status|diff|diff\s+--stat|log|branch\s+--show-current|branch\s+-(?:a|av|r|vv)|rev-parse|remote\s+-v|show|config\s+--get|describe|tag\s+-l|shortlog|blame)(?:\s+[^;&|]*)?$", RegexOptions.IgnoreCase)]
+    private static partial Regex GitReadOnlyRegex();
+
+    [GeneratedRegex(@"^(?:git|git\.exe)\s+(?:add|commit|commit\s+-m|commit\s+--amend|checkout|switch|reset|stash|revert|clean|restore|merge|rebase|cherry-pick|branch(?!\s+--show-current)|tag|push|pull|fetch|clone|init|submodule)(?:\s+[^;&|]*)?$", RegexOptions.IgnoreCase)]
+    private static partial Regex GitWriteRegex();
 
     [GeneratedRegex(@"(?:tar|zip|7z|compress|compact)", RegexOptions.IgnoreCase)]
     private static partial Regex ArchiveRegex();

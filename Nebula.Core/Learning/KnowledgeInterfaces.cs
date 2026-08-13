@@ -132,6 +132,11 @@ public interface IKnowledgeStore
         KnowledgeExperiment experiment,
         CancellationToken cancellationToken = default);
 
+    Task UpdateExperimentAsync(
+        Guid experimentId,
+        KnowledgeExperiment updated,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<KnowledgeItem>> FindTrustedAsync(
         KnowledgeDomain domain,
         string topic,
@@ -181,4 +186,13 @@ public interface IKnowledgeQueryService
     Task<string> AnswerAsync(
         string topic,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns knowledge that the automation policy trusts for automatic reuse
+    /// (high score, non-dangerous). Falls back to <see cref="AnswerAsync"/>.
+    /// </summary>
+    Task<string> AnswerForAutomationAsync(
+        string topic,
+        CancellationToken cancellationToken = default)
+        => AnswerAsync(topic, cancellationToken);
 }

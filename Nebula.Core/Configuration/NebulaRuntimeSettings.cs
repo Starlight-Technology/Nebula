@@ -1,3 +1,5 @@
+using Nebula.Core.Execution;
+
 namespace Nebula.Core.Configuration;
 
 public sealed class NebulaRuntimeSettings
@@ -20,6 +22,26 @@ public sealed class NebulaRuntimeSettings
     public string ResponseLanguageName { get; set; } = DefaultLanguageName;
 
     public bool AutoApproveCommands { get; set; }
+
+    public List<string> AutoApproveCategories { get; set; } = [];
+
+    public string WorkspaceRoot { get; set; } = string.Empty;
+
+    public bool RequireDeterministicVerification { get; set; } = true;
+
+    public int CommandTimeoutSeconds { get; set; } = 300;
+
+    public int ScriptTimeoutSeconds { get; set; } = 300;
+
+    public int MaxVerificationRetries { get; set; } = 2;
+
+    public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
+
+    public string SandboxImage { get; set; } = "mcr.microsoft.com/powershell:lts";
+
+    public long SandboxMemoryLimitMb { get; set; }
+
+    public double SandboxCpuLimit { get; set; }
 
     public string EffectiveLearningModel =>
         string.IsNullOrWhiteSpace(LearningModel)
@@ -45,6 +67,16 @@ public sealed class NebulaRuntimeSettings
             snapshot.ResponseLanguageName,
             DefaultLanguageName);
         AutoApproveCommands = snapshot.AutoApproveCommands;
+        AutoApproveCategories = snapshot.AutoApproveCategories?.ToList() ?? [];
+        WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
+        RequireDeterministicVerification = snapshot.RequireDeterministicVerification;
+        CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
+        ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
+        MaxVerificationRetries = Math.Max(0, snapshot.MaxVerificationRetries);
+        SandboxMode = snapshot.SandboxMode;
+        SandboxImage = NormalizeOrDefault(snapshot.SandboxImage, "mcr.microsoft.com/powershell:lts");
+        SandboxMemoryLimitMb = Math.Max(0, snapshot.SandboxMemoryLimitMb);
+        SandboxCpuLimit = Math.Max(0, snapshot.SandboxCpuLimit);
     }
 
     public NebulaRuntimeSettingsSnapshot CreateSnapshot()
@@ -57,7 +89,17 @@ public sealed class NebulaRuntimeSettings
             AccelerationProfile = AccelerationProfile,
             ResponseLanguageCode = ResponseLanguageCode,
             ResponseLanguageName = ResponseLanguageName,
-            AutoApproveCommands = AutoApproveCommands
+            AutoApproveCommands = AutoApproveCommands,
+            AutoApproveCategories = AutoApproveCategories.ToList(),
+            WorkspaceRoot = WorkspaceRoot,
+            RequireDeterministicVerification = RequireDeterministicVerification,
+            CommandTimeoutSeconds = CommandTimeoutSeconds,
+            ScriptTimeoutSeconds = ScriptTimeoutSeconds,
+            MaxVerificationRetries = MaxVerificationRetries,
+            SandboxMode = SandboxMode,
+            SandboxImage = SandboxImage,
+            SandboxMemoryLimitMb = SandboxMemoryLimitMb,
+            SandboxCpuLimit = SandboxCpuLimit
         };
     }
 
@@ -96,4 +138,24 @@ public sealed class NebulaRuntimeSettingsSnapshot
         NebulaRuntimeSettings.DefaultLanguageName;
 
     public bool AutoApproveCommands { get; set; }
+
+    public List<string> AutoApproveCategories { get; set; } = [];
+
+    public string WorkspaceRoot { get; set; } = string.Empty;
+
+    public bool RequireDeterministicVerification { get; set; } = true;
+
+    public int CommandTimeoutSeconds { get; set; } = 300;
+
+    public int ScriptTimeoutSeconds { get; set; } = 300;
+
+    public int MaxVerificationRetries { get; set; } = 2;
+
+    public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
+
+    public string SandboxImage { get; set; } = "mcr.microsoft.com/powershell:lts";
+
+    public long SandboxMemoryLimitMb { get; set; }
+
+    public double SandboxCpuLimit { get; set; }
 }

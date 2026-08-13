@@ -25,6 +25,8 @@ public sealed class CommandPolicyEngineTest : IDisposable
     [InlineData("Console.WriteLine(\"hello world\")")]
     [InlineData("dotnet build")]
     [InlineData("dotnet test")]
+    [InlineData("dotnet format")]
+    [InlineData("dotnet format --verify-no-changes --no-restore")]
     [InlineData("echo hello > README.md")]
     [InlineData("echo print('hello world') > hello.py")]
     public async Task clearly_safe_local_commands_are_allowed(string command)
@@ -117,6 +119,39 @@ public sealed class CommandPolicyEngineTest : IDisposable
         var decision = await policy.EvaluateAsync($"echo hello > {outsidePath}");
 
         Assert.Equal(CommandSafetyDecisionType.AskApproval, decision.Decision);
+    }
+
+    [Theory]
+    [InlineData("git status")]
+    [InlineData("git diff")]
+    [InlineData("git diff --stat")]
+    [InlineData("git log --oneline -5")]
+    [InlineData("git branch --show-current")]
+    [InlineData("git remote -v")]
+    public async Task git_read_only_commands_are_allowed(string command)
+    {
+        var decision = await policy.EvaluateAsync(command);
+
+        Assert.Equal(CommandSafetyDecisionType.Allow, decision.Decision);
+        Assert.Equal(CommandIntent.SafeReadOnly, decision.Intent);
+    }
+
+    [Theory]
+    [InlineData("git add -A", CommandIntent.NeedsApproval)]
+    [InlineData("git commit -m \"wip\"", CommandIntent.NeedsApproval)]
+    [InlineData("git checkout main", CommandIntent.NeedsApproval)]
+    [InlineData("git reset --hard HEAD", CommandIntent.NeedsApproval)]
+    [InlineData("git push origin main", CommandIntent.NeedsApproval)]
+    [InlineData("git pull", CommandIntent.NeedsApproval)]
+    [InlineData("git clean -fdx", CommandIntent.NeedsApproval)]
+    public async Task git_mutating_commands_require_approval(
+        string command,
+        CommandIntent expectedIntent)
+    {
+        var decision = await policy.EvaluateAsync(command);
+
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, decision.Decision);
+        Assert.Equal(expectedIntent, decision.Intent);
     }
 
     [Fact]

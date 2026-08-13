@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
+    <File Path="AGENTS.md" />
     <File Path="docker-compose.amd.yml" />
     <File Path="docker-compose.intel.yml" />
     <File Path="docker-compose.nvidia.yml" />

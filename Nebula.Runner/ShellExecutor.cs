@@ -1,17 +1,24 @@
 using System.Diagnostics;
+using System.Text;
 
 using Nebula.Core.Commands;
 
 namespace Nebula.Runner;
 
-public class ShellExecutor : IResolvedCommandExecutor
+public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
 {
     private readonly IRuntimeCommandEnvironmentDetector environmentDetector;
+    private readonly InteractivePromptDetector promptDetector;
 
-    public ShellExecutor(IRuntimeCommandEnvironmentDetector? environmentDetector = null)
+    private static readonly TimeSpan InteractivePromptGracePeriod = TimeSpan.FromMilliseconds(250);
+
+    public ShellExecutor(
+        IRuntimeCommandEnvironmentDetector? environmentDetector = null,
+        InteractivePromptDetector? promptDetector = null)
     {
         this.environmentDetector =
             environmentDetector ?? new RuntimeCommandEnvironmentDetector();
+        this.promptDetector = promptDetector ?? new InteractivePromptDetector();
     }
 
     public async Task<string> RunCommandAsync(string command)
@@ -44,6 +51,14 @@ public class ShellExecutor : IResolvedCommandExecutor
         ResolvedCommand command,
         CancellationToken cancellationToken)
     {
+        return await RunCommandDetailedAsync(command, null, cancellationToken);
+    }
+
+    public async Task<ShellCommandResult> RunCommandDetailedAsync(
+        ResolvedCommand command,
+        IShellOutputObserver? observer,
+        CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
         Console.WriteLine($"Command: {command.DisplayCommand}");
 
@@ -55,6 +70,7 @@ public class ShellExecutor : IResolvedCommandExecutor
                 Arguments = command.Arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WorkingDirectory = command.WorkingDirectory
@@ -68,13 +84,74 @@ public class ShellExecutor : IResolvedCommandExecutor
 
         try
         {
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var stdoutBuilder = new StringBuilder();
+            var stderrBuilder = new StringBuilder();
+            var aborted = 0;
+
+            void KillIfPrompted(StringBuilder builder)
+            {
+                if (!promptDetector.EndsWithInteractivePrompt(builder))
+                {
+                    return;
+                }
+
+                if (Interlocked.Exchange(ref aborted, 1) != 0)
+                {
+                    return;
+                }
+
+                Task.Delay(InteractivePromptGracePeriod).Wait();
+                if (process.HasExited)
+                {
+                    return;
+                }
+
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process exited while the grace period was elapsing.
+                }
+            }
+
+            var outputTask = ReadStreamWithPromptDetectionAsync(
+                process.StandardOutput,
+                stdoutBuilder,
+                KillIfPrompted,
+                cancellationToken,
+                observer,
+                isError: false);
+            var errorTask = ReadStreamWithPromptDetectionAsync(
+                process.StandardError,
+                stderrBuilder,
+                KillIfPrompted,
+                cancellationToken,
+                observer,
+                isError: true);
 
             await process.WaitForExitAsync(cancellationToken);
 
             var output = await outputTask;
             var error = await errorTask;
+
+            if (Volatile.Read(ref aborted) == 1)
+            {
+                const string message =
+                    "Prompt interativo detectado: o comando esta esperando entrada manual " +
+                    "e foi encerrado. O agente nao pode fornecer input; reformule o comando " +
+                    "para nao exigir interacao (ex.: adicione flags nao-interativas).";
+                return new ShellCommandResult
+                {
+                    Command = command.DisplayCommand,
+                    WorkingDirectory = command.WorkingDirectory,
+                    StandardOutput = message + Environment.NewLine + output,
+                    StandardError = error,
+                    ExitCode = -1,
+                    Timestamp = DateTimeOffset.UtcNow
+                };
+            }
 
             return new ShellCommandResult
             {
@@ -101,6 +178,76 @@ public class ShellExecutor : IResolvedCommandExecutor
             }
 
             throw;
+        }
+    }
+
+    private static async Task<string> ReadStreamWithPromptDetectionAsync(
+        StreamReader reader,
+        StringBuilder builder,
+        Action<StringBuilder> onPromptDetected,
+        CancellationToken cancellationToken,
+        IShellOutputObserver? observer = null,
+        bool isError = false)
+    {
+        var encoding = reader.CurrentEncoding;
+        var buffer = new byte[4096];
+        var pending = new StringBuilder();
+        while (true)
+        {
+            var read = await reader.BaseStream.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            var chunk = encoding.GetString(buffer, 0, read);
+            builder.Append(chunk);
+            pending.Append(chunk);
+            onPromptDetected(builder);
+
+            if (observer is not null)
+            {
+                EmitCompleteLines(observer, pending, isError, flush: false);
+            }
+        }
+
+        if (observer is not null)
+        {
+            EmitCompleteLines(observer, pending, isError, flush: true);
+        }
+
+        return builder.ToString();
+    }
+
+    private static void EmitCompleteLines(
+        IShellOutputObserver observer,
+        StringBuilder pending,
+        bool isError,
+        bool flush)
+    {
+        var text = pending.ToString();
+        int newline;
+        while ((newline = text.IndexOf('\n')) >= 0)
+        {
+            var rawLine = text[..(newline + 1)];
+            text = text[(newline + 1)..];
+            var line = rawLine.TrimEnd('\r', '\n');
+            if (line.Length > 0)
+            {
+                observer.OnOutput(line, isError);
+            }
+        }
+
+        if (flush && text.Length > 0)
+        {
+            observer.OnOutput(text.TrimEnd('\r'), isError);
+            text = string.Empty;
+        }
+
+        pending.Clear();
+        if (text.Length > 0)
+        {
+            pending.Append(text);
         }
     }
 

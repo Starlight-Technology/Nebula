@@ -1,5 +1,6 @@
 using Nebula.Agent.Data;
 using Nebula.Core.Interactions;
+using Nebula.Core.Learning;
 
 namespace Nebula.Agent.Application;
 
@@ -26,9 +27,12 @@ public interface IConversationContextService
 public sealed class ConversationContextService(
     IConversationMemoryRepository? conversationRepository,
     NebulaContextBuilder contextBuilder,
-    ILogger logger) : IConversationContextService
+    ILogger logger,
+    IKnowledgeQueryService? knowledgeQueryService = null) : IConversationContextService
 {
     private static readonly TimeSpan PersistenceTimeout = TimeSpan.FromMilliseconds(1500);
+
+    private const int MaxInjectedKnowledgeChars = 3000;
 
     public async Task<PreparedConversationContext> PrepareAsync(
         Guid conversationId,
@@ -44,14 +48,15 @@ public sealed class ConversationContextService(
                 Role = ConversationRoles.User,
                 Content = prompt.Trim()
             };
+            var noRepoModelPrompt = contextBuilder.Build(
+                conversationId,
+                state: null,
+                [currentMessage],
+                currentMessage,
+                mode);
             return new PreparedConversationContext(
                 conversationId,
-                contextBuilder.Build(
-                    conversationId,
-                    state: null,
-                    [currentMessage],
-                    currentMessage,
-                    mode),
+                await AugmentWithKnowledgeAsync(noRepoModelPrompt, prompt, mode, cancellationToken),
                 PreviousState: null);
         }
 
@@ -72,15 +77,56 @@ public sealed class ConversationContextService(
             $"{recentMessages.Count} recent message(s). " +
             $"Conversation state: {(conversationState is null ? "missing" : "loaded")}.");
 
+        var modelPrompt = contextBuilder.Build(
+            conversationId,
+            conversationState,
+            recentMessages,
+            userMessage,
+            mode);
         return new PreparedConversationContext(
             conversationId,
-            contextBuilder.Build(
-                conversationId,
-                conversationState,
-                recentMessages,
-                userMessage,
-                mode),
+            await AugmentWithKnowledgeAsync(modelPrompt, prompt, mode, cancellationToken),
             conversationState);
+    }
+
+    private async Task<string> AugmentWithKnowledgeAsync(
+        string modelPrompt,
+        string userPrompt,
+        InteractionMode mode,
+        CancellationToken cancellationToken)
+    {
+        if (mode != InteractionMode.Chat || knowledgeQueryService is null)
+        {
+            return modelPrompt;
+        }
+
+        try
+        {
+            var knowledge = await knowledgeQueryService.AnswerAsync(
+                userPrompt,
+                cancellationToken);
+            if (string.IsNullOrWhiteSpace(knowledge) ||
+                knowledge.Contains("Nao ha conhecimento", StringComparison.OrdinalIgnoreCase) ||
+                knowledge.Contains("Não há conhecimento", StringComparison.OrdinalIgnoreCase))
+            {
+                return modelPrompt;
+            }
+
+            if (knowledge.Length > MaxInjectedKnowledgeChars)
+            {
+                knowledge = knowledge[..MaxInjectedKnowledgeChars];
+            }
+
+            logger.Log(
+                $"[CHAT] Injected {knowledge.Length} chars of learned knowledge for: {userPrompt}");
+            return $"{modelPrompt}\n\n[knowledge]\n{knowledge}";
+        }
+        catch (Exception ex)
+        {
+            logger.Log(
+                $"[CHAT] Knowledge augmentation failed (non-fatal): {ex.Message}");
+            return modelPrompt;
+        }
     }
 
     public async Task CompleteAsync(

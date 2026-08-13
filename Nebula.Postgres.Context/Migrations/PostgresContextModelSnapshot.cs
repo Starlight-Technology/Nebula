@@ -17,10 +17,210 @@ namespace Nebula.Postgres.Context.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentApprovalEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("ApprovedByUser")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("AutoApproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Command")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Decision")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Objective")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("StepId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.ToTable("agent_approvals", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentArtifactEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentHash")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Path")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.ToTable("agent_artifacts", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentRunEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CurrentPlan")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("FinishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsCancelled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Prompt")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Response")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("WorkspaceRoot")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
+
+                    b.HasIndex("StartedAt");
+
+                    b.ToTable("agent_runs", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentStepRecordEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("ApprovedByUser")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("AutoApproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Command")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Objective")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("OperationKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SafetyDecision")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Shell")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StandardError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StandardOutput")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Step")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TargetPath")
+                        .HasColumnType("text");
+
+                    b.Property<string>("WorkingDirectory")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.ToTable("agent_step_records", (string)null);
+                });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.CommandVerification", b =>
                 {
@@ -157,6 +357,12 @@ namespace Nebula.Postgres.Context.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<string>("EnvironmentFingerprint")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ErrorCategory")
+                        .HasColumnType("text");
+
                     b.Property<string>("EvidenceHash")
                         .IsRequired()
                         .HasColumnType("text");
@@ -164,8 +370,22 @@ namespace Nebula.Postgres.Context.Migrations
                     b.Property<int?>("ExitCode")
                         .HasColumnType("integer");
 
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("KnowledgeItemId")
                         .HasColumnType("uuid");
+
+                    b.Property<Guid?>("OriginalExperimentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ResolvedCommand")
+                        .HasColumnType("text");
+
+                    b.Property<int>("RetryCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("StdErr")
                         .HasColumnType("text");
@@ -501,6 +721,12 @@ namespace Nebula.Postgres.Context.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("ApprovedByUser")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("AutoApproved")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Command")
                         .IsRequired()
                         .HasColumnType("text");
@@ -518,8 +744,14 @@ namespace Nebula.Postgres.Context.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
+                    b.Property<DateTimeOffset?>("ExecutedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("ExecutionResult")
                         .HasColumnType("text");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Objective")
                         .IsRequired()
@@ -532,10 +764,31 @@ namespace Nebula.Postgres.Context.Migrations
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("Required")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SafetyDecision")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Shell")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("Skipped")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("StandardError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StandardOutput")
+                        .HasColumnType("text");
+
                     b.Property<DateTime>("UpdatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
                         .HasDefaultValueSql("now()");
+
+                    b.Property<string>("WorkingDirectory")
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -548,6 +801,81 @@ namespace Nebula.Postgres.Context.Migrations
                     b.HasIndex("RequestId");
 
                     b.ToTable("commands", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.WorkspaceMemoryEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Evidence")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("Workspace")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Workspace", "CreatedAt");
+
+                    b.HasIndex("Workspace", "Kind", "Key")
+                        .IsUnique();
+
+                    b.ToTable("workspace_memory", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentApprovalEntity", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.AgentRunEntity", "Run")
+                        .WithMany("Approvals")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentArtifactEntity", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.AgentRunEntity", "Run")
+                        .WithMany("Artifacts")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentStepRecordEntity", b =>
+                {
+                    b.HasOne("Nebula.Postgres.Context.Entities.AgentRunEntity", "Run")
+                        .WithMany("Steps")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
                 });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.CommandVerification", b =>
@@ -603,6 +931,15 @@ namespace Nebula.Postgres.Context.Migrations
                         .IsRequired();
 
                     b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.AgentRunEntity", b =>
+                {
+                    b.Navigation("Approvals");
+
+                    b.Navigation("Artifacts");
+
+                    b.Navigation("Steps");
                 });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.KnowledgeItem", b =>

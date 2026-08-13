@@ -149,6 +149,18 @@ public sealed class KnowledgeExperiment
 
     public bool Success { get; set; }
 
+    public string? FailureReason { get; set; }
+
+    public string? ErrorCategory { get; set; }
+
+    public string? ResolvedCommand { get; set; }
+
+    public string? EnvironmentFingerprint { get; set; }
+
+    public int RetryCount { get; set; }
+
+    public Guid? OriginalExperimentId { get; set; }
+
     public string EvidenceHash { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

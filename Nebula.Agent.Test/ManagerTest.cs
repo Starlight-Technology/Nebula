@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using Moq;
+using Nebula.Agent;
 using Nebula.Agent.Data;
+using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
@@ -54,14 +57,18 @@ public class ManagerTest
             "Directory listing");
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+        llamaClientMock.SetupSequence(client => client.GetStructuredResponseAsync(
                 It.IsAny<string>(),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(actionDecision)
-            .ReturnsAsync("Yes")
-            .ReturnsAsync("Yes")
             .ReturnsAsync(completeDecision);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+                It.Is<string>(text => text.Contains("Response only", StringComparison.Ordinal)),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Yes")
+            .ReturnsAsync("Yes");
 
         var executorMock = create_executor_mock();
         executorMock
@@ -81,12 +88,24 @@ public class ManagerTest
             .Setup(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((CommandVerification verification, CancellationToken _) => verification);
         commandRepositoryMock
-            .Setup(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid commandId, bool executed, string? result, CancellationToken _) => new StoredCommand
+            .Setup(repository => repository.UpdateExecutionDetailsAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<bool>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTimeOffset?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid commandId, bool executed, string? result, int? exitCode, string? stdout, string? stderr, DateTimeOffset? executedAt, CancellationToken _) => new StoredCommand
             {
                 Id = commandId,
                 Executed = executed,
-                ExecutionResult = result
+                ExecutionResult = result,
+                ExitCode = exitCode,
+                StandardOutput = stdout,
+                StandardError = stderr,
+                ExecutedAt = executedAt
             });
 
         var manager = create_manager(
@@ -105,7 +124,17 @@ public class ManagerTest
             Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()), Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveVerificationAsync(It.IsAny<CommandVerification>(), It.IsAny<CancellationToken>()), Times.Once);
-        commandRepositoryMock.Verify(repository => repository.UpdateExecutionAsync(It.IsAny<Guid>(), true, "Directory listing", It.IsAny<CancellationToken>()), Times.Once);
+        commandRepositoryMock.Verify(
+            repository => repository.UpdateExecutionDetailsAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<bool>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTimeOffset?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -170,14 +199,18 @@ public class ManagerTest
         StoredCommand? savedCommand = null;
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+        llamaClientMock.SetupSequence(client => client.GetStructuredResponseAsync(
                 It.IsAny<string>(),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(actionDecision)
-            .ReturnsAsync("Yes")
-            .ReturnsAsync("Yes")
             .ReturnsAsync(completeDecision);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+                It.Is<string>(text => text.Contains("Response only", StringComparison.Ordinal)),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Yes")
+            .ReturnsAsync("Yes");
 
         var executorMock = create_executor_mock();
         executorMock
@@ -493,9 +526,9 @@ public class ManagerTest
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock
-            .Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.Ordinal)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+            .Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.Ordinal)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock
@@ -544,9 +577,9 @@ public class ManagerTest
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock
-            .Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.Ordinal)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+            .Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.Ordinal)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(create_action_decision(
                 "I need to execute the requested command.",
@@ -647,14 +680,14 @@ public class ManagerTest
 
         var llamaClientMock = create_llama_client_mock();
         llamaClientMock.Setup(client => client.GetResponseAsync(It.Is<string>(prompt =>
-                !prompt.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase) &&
+                !prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase) &&
                 !prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase))))
             .ReturnsAsync("I will remember Nebula.");
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(prompt => prompt.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, IProgress<LlamaStreamUpdate>?, CancellationToken>((prompt, _, _) => capturedPlanningPrompts.Add(prompt))
+            .Callback<string, object?, CancellationToken>((prompt, _, _) => capturedPlanningPrompts.Add(prompt))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock.Setup(client => client.GetResponseAsync(
                 It.Is<string>(prompt => prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase)),
@@ -691,6 +724,84 @@ public class ManagerTest
     }
 
     [Fact]
+    public async Task resume_task_async_must_build_context_from_plan_and_last_step()
+    {
+        var runId = Guid.NewGuid();
+        var conversationId = Guid.NewGuid();
+        var lastStep = new AgentStepRecord(
+            Guid.NewGuid(),
+            runId,
+            2,
+            1,
+            OperationKind.TerminalCommand,
+            "Run the tests",
+            "dotnet test",
+            "C:\\work",
+            null,
+            1,
+            false,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            "output",
+            "error: tests failed");
+        var run = new AgentRun(
+            runId,
+            conversationId,
+            Guid.NewGuid(),
+            "Run the project tests.",
+            "qwen3:8b",
+            "Failed",
+            DateTimeOffset.UtcNow.AddMinutes(-5),
+            null,
+            null,
+            false,
+            [lastStep],
+            "1. Build the project - completed.\n2. Run the tests - Failed.",
+            [],
+            [],
+            @"C:\projects\nebula-demo");
+        AgentActionRunRequest? capturedRequest = null;
+        var actionRunnerMock = new Mock<IAgentActionRunner>();
+        actionRunnerMock
+            .Setup(runner => runner.RunAsync(
+                It.IsAny<AgentActionRunRequest>(),
+                It.IsAny<IProgress<ConversationTurn>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AgentActionRunRequest, IProgress<ConversationTurn>?, CancellationToken>(
+                (request, _, _) => capturedRequest = request)
+            .ReturnsAsync(() => new ConversationTurn
+            {
+                ConversationId = conversationId,
+                RequestId = Guid.NewGuid(),
+                Prompt = capturedRequest!.Prompt,
+                Mode = InteractionMode.Agent,
+                ModelName = "qwen3:8b",
+                Response = "Tests fixed and passing.",
+                ActionStatus = ActionExecutionStatus.Completed
+            });
+
+        var llamaClientMock = create_llama_client_mock();
+        llamaClientMock.SetupGet(client => client.SelectedModel).Returns("qwen3:8b");
+        var manager = create_manager(
+            llamaClientMock,
+            actionRunner: actionRunnerMock.Object);
+        var activeConversationId = manager.ActiveConversationId;
+
+        var result = await manager.ResumeTaskAsync(run);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(run.Prompt, capturedRequest.Prompt);
+        Assert.Equal(activeConversationId, capturedRequest.ConversationId);
+        Assert.Contains("[resumed_task]", capturedRequest.ChatHistoryContext);
+        Assert.Contains("1. Build the project - completed.", capturedRequest.ChatHistoryContext);
+        Assert.Contains("2. Run the tests - Failed.", capturedRequest.ChatHistoryContext);
+        Assert.Contains("dotnet test", capturedRequest.ChatHistoryContext);
+        Assert.Contains("error: tests failed", capturedRequest.ChatHistoryContext);
+        Assert.Equal("qwen3:8b", capturedRequest.ModelName);
+        Assert.Equal(@"C:\projects\nebula-demo", capturedRequest.WorkspaceRoot);
+    }
+
+    [Fact]
     public async Task manage_conversation_async_must_retry_recoverable_action_failures_with_previous_failure_context()
     {
         const string prompt = "Create a marker file.";
@@ -706,11 +817,11 @@ public class ManagerTest
         ]);
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, IProgress<LlamaStreamUpdate>?, CancellationToken>((prompt, _, _) => planningPrompts.Add(prompt))
+            .Callback<string, object?, CancellationToken>((prompt, _, _) => planningPrompts.Add(prompt))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock.Setup(client => client.GetResponseAsync(
                 It.Is<string>(text => text.Contains("Response only", StringComparison.OrdinalIgnoreCase)),
@@ -737,11 +848,11 @@ public class ManagerTest
 
         Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
         Assert.Equal("ok", result.Response);
-        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Status == ActionExecutionStatus.Retrying);
+        Assert.Contains(result.ActionEvents, actionEvent => actionEvent.Status == ActionExecutionStatus.Correcting);
         Assert.Contains(result.Commands, command => command.Attempt == 1 && command.Error == "bad command");
         Assert.Contains(result.Commands, command => command.Attempt == 2 && command.Executed);
         Assert.Equal(3, planningPrompts.Count);
-        Assert.Contains("Previous action result", planningPrompts[1]);
+        Assert.Contains("Previous result:", planningPrompts[1]);
         Assert.Contains("bad command", planningPrompts[1]);
         executorMock.Verify(executor => executor.RunCommandAsync("badcmd", It.IsAny<CancellationToken>()), Times.Once);
         executorMock.Verify(executor => executor.RunCommandAsync("goodcmd", It.IsAny<CancellationToken>()), Times.Once);
@@ -758,9 +869,9 @@ public class ManagerTest
         ]);
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock.Setup(client => client.GetResponseAsync(
@@ -804,9 +915,9 @@ public class ManagerTest
         ]);
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock.Setup(client => client.GetResponseAsync(
@@ -850,9 +961,9 @@ public class ManagerTest
         using var cancellationSource = new CancellationTokenSource();
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(actionDecision);
         llamaClientMock.Setup(client => client.GetResponseAsync(
@@ -902,9 +1013,9 @@ public class ManagerTest
         var updates = new List<ConversationTurn>();
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.Setup(client => client.GetResponseAsync(
-                It.Is<string>(text => text.Contains("ReAct action controller", StringComparison.OrdinalIgnoreCase)),
-                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+        llamaClientMock.Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(text => text.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => decisions.Dequeue());
         llamaClientMock.Setup(client => client.GetResponseAsync(
@@ -957,11 +1068,15 @@ public class ManagerTest
             "dir");
 
         var llamaClientMock = create_llama_client_mock();
-        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+        llamaClientMock.SetupSequence(client => client.GetStructuredResponseAsync(
                 It.IsAny<string>(),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(actionDecision);
+        llamaClientMock.SetupSequence(client => client.GetResponseAsync(
+                It.Is<string>(text => text.Contains("Response only", StringComparison.Ordinal)),
                 It.IsAny<IProgress<LlamaStreamUpdate>?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(actionDecision)
             .ReturnsAsync("No")
             .ReturnsAsync("Yes");
 
@@ -998,9 +1113,15 @@ public class ManagerTest
         var loggerMock = create_logger_mock();
         var manager = create_manager(llamaClientMock, loggerMock: loggerMock);
 
+#if DEBUG
+        var result = await manager.ManageResponse(ChatMessage(prompt));
+        Assert.Contains("Erro:", result);
+        Assert.Contains("InvalidOperationException", result);
+        Assert.Contains("Test error", result);
+#else
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.ManageResponse(ChatMessage(prompt)));
-
         Assert.Equal("Test error", exception.Message);
+#endif
         loggerMock.Verify(logger => logger.LogError(It.Is<string>(message =>
             message.Contains("[CHAT]", StringComparison.Ordinal) &&
             message.Contains("Error managing response", StringComparison.Ordinal))), Times.Once);
@@ -1101,6 +1222,38 @@ public class ManagerTest
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3), $"The manager took too long to return: {stopwatch.Elapsed}.");
         loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Timed out while persisting prompt request"))), Times.Once);
         loggerMock.Verify(logger => logger.LogError(It.Is<string>(message => message.Contains("Timed out while updating prompt response"))), Times.Once);
+    }
+
+    [Fact]
+    public void select_conversation_must_switch_active_conversation_id()
+    {
+        var manager = create_manager(create_llama_client_mock());
+        var targetId = Guid.NewGuid();
+
+        var result = manager.SelectConversation(targetId);
+
+        Assert.Equal(targetId, result);
+        Assert.Equal(targetId, manager.ActiveConversationId);
+    }
+
+    [Fact]
+    public void select_conversation_must_reject_empty_guid()
+    {
+        var manager = create_manager(create_llama_client_mock());
+
+        Assert.Throws<ArgumentException>(() => manager.SelectConversation(Guid.Empty));
+    }
+
+    [Fact]
+    public void start_new_conversation_must_reset_active_conversation_id()
+    {
+        var manager = create_manager(create_llama_client_mock());
+        var first = manager.SelectConversation(Guid.NewGuid());
+
+        var second = manager.StartNewConversation();
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(second, manager.ActiveConversationId);
     }
 
     private static Manager create_manager(

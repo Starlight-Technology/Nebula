@@ -306,7 +306,8 @@ public sealed class OfflineLearningOrchestratorTest
                     $"missing-knowledge-{Guid.NewGuid():N}.zip")),
             new KnowledgeRiskClassifier(),
             store,
-            new KnowledgeScoreEngine());
+            new KnowledgeScoreEngine(),
+            experimentRunner: null);
 
     private static LearningSourceDocument FakeDocument(
         string title,

@@ -13,6 +13,10 @@ internal sealed record ConversationRequest(
 
     public InteractionMode Mode => Message.Mode;
 
+    public string? WorkspaceRoot => Message.WorkspaceRoot;
+
+    public IReadOnlyCollection<string>? ConversationApprovedCommands { get; init; }
+
     public PromptRequest CreatePromptRequest()
     {
         return new PromptRequest
@@ -38,7 +42,9 @@ internal sealed record ConversationRequest(
             ChatHistoryContext = chatHistoryContext,
             ModelName = ModelName,
             MaxSteps = maxSteps,
-            MaxRetriesPerStep = maxRetriesPerStep
+            MaxRetriesPerStep = maxRetriesPerStep,
+            WorkspaceRoot = WorkspaceRoot,
+            ConversationApprovedCommands = ConversationApprovedCommands
         };
     }
 }

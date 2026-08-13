@@ -1,7 +1,9 @@
 using Nebula.Agent.Domain;
+using Nebula.Core.Agent;
 using Nebula.Core.Commands;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
+using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 
 namespace Nebula.Agent;
@@ -24,6 +26,8 @@ public class ConversationTurn
 
     public string? Reasoning { get; set; }
 
+    public string? FinalReport { get; set; }
+
     public List<CommandExecution> Commands { get; set; } = [];
 
     public List<ExecutionHistoryEntry> ExecutionHistory { get; set; } = [];
@@ -33,6 +37,12 @@ public class ConversationTurn
     public ActionExecutionStatus? ActionStatus { get; set; }
 
     public List<ActionExecutionEvent> ActionEvents { get; set; } = [];
+
+    public string CurrentPlan { get; set; } = string.Empty;
+
+    public List<AgentArtifactRecord> Artifacts { get; set; } = [];
+
+    public List<AgentApprovalRecord> Approvals { get; set; } = [];
 
     public bool IsCancelled { get; set; }
 }
@@ -68,6 +78,8 @@ public class CommandExecution
 
     public string? TargetPath { get; set; }
 
+    public IReadOnlyList<PlannedPatchFile>? PlannedFiles { get; set; }
+
     public string? ContentHash { get; set; }
 
     public string ClassificationSource { get; set; } = string.Empty;
@@ -79,6 +91,8 @@ public class CommandExecution
     public bool ApprovedByUser { get; set; }
 
     public bool AutoApproved { get; set; }
+
+    public bool Sandboxed { get; set; }
 
     public bool Required { get; set; } = true;
 
@@ -118,7 +132,10 @@ public enum ActionExecutionStatus
     Failed,
     Unsafe,
     AwaitingApproval,
-    Cancelled
+    Cancelled,
+    Observing,
+    Correcting,
+    Blocked
 }
 
 public enum ActionExecutionEventKind
@@ -136,7 +153,8 @@ public enum ActionExecutionEventKind
     Failed,
     Unsafe,
     ApprovalRequired,
-    Cancelled
+    Cancelled,
+    StreamOutput
 }
 
 public class ActionExecutionEvent
@@ -162,6 +180,8 @@ public class ActionExecutionEvent
     public string? ToolResponse { get; set; }
 
     public string? Error { get; set; }
+
+    public bool IsError { get; set; }
 }
 
 public class ActionValidationResult

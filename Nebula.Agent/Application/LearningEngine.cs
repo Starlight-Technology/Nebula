@@ -33,6 +33,7 @@ public sealed class LearningEngine : ILearningEngine
                 new KnowledgeRiskClassifier(),
                 store,
                 scoreEngine,
+                experimentRunner,
                 sourceReader,
                 log: logger.Log),
             logger)

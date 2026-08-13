@@ -6,12 +6,13 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="Microsoft.ML" Version="5.0.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
+    <ProjectReference Include="..\Nebula.Runner\Nebula.Runner.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Safety\Training\command-training-data.csv" CopyToOutputDirectory="PreserveNewest" />

@@ -30,6 +30,18 @@ public sealed class OperationKindDetector : IOperationKindDetector
             return OperationKind.Research;
         }
 
+        if (ProjectScaffoldRegex.IsMatch(original) ||
+            ProjectScaffoldRegex.IsMatch(command))
+        {
+            return OperationKind.ProjectScaffold;
+        }
+
+        if (PlannedPatchRegex.IsMatch(original) ||
+            PlannedPatchRegex.IsMatch(command))
+        {
+            return OperationKind.PlannedPatch;
+        }
+
         if (!string.IsNullOrWhiteSpace(content))
         {
             return IsScriptPath(targetPath) || LooksLikeScript(content)
@@ -74,6 +86,14 @@ public sealed class OperationKindDetector : IOperationKindDetector
 
     private static readonly Regex ResearchRegex = new(
         @"\b(?:pesquise|pesquisar|investigue|research|search)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ProjectScaffoldRegex = new(
+        @"\bscaffold\b|\b(?:crie|criar|creat(?:e|es|ed|ing)|inicialize|init)\b.{0,40}\b(?:projeto|project)\b.{0,30}\b(?:dotnet|\.net|c#|csharp|python|node|nodejs|javascript|api|console|cli|package|pacote|react|blazor|worker|template)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex PlannedPatchRegex = new(
+        @"\bpatch\b|\b(?:altere|altera|mude|muda|modifique|modifica|edite|edita)\b.{0,50}\b(?:arquivos?|files?|varios arquivos|vários arquivos)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex ScriptExecutionRegex = new(

@@ -6,20 +6,44 @@ namespace Nebula.Agent.Application;
 
 public sealed class KnowledgeQueryService(
     IKnowledgeStore store,
-    ILogger logger) : IKnowledgeQueryService
+    ILogger logger,
+    IKnowledgeAutomationPolicy? automationPolicy = null) : IKnowledgeQueryService
 {
     /// <summary>
     /// Answers a knowledge-base question with stored evidence and diagnostic metadata.
     /// </summary>
-    public async Task<string> AnswerAsync(
+    public Task<string> AnswerAsync(
         string topic,
         CancellationToken cancellationToken = default)
+    {
+        return AnswerInternalAsync(topic, requireAutomatable: false, cancellationToken);
+    }
+
+    public Task<string> AnswerForAutomationAsync(
+        string topic,
+        CancellationToken cancellationToken = default)
+    {
+        return AnswerInternalAsync(topic, requireAutomatable: true, cancellationToken);
+    }
+
+    private async Task<string> AnswerInternalAsync(
+        string topic,
+        bool requireAutomatable,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         var results = await store.FindDetailsAsync(
             topic.Trim(),
-            minimumScore: 0.60,
+            minimumScore: requireAutomatable ? 0.60 : 0.60,
             cancellationToken);
+        if (requireAutomatable &&
+            automationPolicy is not null)
+        {
+            results = results
+                .Where(result => automationPolicy.CanUseAutomatically(result.Item))
+                .ToList();
+        }
+
         if (results.Count == 0)
         {
             return $"Não há conhecimento armazenado sobre '{topic.Trim()}'.";

@@ -3,6 +3,7 @@
 @inject NebulaWorkspaceState WorkspaceState
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JSRuntime
+@using Nebula.Agent.Data
 @using Nebula.Core.Interactions
 @using Nebula.Core.Safety
 
@@ -45,6 +46,68 @@
     </section>
 
     <div class="nebula-chat-layout">
+        <aside class="nebula-history-rail" aria-label="Historico de conversas">
+            <CoronaCard Class="nebula-history-card">
+                <div class="nebula-history-card__header">
+                    <div>
+                        <p class="nebula-kicker">Historico</p>
+                        <h3>Conversas</h3>
+                    </div>
+
+                    <CoronaButton Variant="CoronaButtonVariant.Text"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Neutral"
+                                  Icon="@CoronaIcons.Plus"
+                                  Disabled="@(WorkspaceState.IsSending || WorkspaceState.Turns.Count == 0)"
+                                  OnClick="WorkspaceState.ClearConversation">
+                        Nova conversa
+                    </CoronaButton>
+                </div>
+
+                <div class="nebula-history-list">
+                    @if (WorkspaceState.IsHistoryLoading)
+                    {
+                        <div class="nebula-history-empty">
+                            <CoronaBadge Content="Carregando..." Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var conversation in WorkspaceState.ConversationHistory)
+                        {
+                            <button type="button"
+                                    class="nebula-history-item @(conversation.ConversationId == WorkspaceState.ActiveConversationId ? "is-active" : null)"
+                                    disabled="@WorkspaceState.IsSending"
+                                    @onclick="() => WorkspaceState.OpenConversationAsync(conversation.ConversationId)">
+                                <span class="nebula-history-item__title">@conversation.Title</span>
+                                <span class="nebula-history-item__meta">@NebulaWorkspaceState.FormatConversationDate(conversation) · @conversation.MessageCount msg</span>
+                            </button>
+                        }
+
+                        @if (WorkspaceState.ConversationHistory.Count == 0)
+                        {
+                            <div class="nebula-history-empty">
+                                @if (!string.IsNullOrWhiteSpace(WorkspaceState.HistoryFeedback))
+                                {
+                                    <p>@WorkspaceState.HistoryFeedback</p>
+                                }
+                                else
+                                {
+                                    <p>Nenhuma conversa salva. Envie uma mensagem para comecar.</p>
+                                }
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(WorkspaceState.HistoryFeedback))
+                        {
+                            <div class="nebula-history-empty">
+                                <p>@WorkspaceState.HistoryFeedback</p>
+                            </div>
+                        }
+                    }
+                </div>
+            </CoronaCard>
+        </aside>
+
         <main class="nebula-chat-main">
             @if (WorkspaceState.Turns.Count == 0)
             {
@@ -243,6 +306,25 @@
                                             <div class="nebula-rich-text">@turn.Result.Response</div>
                                         </section>
 
+                                        @if (!string.IsNullOrWhiteSpace(turn.Result.FinalReport))
+                                        {
+                                            <section class="nebula-panel-section">
+                                                <div class="nebula-panel-section__header">
+                                                    <CoronaBadge Content="Relatorio final"
+                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                 Color="CoronaColorSemantic.Primary" />
+                                                </div>
+
+                                                <details class="nebula-final-report" open="@turn.Result.ActionStatus == ActionExecutionStatus.Completed">
+                                                    <summary class="nebula-final-report__summary">
+                                                        <span>Resumo da tarefa</span>
+                                                    </summary>
+                                                    <pre class="nebula-final-report__content">@turn.Result.FinalReport</pre>
+                                                </details>
+                                            </section>
+                                        }
+
+
                                         @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
                                         {
                                             <section class="nebula-panel-section">
@@ -323,6 +405,15 @@
 
                                                                     @if (WorkspaceState.CanApproveCommand(command))
                                                                     {
+                                                                        <select class="nebula-approval-scope"
+                                                                                value="@WorkspaceState.SelectedApprovalScope"
+                                                                                @onchange="@((ChangeEventArgs args) => WorkspaceState.SelectedApprovalScope = NebulaWorkspaceState.ParseApprovalScope(args.Value?.ToString()))"
+                                                                                title="Escopo da aprovacao">
+                                                                            <option value="@ApprovalScope.Once">Aprovar uma vez</option>
+                                                                            <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
+                                                                            <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
+                                                                            <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
+                                                                        </select>
                                                                         <CoronaButton Variant="CoronaButtonVariant.Outlined"
                                                                                       Size="CoronaComponentSize.Small"
                                                                                       Color="CoronaColorSemantic.Warning"
@@ -485,6 +576,66 @@
         </main>
 
         <aside class="nebula-side-rail" aria-label="Contexto da conversa">
+            @if (WorkspaceState.ActiveMissionTurn is { } missionTurn)
+            {
+                var missionStatus = missionTurn.StreamingActionStatus
+                    ?? missionTurn.Result?.ActionStatus;
+                var executedCount = missionTurn.StreamingCommands.Count(c => c.Executed);
+
+                <CoronaCard Class="nebula-status-card">
+                    <div class="nebula-status-card__header">
+                        <div>
+                            <p class="nebula-kicker">Missao atual</p>
+                            <h3>@NebulaWorkspaceState.GetTurnStatusLabel(missionStatus)</h3>
+                        </div>
+                        <CoronaBadge Content="@(executedCount + " executado(s)")"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="CoronaColorSemantic.Primary" />
+                    </div>
+
+                    <p class="nebula-mission-plan__objective">@missionTurn.Prompt</p>
+
+                    @{
+                        var plan = string.IsNullOrWhiteSpace(missionTurn.StreamingCurrentPlan)
+                            ? missionTurn.Result?.CurrentPlan ?? string.Empty
+                            : missionTurn.StreamingCurrentPlan;
+                        var planLines = plan.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                        var artifacts = missionTurn.Result?.Artifacts.Count ?? 0;
+                        var approvals = missionTurn.Result?.Approvals.Count ?? 0;
+                    }
+
+                    @if (planLines.Length > 0)
+                    {
+                        <div class="nebula-mission-list">
+                            @foreach (var line in planLines.Take(12))
+                            {
+                                var isDone = line.Contains("completed", StringComparison.OrdinalIgnoreCase)
+                                             || line.Contains("concluido", StringComparison.OrdinalIgnoreCase);
+                                <div class="nebula-mission-item @(isDone ? "nebula-mission-item--done" : "")">
+                                    <span class="nebula-mission-item__marker">@(isDone ? "✓" : "•")</span>
+                                    <span>@line.Trim()</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="nebula-runs-detail__empty">Nenhum passo registrado ainda.</p>
+                    }
+
+                    <div class="nebula-status-list">
+                        <div class="nebula-status-row">
+                            <span>Artefatos</span>
+                            <strong>@artifacts</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Aprovacoes</span>
+                            <strong>@approvals</strong>
+                        </div>
+                    </div>
+                </CoronaCard>
+            }
+
             <CoronaCard Class="nebula-status-card">
                 <div class="nebula-status-card__header">
                     <div>
@@ -532,6 +683,7 @@
     protected override async Task OnInitializedAsync()
     {
         await WorkspaceState.EnsureRuntimeAsync();
+        await WorkspaceState.LoadConversationHistoryAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

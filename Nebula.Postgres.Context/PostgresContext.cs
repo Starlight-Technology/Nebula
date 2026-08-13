@@ -20,6 +20,11 @@ public class PostgresContext : DbContext
     public DbSet<KnowledgeFact> KnowledgeFacts { get; set; } = null!;
     public DbSet<FetchedPageCache> FetchedPageCaches { get; set; } = null!;
     public DbSet<MlModelArtifact> MlModelArtifacts { get; set; } = null!;
+    public DbSet<AgentRunEntity> AgentRuns { get; set; } = null!;
+    public DbSet<AgentStepRecordEntity> AgentStepRecords { get; set; } = null!;
+    public DbSet<AgentArtifactEntity> AgentArtifacts { get; set; } = null!;
+    public DbSet<AgentApprovalEntity> AgentApprovals { get; set; } = null!;
+    public DbSet<WorkspaceMemoryEntry> WorkspaceMemoryEntries { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -137,6 +142,12 @@ public class PostgresContext : DbContext
                 .HasConversion<string>()
                 .IsRequired();
             b.Property(x => x.EvidenceHash).IsRequired();
+            b.Property(x => x.FailureReason);
+            b.Property(x => x.ErrorCategory);
+            b.Property(x => x.ResolvedCommand);
+            b.Property(x => x.EnvironmentFingerprint);
+            b.Property(x => x.RetryCount).HasDefaultValue(0);
+            b.Property(x => x.OriginalExperimentId);
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
 
             b.HasOne(x => x.KnowledgeItem)
@@ -208,6 +219,109 @@ public class PostgresContext : DbContext
             b.HasIndex(x => x.Name)
                 .IsUnique()
                 .HasFilter("\"IsActive\" = TRUE");
+        });
+
+        modelBuilder.Entity<AgentRunEntity>(b =>
+        {
+            b.ToTable("agent_runs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.ConversationId).IsRequired();
+            b.Property(x => x.RequestId).IsRequired();
+            b.Property(x => x.Prompt).IsRequired();
+            b.Property(x => x.ModelName).IsRequired();
+            b.Property(x => x.Status).IsRequired();
+            b.Property(x => x.Response);
+            b.Property(x => x.CurrentPlan);
+            b.Property(x => x.WorkspaceRoot);
+            b.Property(x => x.IsCancelled).HasDefaultValue(false);
+            b.Property(x => x.StartedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => x.ConversationId);
+            b.HasIndex(x => x.StartedAt);
+        });
+
+        modelBuilder.Entity<AgentStepRecordEntity>(b =>
+        {
+            b.ToTable("agent_step_records");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.RunId).IsRequired();
+            b.Property(x => x.Step).IsRequired();
+            b.Property(x => x.Attempt).IsRequired();
+            b.Property(x => x.OperationKind).IsRequired();
+            b.Property(x => x.Objective).IsRequired();
+            b.Property(x => x.Command);
+            b.Property(x => x.WorkingDirectory);
+            b.Property(x => x.TargetPath);
+            b.Property(x => x.ExitCode);
+            b.Property(x => x.Success).IsRequired();
+            b.Property(x => x.StandardOutput);
+            b.Property(x => x.StandardError);
+            b.Property(x => x.Shell);
+            b.Property(x => x.SafetyDecision);
+            b.Property(x => x.ApprovedByUser).HasDefaultValue(false);
+            b.Property(x => x.AutoApproved).HasDefaultValue(false);
+
+            b.HasOne(x => x.Run)
+                .WithMany(r => r.Steps)
+                .HasForeignKey(x => x.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasIndex(x => x.RunId);
+        });
+
+        modelBuilder.Entity<AgentArtifactEntity>(b =>
+        {
+            b.ToTable("agent_artifacts");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.RunId).IsRequired();
+            b.Property(x => x.Name).IsRequired();
+            b.Property(x => x.Path);
+            b.Property(x => x.ContentHash);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+
+            b.HasOne(x => x.Run)
+                .WithMany(r => r.Artifacts)
+                .HasForeignKey(x => x.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasIndex(x => x.RunId);
+        });
+
+        modelBuilder.Entity<AgentApprovalEntity>(b =>
+        {
+            b.ToTable("agent_approvals");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.RunId).IsRequired();
+            b.Property(x => x.StepId).IsRequired();
+            b.Property(x => x.Objective).IsRequired();
+            b.Property(x => x.Command);
+            b.Property(x => x.Decision);
+            b.Property(x => x.ApprovedByUser).HasDefaultValue(false);
+            b.Property(x => x.AutoApproved).HasDefaultValue(false);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+
+            b.HasOne(x => x.Run)
+                .WithMany(r => r.Approvals)
+                .HasForeignKey(x => x.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasIndex(x => x.RunId);
+        });
+
+        modelBuilder.Entity<WorkspaceMemoryEntry>(b =>
+        {
+            b.ToTable("workspace_memory");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Workspace).IsRequired().HasMaxLength(1024);
+            b.Property(x => x.Kind).IsRequired();
+            b.Property(x => x.Key).IsRequired().HasMaxLength(512);
+            b.Property(x => x.Value).IsRequired().HasMaxLength(2048);
+            b.Property(x => x.Evidence);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => new { x.Workspace, x.Kind, x.Key })
+                .IsUnique();
+            b.HasIndex(x => new { x.Workspace, x.CreatedAt });
         });
     }
 }

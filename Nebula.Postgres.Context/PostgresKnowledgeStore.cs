@@ -48,10 +48,49 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             context.KnowledgeSources.RemoveRange(existing.Sources);
             context.KnowledgeExperiments.RemoveRange(existing.Experiments);
             context.KnowledgeFacts.RemoveRange(existing.Facts);
-            existing.Sources = entity.Sources;
-            existing.Experiments = entity.Experiments;
-            existing.Facts = entity.Facts;
+            context.KnowledgeSources.AddRange(entity.Sources);
+            context.KnowledgeExperiments.AddRange(entity.Experiments);
+            context.KnowledgeFacts.AddRange(entity.Facts);
         }
+
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Updates an existing experiment record (e.g., to add failure reason or retry count).
+    /// </summary>
+    public async Task UpdateExperimentAsync(
+        Guid experimentId,
+        KnowledgeExperiment updated,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = await context.KnowledgeExperiments
+            .SingleOrDefaultAsync(
+                value => value.Id == experimentId,
+                cancellationToken);
+        if (existing is null)
+        {
+            return;
+        }
+
+        if (updated.FailureReason is not null)
+            existing.FailureReason = updated.FailureReason;
+        if (updated.ErrorCategory is not null)
+            existing.ErrorCategory = updated.ErrorCategory;
+        if (updated.ResolvedCommand is not null)
+            existing.ResolvedCommand = updated.ResolvedCommand;
+        if (updated.EnvironmentFingerprint is not null)
+            existing.EnvironmentFingerprint = updated.EnvironmentFingerprint;
+        existing.RetryCount = updated.RetryCount;
+        if (updated.OriginalExperimentId is not null)
+            existing.OriginalExperimentId = updated.OriginalExperimentId;
+        existing.Success = updated.Success;
+        if (updated.StdOut is not null)
+            existing.StdOut = updated.StdOut;
+        if (updated.StdErr is not null)
+            existing.StdErr = updated.StdErr;
+        if (updated.ExitCode is not null)
+            existing.ExitCode = updated.ExitCode;
 
         await context.SaveChangesAsync(cancellationToken);
     }
@@ -239,6 +278,12 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             StdOut = experiment.StdOut,
             StdErr = experiment.StdErr,
             Success = experiment.Success,
+            FailureReason = experiment.FailureReason,
+            ErrorCategory = experiment.ErrorCategory,
+            ResolvedCommand = experiment.ResolvedCommand,
+            EnvironmentFingerprint = experiment.EnvironmentFingerprint,
+            RetryCount = experiment.RetryCount,
+            OriginalExperimentId = experiment.OriginalExperimentId,
             EvidenceHash = experiment.EvidenceHash,
             CreatedAt = experiment.CreatedAt
         };
@@ -292,6 +337,12 @@ public sealed class PostgresKnowledgeStore(PostgresContext context)
             StdOut = experiment.StdOut,
             StdErr = experiment.StdErr,
             Success = experiment.Success,
+            FailureReason = experiment.FailureReason,
+            ErrorCategory = experiment.ErrorCategory,
+            ResolvedCommand = experiment.ResolvedCommand,
+            EnvironmentFingerprint = experiment.EnvironmentFingerprint,
+            RetryCount = experiment.RetryCount,
+            OriginalExperimentId = experiment.OriginalExperimentId,
             EvidenceHash = experiment.EvidenceHash,
             CreatedAt = experiment.CreatedAt
         };

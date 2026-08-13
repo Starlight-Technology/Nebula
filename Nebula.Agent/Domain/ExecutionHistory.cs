@@ -158,22 +158,49 @@ public sealed class CommandDeduplication
         string? retryJustification,
         ExecutionHistory history)
     {
-        var failedExecutions = history.FindRecentFailures(command);
-        if (failedExecutions.Count == 0)
+        if (!string.IsNullOrWhiteSpace(retryJustification))
+        {
+            return CommandDeduplicationResult.Allow(
+                $"Explicit retry justification: {retryJustification.Trim()}");
+        }
+
+        var normalizedCommand = NormalizeCommand(command);
+        var samePathEntries = history.Entries
+            .Where(entry =>
+                SamePath(entry.WorkingDirectory, workingDirectory) &&
+                NormalizeCommand(entry.Command) == normalizedCommand)
+            .OrderByDescending(entry => entry.Timestamp)
+            .ToList();
+
+        var mostRecent = samePathEntries.FirstOrDefault();
+        if (mostRecent is null)
         {
             return CommandDeduplicationResult.Allow();
         }
 
-        var failedExecution = failedExecutions.FirstOrDefault(entry =>
-            SamePath(entry.WorkingDirectory, workingDirectory));
-        if (failedExecution is null)
+        if (mostRecent.Success)
         {
+            if (string.Equals(
+                    mostRecent.FileFingerprint,
+                    currentEnvironment.FileFingerprint,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    mostRecent.EnvironmentFingerprint,
+                    currentEnvironment.EnvironmentFingerprint,
+                    StringComparison.Ordinal))
+            {
+                return CommandDeduplicationResult.Block(
+                    "The same command was already executed successfully and the workspace " +
+                    "state has not changed since. Repeating it cannot produce new evidence. " +
+                    "Provide a different command or update the workspace first.");
+            }
+
             return CommandDeduplicationResult.Allow(
-                "The working directory changed since the failed execution.");
+                "The workspace changed since the last successful execution of this command.");
         }
 
         if (!string.Equals(
-                failedExecution.FileFingerprint,
+                mostRecent.FileFingerprint,
                 currentEnvironment.FileFingerprint,
                 StringComparison.Ordinal))
         {
@@ -182,18 +209,12 @@ public sealed class CommandDeduplication
         }
 
         if (!string.Equals(
-                failedExecution.EnvironmentFingerprint,
+                mostRecent.EnvironmentFingerprint,
                 currentEnvironment.EnvironmentFingerprint,
                 StringComparison.Ordinal))
         {
             return CommandDeduplicationResult.Allow(
                 "Environment variables changed since the failed execution.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(retryJustification))
-        {
-            return CommandDeduplicationResult.Allow(
-                $"Explicit retry justification: {retryJustification.Trim()}");
         }
 
         return CommandDeduplicationResult.Block(

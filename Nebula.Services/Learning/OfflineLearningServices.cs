@@ -18,6 +18,7 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
     private readonly IKnowledgeRiskClassifier riskClassifier;
     private readonly IKnowledgeStore store;
     private readonly IKnowledgeScoreEngine scoreEngine;
+    private readonly ISafeExperimentRunner? experimentRunner;
     private readonly ILearningSourceReader sourceReader;
     private readonly Action<string>? log;
 
@@ -28,6 +29,7 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
         IKnowledgeRiskClassifier riskClassifier,
         IKnowledgeStore store,
         IKnowledgeScoreEngine scoreEngine,
+        ISafeExperimentRunner? experimentRunner = null,
         ILearningSourceReader? sourceReader = null,
         Action<string>? log = null)
     {
@@ -37,6 +39,7 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
         this.riskClassifier = riskClassifier;
         this.store = store;
         this.scoreEngine = scoreEngine;
+        this.experimentRunner = experimentRunner;
         this.sourceReader = sourceReader ?? new LearningSourceReader();
         this.log = log;
     }
@@ -272,10 +275,12 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
 
             var source = CreateSource(item, document);
             var itemFacts = CreateFacts(item, draft, document);
-            var experiment = CreateSourceOnlyExperiment(item, document);
-            item.VerificationScore = 0.55;
+            var experiment = await CreateExperimentAsync(item, document, cancellationToken);
+            item.VerificationScore = experiment.Success ? 0.85 : 0.25;
             item.IsValidated = experiment.Success;
-            item.ValidationNotes = "Validated as source-backed knowledge; no command was executed.";
+            item.ValidationNotes = experiment.Success
+                ? "Validated via safe experiment execution."
+                : $"Experiment failed: {experiment.FailureReason ?? experiment.StdErr ?? "unknown"}";
             item.FinalScore = scoreEngine.Calculate(item);
 
             await store.SaveAsync(
@@ -451,21 +456,70 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
             .ToList();
     }
 
-    private static KnowledgeExperiment CreateSourceOnlyExperiment(
+    private async Task<KnowledgeExperiment> CreateExperimentAsync(
         KnowledgeItem item,
-        LearningSourceDocument document) =>
-        new()
+        LearningSourceDocument document,
+        CancellationToken cancellationToken)
+    {
+        if (experimentRunner is null || item.IsDangerousInstruction)
+        {
+            return new KnowledgeExperiment
+            {
+                KnowledgeItemId = item.Id,
+                VerificationKind = VerificationKind.SourceOnly,
+                Success = true,
+                FailureReason = item.IsDangerousInstruction ? "Skipped: dangerous instruction" : null,
+                ErrorCategory = item.IsDangerousInstruction ? "Dangerous" : null,
+                StdOut = item.IsDangerousInstruction
+                    ? "Experiment skipped because item is flagged as dangerous."
+                    : "Source-only learning evidence recorded.",
+                EvidenceHash = KnowledgeHash.Create(
+                    item.Domain,
+                    document.Title,
+                    document.ProviderName,
+                    document.Content)
+            };
+        }
+
+        try
+        {
+            var result = await experimentRunner.TryVerifyAsync(item, cancellationToken);
+            if (result is not null)
+            {
+                return result;
+            }
+        }
+        catch (Exception ex)
+        {
+            return new KnowledgeExperiment
+            {
+                KnowledgeItemId = item.Id,
+                VerificationKind = VerificationKind.StaticAnalysis,
+                Success = false,
+                FailureReason = $"Experiment threw: {ex.Message}",
+                ErrorCategory = "ExperimentException",
+                StdErr = ex.ToString(),
+                EvidenceHash = KnowledgeHash.Create(
+                    item.Domain,
+                    document.Title,
+                    document.ProviderName,
+                    document.Content)
+            };
+        }
+
+        return new KnowledgeExperiment
         {
             KnowledgeItemId = item.Id,
             VerificationKind = VerificationKind.SourceOnly,
             Success = true,
-            StdOut = "Source-only learning evidence recorded.",
+            StdOut = "Source-only learning evidence recorded (experiment runner returned null).",
             EvidenceHash = KnowledgeHash.Create(
                 item.Domain,
                 document.Title,
                 document.ProviderName,
                 document.Content)
         };
+    }
 
     private static ResearchResult ToResearchResult(LearningSourceDocument document) =>
         new(
@@ -996,7 +1050,7 @@ public sealed class KnowledgeRiskClassifier : IKnowledgeRiskClassifier
     }
 }
 
-internal static class KnowledgeHash
+public static class KnowledgeHash
 {
     public static string Create(
         KnowledgeDomain domain,

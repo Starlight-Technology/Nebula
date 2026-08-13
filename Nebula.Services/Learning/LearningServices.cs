@@ -127,6 +127,47 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeRepository
     }
 
     /// <summary>
+    /// Updates an existing experiment entry in the in-memory store.
+    /// </summary>
+    public Task UpdateExperimentAsync(
+        Guid experimentId,
+        KnowledgeExperiment updated,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var entry in entries)
+        {
+            for (var i = 0; i < entry.Experiments.Count; i++)
+            {
+                if (entry.Experiments[i].Id == experimentId)
+                {
+                    var exp = entry.Experiments[i];
+                    if (updated.FailureReason is not null)
+                        exp.FailureReason = updated.FailureReason;
+                    if (updated.ErrorCategory is not null)
+                        exp.ErrorCategory = updated.ErrorCategory;
+                    if (updated.ResolvedCommand is not null)
+                        exp.ResolvedCommand = updated.ResolvedCommand;
+                    if (updated.EnvironmentFingerprint is not null)
+                        exp.EnvironmentFingerprint = updated.EnvironmentFingerprint;
+                    exp.RetryCount = updated.RetryCount;
+                    if (updated.OriginalExperimentId is not null)
+                        exp.OriginalExperimentId = updated.OriginalExperimentId;
+                    exp.Success = updated.Success;
+                    if (updated.StdOut is not null)
+                        exp.StdOut = updated.StdOut;
+                    if (updated.StdErr is not null)
+                        exp.StdErr = updated.StdErr;
+                    if (updated.ExitCode is not null)
+                        exp.ExitCode = updated.ExitCode;
+                    return Task.CompletedTask;
+                }
+            }
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Finds a stored knowledge item by its deterministic learning hash.
     /// </summary>
     public Task<KnowledgeLookupResult?> FindByHashAsync(

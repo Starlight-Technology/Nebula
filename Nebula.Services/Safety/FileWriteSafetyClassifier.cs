@@ -10,6 +10,12 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
     private static readonly string[] ApprovalExtensions =
         [".ps1", ".bat", ".cmd"];
 
+    private static readonly string[] SensitiveSegments =
+    [
+        ".env", ".ssh", "id_rsa", "id_ed25519", "credentials",
+        "access_token", "auth_token", "api_key", "apikey", "password"
+    ];
+
     private readonly string workspaceRoot;
     private readonly string controlledTempRoot;
 
@@ -35,6 +41,18 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
         }
 
         var fullPath = ResolvePath(targetPath);
+        if (SensitiveSegments.Any(segment =>
+            Path.GetFileName(fullPath).Contains(
+                segment,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return Result(
+                fullPath,
+                CommandIntent.DataExfiltration,
+                0.99,
+                "The write target is a credential, token, .env, or SSH file.");
+        }
+
         if (!IsUnder(fullPath, workspaceRoot) &&
             !IsUnder(fullPath, controlledTempRoot))
         {
@@ -59,9 +77,10 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
         {
             return Result(
                 targetPath,
-                CommandIntent.Blocked,
+                CommandIntent.NeedsApproval,
                 0.99,
-                $"File extension '{extension}' is not on the write allowlist.");
+                $"File extension '{extension}' is not on the automatic write allowlist; " +
+                "with an enabled sandbox it is created there, otherwise user approval is required.");
         }
 
         return Result(

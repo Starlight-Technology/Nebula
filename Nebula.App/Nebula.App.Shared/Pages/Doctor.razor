@@ -1,0 +1,157 @@
+@page "/doctor"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Project Doctor" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@GetHealthLabel()"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetHealthColor()" />
+            </CoronaStack>
+            <h2>Diagnostico do ambiente</h2>
+            <p>Verifica SDKs, containers, runtime e servicos locais necessarios para a central Nebula.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToRuntime">
+                Runtime
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsRunningProjectDoctor"
+                          Loading="@WorkspaceState.IsRunningProjectDoctor"
+                          OnClick="WorkspaceState.RunProjectDoctorAsync">
+                Rodar diagnostico
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(WorkspaceState.ProjectDoctorFeedback))
+    {
+        <div class="nebula-doctor-feedback">
+            <strong>@WorkspaceState.ProjectDoctorFeedback</strong>
+        </div>
+    }
+
+    @if (WorkspaceState.ProjectDiagnostic is null && !WorkspaceState.IsRunningProjectDoctor)
+    {
+        <CoronaCard>
+            <div class="nebula-pending-panel">
+                <div class="nebula-pending-panel__pulse"></div>
+                <div>
+                    <p class="nebula-pending-panel__title">Diagnostico ainda nao executado</p>
+                    <p>Clique em "Rodar diagnostico" para verificar o ambiente local.</p>
+                </div>
+            </div>
+        </CoronaCard>
+    }
+    else if (WorkspaceState.IsRunningProjectDoctor && WorkspaceState.ProjectDiagnostic is null)
+    {
+        <CoronaCard>
+            <div class="nebula-pending-panel">
+                <div class="nebula-pending-panel__pulse"></div>
+                <div>
+                    <p class="nebula-pending-panel__title">Verificando o ambiente...</p>
+                    <p>Procurando SDKs, Docker, Ollama e servicos locais.</p>
+                </div>
+            </div>
+        </CoronaCard>
+    }
+    else if (WorkspaceState.ProjectDiagnostic is not null)
+    {
+        <div class="nebula-doctor-grid">
+            @foreach (var item in WorkspaceState.ProjectDiagnostic.Items)
+            {
+                <CoronaCard Class="nebula-doctor-card">
+                    <div class="nebula-doctor-card__header">
+                        <div>
+                            <p class="nebula-kicker">@(item.Available ? "Disponivel" : "Problema")</p>
+                            <h3>@item.Name</h3>
+                        </div>
+
+                        <CoronaBadge Content="@(item.Available ? "OK" : "Atencao")"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="@(item.Available ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                    </div>
+
+                    <code class="nebula-doctor-card__detail">@item.Detail</code>
+
+                    @if (!string.IsNullOrWhiteSpace(item.Suggestion))
+                    {
+                        <p class="nebula-doctor-card__suggestion">@item.Suggestion</p>
+                    }
+                </CoronaCard>
+            }
+        </div>
+    }
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && WorkspaceState.ProjectDiagnostic is null)
+        {
+            await WorkspaceState.RunProjectDoctorAsync();
+        }
+    }
+
+    private void NavigateToRuntime()
+    {
+        NavigationManager.NavigateTo("/runtime");
+    }
+
+    private string GetHealthLabel()
+    {
+        var diagnostic = WorkspaceState.ProjectDiagnostic;
+        if (diagnostic is null)
+        {
+            return "Pendente";
+        }
+
+        return diagnostic.AllHealthy
+            ? "Ambiente saudavel"
+            : $"{diagnostic.ProblemCount} problema(s)";
+    }
+
+    private CoronaColorSemantic GetHealthColor()
+    {
+        var diagnostic = WorkspaceState.ProjectDiagnostic;
+        if (diagnostic is null)
+        {
+            return CoronaColorSemantic.Neutral;
+        }
+
+        return diagnostic.AllHealthy
+            ? CoronaColorSemantic.Success
+            : CoronaColorSemantic.Warning;
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

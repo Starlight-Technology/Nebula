@@ -72,7 +72,10 @@ public sealed class SafeExperimentRunner(
                 KnowledgeItemId = item.Id,
                 VerificationKind = VerificationKind.StaticAnalysis,
                 CommandExecuted = resolved.DisplayCommand,
+                ResolvedCommand = resolved.DisplayCommand,
                 Success = false,
+                FailureReason = $"Policy returned {safety.Decision}",
+                ErrorCategory = "PolicyBlocked",
                 StdErr =
                     $"Experiment was not executed because policy returned {safety.Decision}.",
                 EvidenceHash = Hash(
@@ -106,6 +109,8 @@ public sealed class SafeExperimentRunner(
                 VerificationKind = VerificationKind.StaticAnalysis,
                 TestCode = item.Content,
                 Success = false,
+                FailureReason = string.Join(" | ", classification.Reasons),
+                ErrorCategory = "ScriptClassificationFailed",
                 StdErr = string.Join(" | ", classification.Reasons),
                 EvidenceHash = Hash(item.Content)
             };
@@ -133,8 +138,11 @@ public sealed class SafeExperimentRunner(
                 KnowledgeItemId = item.Id,
                 VerificationKind = VerificationKind.StaticAnalysis,
                 CommandExecuted = resolved.DisplayCommand,
+                ResolvedCommand = resolved.DisplayCommand,
                 TestCode = item.Content,
                 Success = false,
+                FailureReason = $"Policy returned {safety.Decision}",
+                ErrorCategory = "PolicyBlocked",
                 StdErr =
                     $"Experiment was not executed because policy returned {safety.Decision}.",
                 EvidenceHash = Hash(item.Content)
@@ -190,13 +198,47 @@ public sealed class SafeExperimentRunner(
             KnowledgeItemId = item.Id,
             VerificationKind = verificationKind,
             CommandExecuted = result.Command,
+            ResolvedCommand = result.Command,
             ExitCode = result.ExitCode,
             StdOut = result.StandardOutput,
             StdErr = result.StandardError,
             Success = result.Success,
+            FailureReason = result.Success ? null : $"Exit code: {result.ExitCode}",
+            ErrorCategory = result.Success ? null : CategorizeError(result),
             EvidenceHash = Hash(
                 $"{result.Command}|{result.ExitCode}|{result.StandardOutput}|{result.StandardError}")
         };
+
+    private static string CategorizeError(ShellCommandResult result)
+    {
+        var stderr = (result.StandardError ?? "").ToLowerInvariant();
+        var stdout = (result.StandardOutput ?? "").ToLowerInvariant();
+        var combined = $"{stderr} {stdout}";
+
+        if (combined.Contains("not found") || combined.Contains("not recognized") ||
+            combined.Contains("no such file") || combined.Contains("could not find") ||
+            combined.Contains("não encontrado") || combined.Contains("não é reconhecido"))
+            return "CommandNotFound";
+
+        if (combined.Contains("permission denied") || combined.Contains("access denied") ||
+            combined.Contains("permissão negada") || combined.Contains("acesso negado"))
+            return "PermissionDenied";
+
+        if (combined.Contains("syntax error") || combined.Contains("erro de sintaxe") ||
+            combined.Contains("unexpected token") || (result.ExitCode == -1 && string.IsNullOrWhiteSpace(combined)))
+            return "SyntaxError";
+
+        if (combined.Contains("timed out") || combined.Contains("timeout") ||
+            combined.Contains("tempo esgotado"))
+            return "Timeout";
+
+        if (combined.Contains("network") || combined.Contains("connection") ||
+            combined.Contains("internet") || combined.Contains("dns") ||
+            combined.Contains("conexão") || combined.Contains("rede"))
+            return "NetworkError";
+
+        return "Other";
+    }
 
     private static KnowledgeExperiment NotTestable(KnowledgeItem item) =>
         new()
@@ -204,6 +246,8 @@ public sealed class SafeExperimentRunner(
             KnowledgeItemId = item.Id,
             VerificationKind = VerificationKind.NotTestableLocally,
             Success = false,
+            FailureReason = "Cannot verify physics/chemistry locally",
+            ErrorCategory = "NotTestableLocally",
             EvidenceHash = Hash(
                 $"{item.Domain}|{item.Kind}|not-testable-locally")
         };

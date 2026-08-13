@@ -30,16 +30,29 @@ public sealed partial class CommandIntentParser : ICommandIntentParser
 
     private static string? TryParseWindowsDrive(string source)
     {
-        var explicitDrive = ExplicitDriveRegex().Match(source);
-        if (explicitDrive.Success)
+        var explicitMatch = ExplicitDriveRegex().Match(source);
+        if (explicitMatch.Success &&
+            explicitMatch.Groups["drive"].Success)
         {
-            return explicitDrive.Groups["drive"].Value.ToUpperInvariant();
+            return explicitMatch.Groups["drive"].Value.ToUpperInvariant();
         }
 
-        var contextualDrive = ContextualDriveRegex().Match(source);
-        return contextualDrive.Success
-            ? contextualDrive.Groups["drive"].Value.ToUpperInvariant()
-            : null;
+        var contextualMatch = ContextualDriveRegex().Match(source);
+        if (!contextualMatch.Success)
+        {
+            return null;
+        }
+
+        foreach (var groupName in new[] { "drive", "drive2", "drive3", "drive4" })
+        {
+            var group = contextualMatch.Groups[groupName];
+            if (group.Success)
+            {
+                return group.Value.ToUpperInvariant();
+            }
+        }
+
+        return null;
     }
 
     private static string? TryParsePath(
@@ -78,13 +91,25 @@ public sealed partial class CommandIntentParser : ICommandIntentParser
     }
 
     [GeneratedRegex(
-        @"(?<![a-z0-9])(?<drive>[a-z]):(?:[\\/])?",
+        @"(?<![a-z0-9])(?<drive>[a-z]):(?:[\\/])?(?:\s|$|\.)",
         RegexOptions.IgnoreCase)]
     private static partial Regex ExplicitDriveRegex();
 
     [GeneratedRegex(
-        @"(?:\bunidade\b|\bdrive\b|\bdir\b|\bls\b|\barquivos\b|\bfiles\b|\bdo\b|\bda\b|\bno\b|\bna\b)\s+(?:(?:unidade|drive)\s+)?(?<drive>[a-z])(?::(?:[\\/])?)?(?![a-z])",
-        RegexOptions.IgnoreCase)]
+        @"(?:
+            (?:na|no|do|da|em|para|a)\s+unidade\s+(?<drive>[a-z])
+            |
+            unidade\s+(?<drive>[a-z])
+            |
+            drive\s+(?<drive>[a-z])
+            |
+            (?:listar|exibir|mostrar|acessar|abrir|ir\s+para|navegar)\s.*?unidade\s+(?<drive2>[a-z])
+            |
+            \b(?:em|no|na|do|da|de)\s+(?<drive3>[a-z])(?!\w)
+            |
+            \b(?:unidade|drive|arquivos|files|pasta|folder|diretório|diretorio)\s+(?<drive4>[a-z])(?!\w)
+        )",
+        RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace)]
     private static partial Regex ContextualDriveRegex();
 
     [GeneratedRegex(
