@@ -1,6 +1,8 @@
 using System.Text;
 
 using Nebula.Agent.Data;
+using Nebula.Core.Configuration;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent;
 
@@ -18,18 +20,50 @@ public class NebulaContextBuilder
 {
     public const int DefaultRecentMessageLimit = ConversationContextOptions.DefaultRecentMessageLimit;
 
-    private const string SystemPrompt = """
-        You are Nebula, a local assistant that helps the user through conversation and safe local actions.
+    private const string SharedSystemPrompt = """
+        You are Nebula, a local assistant.
         Use the conversation history to resolve references such as "it", "that", "ela", "isso", and "a anterior".
         Keep continuity across turns, but follow the current user message as the immediate instruction.
-        If action execution is needed, plan only the steps required for the current request.
+        """;
+
+    private const string ChatModePrompt = """
+        Você está em CHAT MODE.
+
+        Seu trabalho é apenas responder perguntas e conversar.
+
+        Você não deve executar tarefas.
+        Você não deve criar planos de execução.
+        Você não deve chamar ferramentas.
+        Você não deve acessar arquivos.
+
+        Responda apenas em linguagem natural.
+        """;
+
+    private const string AgentModePrompt = """
+        Você está em AGENT MODE.
+
+        O usuário espera que a tarefa seja executada.
+
+        Não responda apenas com explicações.
+        Crie um plano.
+        Execute as etapas.
+        Colete evidências.
+        Relate somente resultados observados.
+
+        Se algo não puder ser executado, informe claramente.
+        Não invente resultados.
+        Não afirme nada sem evidência.
         """;
 
     private readonly ConversationContextOptions options;
+    private readonly NebulaRuntimeSettings runtimeSettings;
 
-    public NebulaContextBuilder(ConversationContextOptions? options = null)
+    public NebulaContextBuilder(
+        ConversationContextOptions? options = null,
+        NebulaRuntimeSettings? runtimeSettings = null)
     {
         this.options = options ?? new ConversationContextOptions();
+        this.runtimeSettings = runtimeSettings ?? new NebulaRuntimeSettings();
     }
 
     public int RecentMessageLimit => Math.Max(1, options.MaxRecentMessages);
@@ -38,12 +72,13 @@ public class NebulaContextBuilder
         Guid conversationId,
         ConversationState? state,
         IReadOnlyList<ConversationMessage> recentMessages,
-        ConversationMessage currentUserMessage)
+        ConversationMessage currentUserMessage,
+        InteractionMode mode)
     {
         var context = new StringBuilder();
 
-        AppendSystemPrompt(context);
-        AppendConversationHeader(context, conversationId);
+        AppendSystemPrompt(context, mode);
+        AppendConversationHeader(context, conversationId, mode);
         AppendConversationState(context, state);
         AppendRecentMessages(context, SelectHistory(recentMessages, currentUserMessage));
         AppendCurrentMessage(context, currentUserMessage);
@@ -80,17 +115,30 @@ public class NebulaContextBuilder
         return selected;
     }
 
-    private static void AppendSystemPrompt(StringBuilder context)
+    private void AppendSystemPrompt(
+        StringBuilder context,
+        InteractionMode mode)
     {
         context.AppendLine("[system]");
-        context.AppendLine(SystemPrompt.Trim());
+        context.AppendLine(SharedSystemPrompt.Trim());
+        context.AppendLine();
+        context.AppendLine(
+            mode == InteractionMode.Agent
+                ? AgentModePrompt.Trim()
+                : ChatModePrompt.Trim());
+        context.AppendLine();
+        context.AppendLine(runtimeSettings.BuildResponseLanguageInstruction());
         context.AppendLine();
     }
 
-    private static void AppendConversationHeader(StringBuilder context, Guid conversationId)
+    private static void AppendConversationHeader(
+        StringBuilder context,
+        Guid conversationId,
+        InteractionMode mode)
     {
         context.AppendLine("[conversation]");
         context.AppendLine($"ConversationId: {conversationId}");
+        context.AppendLine($"InteractionMode: {mode}");
         context.AppendLine();
     }
 

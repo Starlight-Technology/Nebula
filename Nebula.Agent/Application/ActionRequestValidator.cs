@@ -75,8 +75,7 @@ internal static class ActionRequestValidator
         return !string.IsNullOrWhiteSpace(prompt) &&
                !PlatformDetector.GetCurrentOsType().Equals(
                    "Unknown",
-                   StringComparison.OrdinalIgnoreCase) &&
-               ComputerOperationDetector.IsOperational(prompt);
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<string> BuildFailures(bool safe, bool allowed, bool feasible)

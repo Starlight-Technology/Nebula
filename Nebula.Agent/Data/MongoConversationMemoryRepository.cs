@@ -127,6 +127,53 @@ public class MongoConversationMemoryRepository(IMongoContext context) : IConvers
         }
     }
 
+    public async Task<IReadOnlyList<ConversationSummary>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        try
+        {
+            var filter = Builders<MongoConversationState>.Filter.Empty;
+            var sort = Builders<MongoConversationState>.Sort.Descending(state => state.UpdatedAt);
+
+            var entities = await context.ConversationStates
+                .Find(filter)
+                .Sort(sort)
+                .Limit(limit)
+                .ToListAsync(cancellationToken);
+
+            if (entities.Count == 0)
+            {
+                return [];
+            }
+
+            var summaries = new List<ConversationSummary>(entities.Count);
+            foreach (var entity in entities)
+            {
+                var messageCount = (int)await context.ConversationMessages.CountDocumentsAsync(
+                    message => message.ConversationId == entity.ConversationId,
+                    cancellationToken: cancellationToken);
+
+                summaries.Add(ConversationSummary.FromState(Map(entity), messageCount));
+            }
+
+            return summaries;
+        }
+        catch (MongoAuthenticationException ex)
+        {
+            throw new InvalidOperationException("MongoDB authentication failed while listing conversation memory.", ex);
+        }
+        catch (MongoCommandException ex)
+        {
+            throw new InvalidOperationException("MongoDB command failed while listing conversation memory.", ex);
+        }
+    }
+
     private static ConversationMessage Map(MongoConversationMessage entity)
     {
         return new ConversationMessage

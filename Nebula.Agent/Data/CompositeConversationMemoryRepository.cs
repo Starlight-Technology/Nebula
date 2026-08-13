@@ -137,6 +137,41 @@ public class CompositeConversationMemoryRepository : IConversationMemoryReposito
         throw new InvalidOperationException("Unable to persist conversation state in any registered store.", lastFailure);
     }
 
+    public async Task<IReadOnlyList<ConversationSummary>> GetRecentConversationsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        var summaries = new List<ConversationSummary>();
+
+        foreach (var store in stores)
+        {
+            try
+            {
+                var storeSummaries = await store.GetRecentConversationsAsync(limit, cancellationToken);
+                if (storeSummaries is not null)
+                {
+                    summaries.AddRange(storeSummaries);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogStoreFailure(store, "load recent conversations", ex);
+            }
+        }
+
+        return summaries
+            .GroupBy(summary => summary.ConversationId)
+            .Select(group => group.OrderByDescending(summary => summary.UpdatedAt).First())
+            .OrderByDescending(summary => summary.UpdatedAt)
+            .Take(limit)
+            .ToList();
+    }
+
     private void LogStoreFailure(
         IConversationMemoryStore store,
         string operation,

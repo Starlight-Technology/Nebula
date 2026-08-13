@@ -28,6 +28,33 @@ public class NoOpCommandRepository : ICommandRepository
         return Task.FromResult(new StoredCommand { Id = commandId, Executed = executed, ExecutionResult = result });
     }
 
+    public Task<StoredCommand> UpdateExecutionDetailsAsync(
+        Guid commandId,
+        bool executed,
+        string? result,
+        int? exitCode,
+        string? standardOutput,
+        string? standardError,
+        DateTimeOffset? executedAt,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(new StoredCommand
+        {
+            Id = commandId,
+            Executed = executed,
+            ExecutionResult = result,
+            ExitCode = exitCode,
+            StandardOutput = standardOutput,
+            StandardError = standardError,
+            ExecutedAt = executedAt
+        });
+    }
+
+    public Task<IEnumerable<StoredCommand>> GetApprovedCommandsAsync(int skip = 0, int take = 100, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult<IEnumerable<StoredCommand>>(new List<StoredCommand>());
+    }
+
     public Task<IEnumerable<StoredCommand>> GetByOsTypeAsync(string osType, CancellationToken cancellationToken = default)
     {
         return Task.FromResult<IEnumerable<StoredCommand>>(new List<StoredCommand>());

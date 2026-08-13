@@ -1,0 +1,146 @@
+@page "/audit"
+@implements IDisposable
+@using Nebula.Agent.Data
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Auditoria" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@($"Comandos aprovados ({WorkspaceState.ApprovedCommands.Count})")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="CoronaColorSemantic.Neutral" />
+            </CoronaStack>
+            <h2>Aprovacoes de comandos</h2>
+            <p>Comandos aprovados manualmente pela interface ou automaticamente pelas preferencias do runtime.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToChat">
+                Conversa
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsLoadingApprovedCommands"
+                          Loading="@WorkspaceState.IsLoadingApprovedCommands"
+                          OnClick="WorkspaceState.LoadApprovedCommandsAsync">
+                Atualizar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(WorkspaceState.ApprovedCommandsFeedback))
+    {
+        <div class="nebula-doctor-feedback">
+            <strong>@WorkspaceState.ApprovedCommandsFeedback</strong>
+        </div>
+    }
+
+    @if (WorkspaceState.IsLoadingApprovedCommands && WorkspaceState.ApprovedCommands.Count == 0)
+    {
+        <CoronaCard>
+            <div class="nebula-pending-panel">
+                <div class="nebula-pending-panel__pulse"></div>
+                <div>
+                    <p class="nebula-pending-panel__title">Carregando auditoria...</p>
+                    <p>Lendo os comandos aprovados persistidos no Postgres.</p>
+                </div>
+            </div>
+        </CoronaCard>
+    }
+    else if (WorkspaceState.ApprovedCommands.Count > 0)
+    {
+        <div class="nebula-runs-list">
+            @foreach (var command in WorkspaceState.ApprovedCommands)
+            {
+                <CoronaCard Class="nebula-runs-card">
+                    <div class="nebula-runs-card__top">
+                        <div>
+                            <h3>@command.Command</h3>
+                            <p>@command.Objective</p>
+                        </div>
+
+                        <CoronaStack Direction="CoronaStackDirection.Row" Spacing=".5rem">
+                            <CoronaBadge Content="@(command.AutoApproved ? "Automatica" : "Manual")"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="@(command.AutoApproved ? CoronaColorSemantic.Warning : CoronaColorSemantic.Success)" />
+                            <CoronaBadge Content="@(command.Executed ? "Executado" : (command.Skipped ? "Pulado" : "Nao executado"))"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="@(command.Executed ? CoronaColorSemantic.Success : CoronaColorSemantic.Neutral)" />
+                        </CoronaStack>
+                    </div>
+
+                    <div class="nebula-status-list nebula-status-list--grid">
+                        <div class="nebula-status-row">
+                            <span>Decisao de seguranca</span>
+                            <strong>@(command.SafetyDecision ?? "n/a")</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Exit code</span>
+                            <strong>@(command.ExitCode?.ToString() ?? "n/a")</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Shell</span>
+                            <strong>@(command.Shell ?? "n/a")</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Quando</span>
+                            <strong>@(command.ExecutedAt?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? command.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"))</strong>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(command.WorkingDirectory))
+                    {
+                        <p class="nebula-kicker">Diretorio de trabalho</p>
+                        <code>@command.WorkingDirectory</code>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(command.StandardOutput))
+                    {
+                        <p class="nebula-kicker">Saida</p>
+                        <pre>@command.StandardOutput</pre>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(command.StandardError))
+                    {
+                        <pre class="nebula-runs-step__error">@command.StandardError</pre>
+                    }
+                </CoronaCard>
+            }
+        </div>
+    }
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.LoadApprovedCommandsAsync();
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

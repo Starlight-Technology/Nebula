@@ -1,0 +1,498 @@
+@page "/settings"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Configuracao rapida" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.RuntimeSettings.ResponseLanguageCode"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="CoronaColorSemantic.Neutral" />
+                <CoronaBadge Content="@WorkspaceState.GetCommandApprovalSummary()"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@(WorkspaceState.RuntimeSettings.AutoApproveCommands ? CoronaColorSemantic.Warning : CoronaColorSemantic.Neutral)" />
+            </CoronaStack>
+            <h2>Preferencias do Nebula</h2>
+            <p>Configure modelos, pesquisa web, aprovacoes de comandos, aceleracao e o idioma usado nas respostas da LLM.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToChat">
+                Conversa
+            </CoronaButton>
+
+            <CoronaButton Loading="@WorkspaceState.IsSavingSettings"
+                          Disabled="@WorkspaceState.IsLoadingSettings"
+                          Icon="@CoronaIcons.Gear"
+                          OnClick="WorkspaceState.SaveQuickSettingsAsync">
+                Salvar configuracao
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(WorkspaceState.SettingsFeedback))
+    {
+        <div class="nebula-info-panel">
+            <p class="nebula-info-panel__title">Configuracao</p>
+            <p>@WorkspaceState.SettingsFeedback</p>
+        </div>
+    }
+
+    <div class="nebula-settings-layout">
+        <main class="nebula-settings-main">
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Modelos</h3>
+                        <p>O modelo principal atende conversa e agente. O modelo de aprendizado extrai conhecimento das fontes pesquisadas.</p>
+                    </div>
+
+                    <div class="nebula-settings-grid">
+                        <label class="nebula-settings-field">
+                            <span>Modelo principal</span>
+                            <select @bind="WorkspaceState.QuickSettings.MainModel"
+                                    disabled="@WorkspaceState.IsSavingSettings">
+                                @foreach (var modelName in GetModelOptions())
+                                {
+                                    <option value="@modelName">@modelName</option>
+                                }
+                            </select>
+                            <small>Aplicado imediatamente quando o modelo estiver instalado no Ollama.</small>
+                        </label>
+
+                        <label class="nebula-settings-field">
+                            <span>Modelo de aprendizado</span>
+                            <select @bind="WorkspaceState.QuickSettings.LearningModel"
+                                    disabled="@WorkspaceState.IsSavingSettings">
+                                @foreach (var modelName in GetModelOptions())
+                                {
+                                    <option value="@modelName">@modelName</option>
+                                }
+                            </select>
+                            <small>Pode ser diferente do modelo principal para priorizar extracao estruturada.</small>
+                        </label>
+                    </div>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Pesquisa e aprendizado</h3>
+                        <p>Escolha como o agente encontra fontes externas antes de criar conhecimento.</p>
+                    </div>
+
+                    <div class="nebula-settings-options">
+                        @foreach (var provider in WorkspaceState.WebResearchProviders)
+                        {
+                            <label class="@GetProviderClass(provider.Key)">
+                                <input type="radio"
+                                       name="web-research-provider"
+                                       value="@provider.Key"
+                                       @onchange="@(() => WorkspaceState.QuickSettings.WebResearchProvider = provider.Key)"
+                                       checked="@WorkspaceState.QuickSettings.WebResearchProvider.Equals(provider.Key, StringComparison.OrdinalIgnoreCase)" />
+                                <span>
+                                    <strong>@provider.Name</strong>
+                                    <small>@provider.Description</small>
+                                </span>
+                            </label>
+                        }
+                    </div>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Execucao de comandos</h3>
+                        <p>Controle quando o agente pode continuar depois que a policy pede confirmacao explicita.</p>
+                    </div>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.AutoApproveCommands ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.AutoApproveCommands"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.AutoApproveCommands = args.Value is true)" />
+                        <span>
+                            <strong>Auto-aprovar comandos que pedem confirmacao</strong>
+                            <small>Comandos classificados como bloqueados continuam impedidos pela policy.</small>
+                        </span>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>GPU e runtime</h3>
+                        <p>A preferencia gera o comando correto. A troca efetiva exige reiniciar a stack do Ollama com o perfil escolhido.</p>
+                    </div>
+
+                    <div class="nebula-settings-grid nebula-settings-grid--gpu">
+                        <label class="nebula-settings-field">
+                            <span>Uso de GPU</span>
+                            <select @bind="WorkspaceState.QuickSettings.AccelerationProfile"
+                                    disabled="@WorkspaceState.IsSavingSettings">
+                                <option value="auto">Automatico (recomendado)</option>
+                                @foreach (var profile in WorkspaceState.AccelerationProfiles)
+                                {
+                                    <option value="@profile.Key">@profile.Name</option>
+                                }
+                            </select>
+                            <small>Automatico usa a recomendacao detectada na tela Runtime.</small>
+                        </label>
+
+                        <div class="nebula-settings-command">
+                            <span>Comando para aplicar</span>
+                            <code>@WorkspaceState.GetConfiguredAccelerationCommand()</code>
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Color="CoronaColorSemantic.Neutral"
+                                          OnClick="WorkspaceState.UseDetectedAccelerationProfile">
+                                Usar perfil detectado
+                            </CoronaButton>
+                        </div>
+                    </div>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Idioma das respostas</h3>
+                        <p>Esta preferencia entra no prompt de sistema e nos prompts internos de agente e aprendizado.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Idioma padrao</span>
+                        <select @bind="WorkspaceState.QuickSettings.ResponseLanguageCode"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            @foreach (var language in WorkspaceState.ResponseLanguages)
+                            {
+                                <option value="@language.Code">@language.Name (@language.Code)</option>
+                            }
+                        </select>
+                        <small>Codigo, comandos, caminhos, identificadores e chaves JSON permanecem inalterados.</small>
+                    </label>
+                </section>
+            </CoronaCard>
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Workspace de referencia</h3>
+                        <p>Define sobre qual projeto o Nebula trabalha no modo Agente. Deixe em branco para usar um novo workspace vazio.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Pasta do projeto</span>
+                        <input type="text"
+                               placeholder="Ex.: C:\Users\voce\source\repos\MeuProjeto"
+                               @bind="WorkspaceState.QuickSettings.WorkspaceRoot"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>
+                            Pasta efetiva:
+                            <code>@WorkspaceState.ResolvedWorkspace.Root</code>
+                        </small>
+                    </label>
+                </section>
+            </CoronaCard>
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Allowlist de comandos por workspace</h3>
+                        <p>Comandos frequentes deste workspace (build, test, format, lint, migrations) sao executados sem pedir aprovacao.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Novo comando permitido</span>
+                        <input type="text"
+                               placeholder="Ex.: dotnet build"
+                               @bind="WorkspaceState.AllowlistCommandText"
+                               disabled="@(WorkspaceState.IsSavingSettings || WorkspaceState.IsLoadingAllowlist)" />
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Size="CoronaComponentSize.Small"
+                                      Color="CoronaColorSemantic.Success"
+                                      Disabled="@(WorkspaceState.IsSavingSettings || string.IsNullOrWhiteSpace(WorkspaceState.AllowlistCommandText))"
+                                      OnClick="WorkspaceState.AddAllowlistCommandAsync">
+                            Adicionar comando
+                        </CoronaButton>
+                    </label>
+
+                    <CoronaButton Variant="CoronaButtonVariant.Text"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Neutral"
+                                  OnClick="WorkspaceState.LoadAllowlistAsync">
+                        Recarregar allowlist
+                    </CoronaButton>
+
+                    @if (WorkspaceState.WorkspaceAllowlistCommands.Count > 0)
+                    {
+                        <ul class="nebula-allowlist-list">
+                            @foreach (var command in WorkspaceState.WorkspaceAllowlistCommands)
+                            {
+                                <li><code>@command</code></li>
+                            }
+                        </ul>
+                    }
+
+                    @if (WorkspaceState.AllowlistFeedback is not null)
+                    {
+                        <small class="nebula-feedback">@WorkspaceState.AllowlistFeedback</small>
+                    }
+                </section>
+            </CoronaCard>
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Categorias auto-aprovadas por workspace</h3>
+                        <p>Comandos classificados na categoria (ex.: package-install, network-access) pulam a aprovacao apenas neste workspace.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Nova categoria</span>
+                        <input type="text"
+                               placeholder="Ex.: package-install"
+                               @bind="WorkspaceState.WorkspaceCategoryText"
+                               disabled="@(WorkspaceState.IsSavingSettings || WorkspaceState.IsLoadingWorkspaceCategories)" />
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Size="CoronaComponentSize.Small"
+                                      Color="CoronaColorSemantic.Success"
+                                      Disabled="@(WorkspaceState.IsSavingSettings || string.IsNullOrWhiteSpace(WorkspaceState.WorkspaceCategoryText))"
+                                      OnClick="WorkspaceState.AddWorkspaceCategoryAsync">
+                            Adicionar categoria
+                        </CoronaButton>
+                    </label>
+
+                    <CoronaButton Variant="CoronaButtonVariant.Text"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Neutral"
+                                  OnClick="WorkspaceState.LoadWorkspaceCategoriesAsync">
+                        Recarregar categorias
+                    </CoronaButton>
+
+                    @if (WorkspaceState.WorkspaceAutoApproveCategories.Count > 0)
+                    {
+                        <ul class="nebula-allowlist-list">
+                            @foreach (var category in WorkspaceState.WorkspaceAutoApproveCategories)
+                            {
+                                <li><code>@category</code></li>
+                            }
+                        </ul>
+                    }
+
+                    @if (WorkspaceState.WorkspaceCategoriesFeedback is not null)
+                    {
+                        <small class="nebula-feedback">@WorkspaceState.WorkspaceCategoriesFeedback</small>
+                    }
+                </section>
+            </CoronaCard>
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Simulador de policy</h3>
+                        <p>Veja como um comando seria classificado e decidido pela policy sem executar nada.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Comando ou intencao</span>
+                        <input type="text"
+                               placeholder="Ex.: pip install requests"
+                               @bind="WorkspaceState.PolicySimulatorText"
+                               disabled="@(WorkspaceState.IsSavingSettings || WorkspaceState.IsSimulatingPolicy)" />
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Size="CoronaComponentSize.Small"
+                                      Color="CoronaColorSemantic.Primary"
+                                      Disabled="@(WorkspaceState.IsSavingSettings || WorkspaceState.IsSimulatingPolicy || string.IsNullOrWhiteSpace(WorkspaceState.PolicySimulatorText))"
+                                      OnClick="WorkspaceState.RunPolicySimulationAsync">
+                            Simular
+                        </CoronaButton>
+                    </label>
+
+                    @if (WorkspaceState.PolicySimulationError is not null)
+                    {
+                        <small class="nebula-feedback">@WorkspaceState.PolicySimulationError</small>
+                    }
+
+                    @if (WorkspaceState.PolicySimulation is { } simulation)
+                    {
+                        <div class="nebula-policy-simulation">
+                            <ul class="nebula-policy-simulation-list">
+                                <li><span>Decisao:</span> <strong>@simulation.Decision</strong></li>
+                                <li><span>Intent:</span> @simulation.Intent</li>
+                                <li><span>Categoria:</span> <code>@simulation.Category</code></li>
+                                <li><span>Confianca:</span> @simulation.Confidence.ToString("F3")</li>
+                                <li><span>Origem:</span> @simulation.ClassificationSource</li>
+                                <li><span>Comando resolvido:</span> <code>@simulation.ResolvedCommand</code></li>
+                                <li><span>Shell:</span> @simulation.Shell</li>
+                                <li><span>Operacao:</span> @simulation.OperationKind</li>
+                            </ul>
+
+                            @if (simulation.ApprovalOutcome is not null)
+                            {
+                                <small class="nebula-feedback">
+                                    Aprovacao dispensada: @simulation.ApprovalOutcome (@simulation.ApprovalNote)
+                                </small>
+                            }
+
+                            <details>
+                                <summary>Razoes</summary>
+                                <ul class="nebula-policy-reasons">
+                                    @foreach (var reason in simulation.ClassificationReasons)
+                                    {
+                                        <li>@reason</li>
+                                    }
+                                    @foreach (var reason in simulation.DecisionReasons)
+                                    {
+                                        <li>@reason</li>
+                                    }
+                                </ul>
+                            </details>
+                        </div>
+                    }
+                </section>
+            </CoronaCard>
+        </main>
+
+        <aside class="nebula-side-rail">
+            <CoronaCard Class="nebula-status-card">
+                <div class="nebula-status-card__header">
+                    <div>
+                        <p class="nebula-kicker">Resumo</p>
+                        <h3>Configuracao atual</h3>
+                    </div>
+                    <CoronaBadge Content="Persistente"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="CoronaColorSemantic.Success" />
+                </div>
+
+                <div class="nebula-status-list">
+                    <div class="nebula-status-row">
+                        <span>Modelo principal</span>
+                        <strong>@WorkspaceState.QuickSettings.MainModel</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Aprendizado</span>
+                        <strong>@WorkspaceState.QuickSettings.LearningModel</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Navegador de pesquisa</span>
+                        <strong>@GetProviderName()</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Aprovacao de comandos</span>
+                        <strong>@(WorkspaceState.QuickSettings.AutoApproveCommands ? "Auto-aprovar" : "Manual")</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Aceleracao</span>
+                        <strong>@GetAccelerationName()</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Idioma</span>
+                        <strong>@GetLanguageName()</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Workspace</span>
+                        <strong>@WorkspaceState.QuickSettings.WorkspaceRoot.Trim()</strong>
+                    </div>
+                </div>
+            </CoronaCard>
+        </aside>
+    </div>
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.EnsureRuntimeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await WorkspaceState.EnsureSettingsLoadedAsync();
+        }
+    }
+
+    private IReadOnlyList<string> GetModelOptions()
+    {
+        return (WorkspaceState.RuntimeState?.InstalledModels
+                    .Select(model => model.Name) ?? [])
+            .Append(WorkspaceState.ActiveModelName)
+            .Append(WorkspaceState.QuickSettings.MainModel)
+            .Append(WorkspaceState.QuickSettings.LearningModel)
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private string GetProviderClass(string providerKey)
+    {
+        return WorkspaceState.QuickSettings.WebResearchProvider.Equals(
+            providerKey,
+            StringComparison.OrdinalIgnoreCase)
+            ? "nebula-settings-option is-selected"
+            : "nebula-settings-option";
+    }
+
+    private string GetProviderName()
+    {
+        return WorkspaceState.WebResearchProviders.FirstOrDefault(provider =>
+                provider.Key.Equals(
+                    WorkspaceState.QuickSettings.WebResearchProvider,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.Name ?? WorkspaceState.QuickSettings.WebResearchProvider;
+    }
+
+    private string GetAccelerationName()
+    {
+        if (WorkspaceState.QuickSettings.AccelerationProfile.Equals(
+                "auto",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "Automatico";
+        }
+
+        return WorkspaceState.AccelerationProfiles.FirstOrDefault(profile =>
+                profile.Key.Equals(
+                    WorkspaceState.QuickSettings.AccelerationProfile,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.Name ?? WorkspaceState.QuickSettings.AccelerationProfile;
+    }
+
+    private string GetLanguageName()
+    {
+        return WorkspaceState.ResponseLanguages.FirstOrDefault(language =>
+                language.Code.Equals(
+                    WorkspaceState.QuickSettings.ResponseLanguageCode,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.Name ?? WorkspaceState.QuickSettings.ResponseLanguageCode;
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

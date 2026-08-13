@@ -1,0 +1,39 @@
+use_default_settings: true
+
+general:
+  instance_name: "Nebula Search"
+  enable_metrics: false
+
+search:
+  safe_search: 1
+  default_lang: "pt-BR"
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: false
+  limiter: false
+  public_instance: false
+  method: "GET"
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+  pool_connections: 50
+  pool_maxsize: 10
+
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: bing
+    disabled: false

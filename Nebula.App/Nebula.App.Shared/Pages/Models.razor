@@ -1,4 +1,4 @@
-@page "/models"
+﻿@page "/models"
 @implements IDisposable
 @inject NebulaWorkspaceState WorkspaceState
 @inject NavigationManager NavigationManager
@@ -31,6 +31,15 @@
                           Loading="@WorkspaceState.IsRefreshingRuntime"
                           OnClick="WorkspaceState.RefreshRuntimeAsync">
                 Atualizar
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          Icon="@CoronaIcons.Download"
+                          Disabled="@WorkspaceState.IsModelBusy"
+                          Loading="@WorkspaceState.IsUpdatingOllama"
+                          OnClick="WorkspaceState.UpdateOllamaServerAsync">
+                Atualizar Ollama
             </CoronaButton>
         </CoronaStack>
     </section>
@@ -89,6 +98,40 @@
                         Instalar modelo ativo
                     </CoronaButton>
                 </div>
+            }
+        </CoronaCard>
+
+        <CoronaCard Class="nebula-model-current-card">
+            <div class="nebula-model-current">
+                <div>
+                    <span class="nebula-model-current__label">Servidor Ollama</span>
+                    <strong>@(string.IsNullOrWhiteSpace(WorkspaceState.OllamaServerVersion) ? "Versao desconhecida" : WorkspaceState.OllamaServerVersion)</strong>
+                    <p>Atualiza a imagem do container e recria o servico com `docker compose pull` + `up -d`.</p>
+                </div>
+
+                <div class="nebula-model-current__badges">
+                    <CoronaBadge Content="@(WorkspaceState.IsRuntimeOnline ? "Runtime pronto" : "Sem conexao")"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@(WorkspaceState.IsRuntimeOnline ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+
+                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                  Color="CoronaColorSemantic.Primary"
+                                  Size="CoronaComponentSize.Small"
+                                  Icon="@CoronaIcons.Download"
+                                  Disabled="@(WorkspaceState.IsModelBusy || WorkspaceState.IsUpdatingOllama)"
+                                  Loading="@WorkspaceState.IsUpdatingOllama"
+                                  OnClick="WorkspaceState.UpdateOllamaServerAsync">
+                        Atualizar servidor
+                    </CoronaButton>
+                </div>
+            </div>
+
+            @if (WorkspaceState.OllamaUpdateOutput.Count > 0)
+            {
+                <details class="nebula-model-update-log">
+                    <summary>Ver saida da ultima atualizacao</summary>
+                    <pre>@string.Join(Environment.NewLine, WorkspaceState.OllamaUpdateOutput)</pre>
+                </details>
             }
         </CoronaCard>
 
@@ -206,13 +249,25 @@
                                         <span>Atualizado em @model.ModifiedAtLabel</span>
                                     </div>
 
-                                    <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
-                                                  Size="CoronaComponentSize.Small"
-                                                  Color="@(isSelected ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Primary)"
-                                                  Disabled="@(WorkspaceState.IsModelBusy || isSelected)"
-                                                  OnClick="@(() => WorkspaceState.SelectInstalledModelAsync(model.Name))">
-                                        @(isSelected ? "Em uso" : "Usar")
-                                    </CoronaButton>
+                                    <div class="nebula-model-item__actions">
+                                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                                      Color="CoronaColorSemantic.Neutral"
+                                                      Size="CoronaComponentSize.Small"
+                                                      Icon="@CoronaIcons.Download"
+                                                      Disabled="@WorkspaceState.IsModelBusy"
+                                                      Loading="@(WorkspaceState.IsInstallingModel && WorkspaceState.ModelFeedback?.Contains(model.Name, StringComparison.OrdinalIgnoreCase) == true)"
+                                                      OnClick="@(() => WorkspaceState.UpdateInstalledModelAsync(model.Name))">
+                                            Atualizar
+                                        </CoronaButton>
+
+                                        <CoronaButton Variant="@(isSelected ? CoronaButtonVariant.Outlined : CoronaButtonVariant.Filled)"
+                                                      Size="CoronaComponentSize.Small"
+                                                      Color="@(isSelected ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Primary)"
+                                                      Disabled="@(WorkspaceState.IsModelBusy || isSelected)"
+                                                      OnClick="@(() => WorkspaceState.SelectInstalledModelAsync(model.Name))">
+                                            @(isSelected ? "Em uso" : "Usar")
+                                        </CoronaButton>
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -256,6 +311,7 @@
     protected override async Task OnInitializedAsync()
     {
         await WorkspaceState.EnsureRuntimeAsync();
+        await WorkspaceState.RefreshOllamaVersionAsync();
     }
 
     private void NavigateToChat()

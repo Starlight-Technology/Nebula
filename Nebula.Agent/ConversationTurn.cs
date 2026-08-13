@@ -1,3 +1,11 @@
+using Nebula.Agent.Domain;
+using Nebula.Core.Agent;
+using Nebula.Core.Commands;
+using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
+using Nebula.Core.Projects;
+using Nebula.Core.Safety;
+
 namespace Nebula.Agent;
 
 public class ConversationTurn
@@ -8,6 +16,8 @@ public class ConversationTurn
 
     public string Prompt { get; set; } = string.Empty;
 
+    public InteractionMode Mode { get; set; }
+
     public string ModelName { get; set; } = string.Empty;
 
     public string Classification { get; set; } = string.Empty;
@@ -16,17 +26,34 @@ public class ConversationTurn
 
     public string? Reasoning { get; set; }
 
+    public string? FinalReport { get; set; }
+
     public List<CommandExecution> Commands { get; set; } = [];
+
+    public List<ExecutionHistoryEntry> ExecutionHistory { get; set; } = [];
+
+    public List<ExecutionEvidence> Evidence { get; set; } = [];
 
     public ActionExecutionStatus? ActionStatus { get; set; }
 
     public List<ActionExecutionEvent> ActionEvents { get; set; } = [];
+
+    public string CurrentPlan { get; set; } = string.Empty;
+
+    public List<AgentArtifactRecord> Artifacts { get; set; } = [];
+
+    public List<AgentApprovalRecord> Approvals { get; set; } = [];
 
     public bool IsCancelled { get; set; }
 }
 
 public class CommandExecution
 {
+    public Guid StepId { get; set; } = Guid.NewGuid();
+
+    public OperationKind OperationKind { get; set; } =
+        OperationKind.TerminalCommand;
+
     public int Attempt { get; set; } = 1;
 
     public int Id { get; set; }
@@ -34,6 +61,38 @@ public class CommandExecution
     public string Objective { get; set; } = string.Empty;
 
     public string Run { get; set; } = string.Empty;
+
+    public string OriginalCommand { get; set; } = string.Empty;
+
+    public string ResolvedFileName { get; set; } = string.Empty;
+
+    public string ResolvedArguments { get; set; } = string.Empty;
+
+    public OperatingSystemKind OperatingSystem { get; set; }
+
+    public ShellKind Shell { get; set; }
+
+    public IReadOnlyList<string> ResolutionReasons { get; set; } = [];
+
+    public string WorkingDirectory { get; set; } = string.Empty;
+
+    public string? TargetPath { get; set; }
+
+    public IReadOnlyList<PlannedPatchFile>? PlannedFiles { get; set; }
+
+    public string? ContentHash { get; set; }
+
+    public string ClassificationSource { get; set; } = string.Empty;
+
+    public double ClassificationConfidence { get; set; }
+
+    public CommandSafetyDecisionType? SafetyDecision { get; set; }
+
+    public bool ApprovedByUser { get; set; }
+
+    public bool AutoApproved { get; set; }
+
+    public bool Sandboxed { get; set; }
 
     public bool Required { get; set; } = true;
 
@@ -46,6 +105,14 @@ public class CommandExecution
     public bool Executed { get; set; }
 
     public bool Skipped { get; set; }
+
+    public string StandardOutput { get; set; } = string.Empty;
+
+    public string StandardError { get; set; } = string.Empty;
+
+    public int? ExitCode { get; set; }
+
+    public DateTimeOffset? ExecutedAt { get; set; }
 
     public string? Output { get; set; }
 
@@ -64,7 +131,11 @@ public enum ActionExecutionStatus
     Completed,
     Failed,
     Unsafe,
-    Cancelled
+    AwaitingApproval,
+    Cancelled,
+    Observing,
+    Correcting,
+    Blocked
 }
 
 public enum ActionExecutionEventKind
@@ -73,11 +144,17 @@ public enum ActionExecutionEventKind
     ActionStarted,
     ActionCompleted,
     Observation,
+    ErrorReflection,
+    PlanRevised,
+    DeduplicationBlocked,
     RetryScheduled,
+    ApprovalGranted,
     Completed,
     Failed,
     Unsafe,
-    Cancelled
+    ApprovalRequired,
+    Cancelled,
+    StreamOutput
 }
 
 public class ActionExecutionEvent
@@ -103,6 +180,8 @@ public class ActionExecutionEvent
     public string? ToolResponse { get; set; }
 
     public string? Error { get; set; }
+
+    public bool IsError { get; set; }
 }
 
 public class ActionValidationResult

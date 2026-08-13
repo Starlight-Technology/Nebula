@@ -14,6 +14,10 @@ internal static class CommandPromptFactory
             - Each command must be a step to be executed on terminal only.
             - Use the conversation context to resolve references to previous messages.
             - Mark Required as true unless a step is optional and later steps do not depend on it.
+            - Observe the real result of each command before choosing the next one.
+            - Never repeat a failed command unless the environment changed or the retry is explicitly justified.
+            - After a failure, diagnose the cause and revise the plan with a different action.
+            - Stop and request human intervention after the same error occurs 3 times.
             - Respond ONLY in valid JSON.
             - Do NOT add explanations, comments or extra text.
 

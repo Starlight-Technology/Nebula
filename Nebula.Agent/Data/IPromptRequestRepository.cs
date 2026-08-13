@@ -2,7 +2,7 @@ namespace Nebula.Agent.Data;
 
 /// <summary>
 /// Repository interface for persisting and querying PromptRequests in MongoDB.
-/// Handles audit trail of user prompts and system classifications.
+/// Handles the audit trail of user prompts and UI-selected interaction modes.
 /// </summary>
 public interface IPromptRequestRepository
 {
@@ -27,7 +27,7 @@ public interface IPromptRequestRepository
     Task<IEnumerable<PromptRequest>> GetAllAsync(int skip = 0, int take = 100, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Retrieves requests by classification type.
+    /// Retrieves requests by the persisted interaction mode label.
     /// </summary>
     Task<IEnumerable<PromptRequest>> GetByClassificationAsync(string classification, CancellationToken cancellationToken = default);
 }

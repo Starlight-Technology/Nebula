@@ -60,7 +60,6 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./db-init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
@@ -68,33 +67,65 @@ services:
       retries: 30
       start_period: 10s
 
-  nebula-web:
-    build:
-      context: .
-      dockerfile: Nebula.App/Nebula.App.Web/Dockerfile
-    container_name: nebula_app_web
-    depends_on:
-      ollama:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    ports:
-      - "8080:8080"
-      - "8081:8081"
-    environment:
-      ASPNETCORE_ENVIRONMENT: "Production"
-      ASPNETCORE_HTTP_PORTS: "8080"
-      LLAMA_URL: "http://ollama:11434/api/generate"
-      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
-      MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
-      MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
-      POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
+  searxng:
+    image: searxng/searxng:latest
+    container_name: nebula-searxng
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        export SEARXNG_SECRET="$${SEARXNG_SECRET:-$$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')}"
+        exec /usr/local/searxng/entrypoint.sh
+    ports:
+      - "${SEARXNG_PORT:-8080}:8080"
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+      - searxng-cache:/var/cache/searxng
+    environment:
+      SEARXNG_PORT: "8080"
+      SEARXNG_BIND_ADDRESS: "0.0.0.0"
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://localhost:8080/}
+      SEARXNG_INSTANCE_NAME: ${SEARXNG_INSTANCE_NAME:-Nebula Search}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
+      SEARXNG_LIMITER: ${SEARXNG_LIMITER:-false}
+      SEARXNG_PUBLIC_INSTANCE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # nebula-web:
+  #   build:
+  #     context: .
+  #     dockerfile: Nebula.App/Nebula.App.Web/Dockerfile
+  #   container_name: nebula_app_web
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #     mongodb:
+  #       condition: service_healthy
+  #     postgres:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8080:8080"
+  #     - "8081:8081"
+  #   environment:
+  #     ASPNETCORE_ENVIRONMENT: "Production"
+  #     ASPNETCORE_HTTP_PORTS: "8080"
+  #     LLAMA_URL: "http://ollama:11434/api/generate"
+  #     LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
+  #     MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
+  #     MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
+  #     POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
+  #     Research__SearXng__BaseUrl: "http://searxng:8080"
+  #   restart: unless-stopped
 
 volumes:
   ollama-data:
   mongodb-data:
   postgres-data:
-  nebula-web:
+  searxng-cache:
+  # nebula-web:

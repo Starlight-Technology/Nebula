@@ -1,0 +1,286 @@
+@page "/agent-runs"
+@implements IDisposable
+@using Nebula.Core.Agent
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Historico" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@($"Runs ({WorkspaceState.AgentRuns.Count})")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="CoronaColorSemantic.Neutral" />
+            </CoronaStack>
+            <h2>Execucoes do agente</h2>
+            <p>Tarefas de agente persistidas: objetivo, passos, comandos e evidencia por execucao.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToChat">
+                Conversa
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          Icon="@CoronaIcons.Clock"
+                          Disabled="@WorkspaceState.IsLoadingAgentRuns"
+                          Loading="@WorkspaceState.IsLoadingAgentRuns"
+                          OnClick="WorkspaceState.LoadAgentRunsAsync">
+                Atualizar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(WorkspaceState.AgentRunsFeedback))
+    {
+        <div class="nebula-doctor-feedback">
+            <strong>@WorkspaceState.AgentRunsFeedback</strong>
+        </div>
+    }
+
+    @if (WorkspaceState.IsLoadingAgentRuns && WorkspaceState.AgentRuns.Count == 0)
+    {
+        <CoronaCard>
+            <div class="nebula-pending-panel">
+                <div class="nebula-pending-panel__pulse"></div>
+                <div>
+                    <p class="nebula-pending-panel__title">Carregando historico...</p>
+                    <p>Lendo as execucoes persistidas no Postgres.</p>
+                </div>
+            </div>
+        </CoronaCard>
+    }
+    else if (WorkspaceState.SelectedAgentRun is not null)
+    {
+        <div class="nebula-runs-detail">
+            <CoronaStack Direction="CoronaStackDirection.Row"
+                         Wrap="CoronaStackWrap.Wrap"
+                         Spacing=".75rem"
+                         FullWidth="true">
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.ArrowLeft"
+                              OnClick="CloseDetail">
+                    Voltar a lista
+                </CoronaButton>
+
+                @if (NebulaWorkspaceState.IsResumableRun(WorkspaceState.SelectedAgentRun))
+                {
+                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Primary"
+                                  Icon="@CoronaIcons.ArrowRight"
+                                  Disabled="@WorkspaceState.IsSending"
+                                  OnClick="() => ResumeRun(WorkspaceState.SelectedAgentRun)">
+                        Retomar tarefa
+                    </CoronaButton>
+                }
+            </CoronaStack>
+
+            <CoronaCard>
+                <div class="nebula-runs-detail__header">
+                    <div>
+                        <p class="nebula-kicker">Run @WorkspaceState.SelectedAgentRun.Id.ToString()[..8]</p>
+                        <h3>@WorkspaceState.SelectedAgentRun.Prompt</h3>
+                        <p>Modelo @WorkspaceState.SelectedAgentRun.ModelName · Duracao @NebulaWorkspaceState.FormatRunDuration(WorkspaceState.SelectedAgentRun)</p>
+                    </div>
+
+                    <CoronaBadge Content="@NebulaWorkspaceState.GetAgentRunStatusLabel(WorkspaceState.SelectedAgentRun)"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@NebulaWorkspaceState.GetAgentRunStatusColor(WorkspaceState.SelectedAgentRun)" />
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(WorkspaceState.SelectedAgentRun.Response))
+                {
+                    <div class="nebula-runs-detail__response">
+                        <p class="nebula-kicker">Resposta final</p>
+                        <div class="nebula-rich-text">@WorkspaceState.SelectedAgentRun.Response</div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(WorkspaceState.SelectedAgentRun.CurrentPlan))
+                {
+                    <p class="nebula-kicker">Plano</p>
+                    <div class="nebula-mission-list">
+                        @foreach (var line in WorkspaceState.SelectedAgentRun.CurrentPlan.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            var isDone = line.Contains("completed", StringComparison.OrdinalIgnoreCase)
+                                         || line.Contains("concluido", StringComparison.OrdinalIgnoreCase);
+                            <div class="nebula-mission-item @(isDone ? "nebula-mission-item--done" : "")">
+                                <span class="nebula-mission-item__marker">@(isDone ? "✓" : "•")</span>
+                                <span>@line.Trim()</span>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (WorkspaceState.SelectedAgentRun.Artifacts.Count > 0)
+                {
+                    <p class="nebula-kicker">Artefatos (@WorkspaceState.SelectedAgentRun.Artifacts.Count)</p>
+                    <div class="nebula-runs-steps">
+                        @foreach (var artifact in WorkspaceState.SelectedAgentRun.Artifacts)
+                        {
+                            <div class="nebula-runs-step">
+                                <div class="nebula-runs-step__header">
+                                    <div>
+                                        <strong>@artifact.Name</strong>
+                                        <span>@artifact.Path</span>
+                                    </div>
+                                    <CoronaBadge Content="@(artifact.ContentHash?[..Math.Min(12, artifact.ContentHash.Length)])"
+                                                 Variant="CoronaBadgeVariant.Outlined"
+                                                 Color="CoronaColorSemantic.Neutral" />
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (WorkspaceState.SelectedAgentRun.Approvals.Count > 0)
+                {
+                    <p class="nebula-kicker">Aprovacoes (@WorkspaceState.SelectedAgentRun.Approvals.Count)</p>
+                    <div class="nebula-runs-steps">
+                        @foreach (var approval in WorkspaceState.SelectedAgentRun.Approvals)
+                        {
+                            <div class="nebula-runs-step">
+                                <div class="nebula-runs-step__header">
+                                    <div>
+                                        <strong>@approval.Objective</strong>
+                                        <span>@approval.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>
+                                    </div>
+                                    <CoronaBadge Content="@(approval.AutoApproved ? "Automatica" : "Manual")"
+                                                 Variant="CoronaBadgeVariant.Soft"
+                                                 Color="@(approval.AutoApproved ? CoronaColorSemantic.Warning : CoronaColorSemantic.Success)" />
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(approval.Command))
+                                {
+                                    <code>@approval.Command</code>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                <p class="nebula-kicker">Passos (@WorkspaceState.SelectedAgentRun.Steps.Count)</p>
+
+                @if (WorkspaceState.SelectedAgentRun.Steps.Count == 0)
+                {
+                    <p class="nebula-runs-detail__empty">Nenhum passo registrado nesta execucao.</p>
+                }
+                else
+                {
+                    <div class="nebula-runs-steps">
+                        @foreach (var step in WorkspaceState.SelectedAgentRun.Steps)
+                        {
+                            <div class="nebula-runs-step">
+                                <div class="nebula-runs-step__header">
+                                    <div>
+                                        <strong>@step.Objective</strong>
+                                        <span>Passo @step.Step, tentativa @step.Attempt · @step.OperationKind</span>
+                                    </div>
+
+                                    <CoronaBadge Content="@(step.Success ? "OK" : "Falhou")"
+                                                 Variant="CoronaBadgeVariant.Soft"
+                                                 Color="@(step.Success ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(step.Command))
+                                {
+                                    <code>@step.Command</code>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(step.StandardOutput))
+                                {
+                                    <pre>@step.StandardOutput</pre>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(step.StandardError))
+                                {
+                                    <pre class="nebula-runs-step__error">@step.StandardError</pre>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </CoronaCard>
+        </div>
+    }
+    else if (WorkspaceState.AgentRuns.Count > 0)
+    {
+        <div class="nebula-runs-list">
+            @foreach (var run in WorkspaceState.AgentRuns)
+            {
+                <div class="nebula-runs-card-clickable"
+                     role="button"
+                     @onclick="() => OpenRun(run.Id)">
+                    <CoronaCard Class="nebula-runs-card">
+                        <div class="nebula-runs-card__top">
+                            <div>
+                                <h3>@run.Prompt</h3>
+                                <p>@run.ModelName · @run.Steps.Count passo(s) · Duracao @NebulaWorkspaceState.FormatRunDuration(run)</p>
+                            </div>
+
+                            <CoronaBadge Content="@NebulaWorkspaceState.GetAgentRunStatusLabel(run)"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="@NebulaWorkspaceState.GetAgentRunStatusColor(run)" />
+                        </div>
+
+                        <div class="nebula-runs-card__footer">
+                            <span>@run.StartedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>
+                            <span>Run @run.Id.ToString()[..8]</span>
+                        </div>
+                    </CoronaCard>
+                </div>
+            }
+        </div>
+    }
+</CoronaContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WorkspaceState.LoadAgentRunsAsync();
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private async Task OpenRun(Guid runId)
+    {
+        await WorkspaceState.OpenAgentRunAsync(runId);
+    }
+
+    private async Task ResumeRun(AgentRun run)
+    {
+        await WorkspaceState.ResumeTaskAsync(run);
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void CloseDetail()
+    {
+        WorkspaceState.CloseAgentRunAsync();
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}
