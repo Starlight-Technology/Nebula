@@ -4,7 +4,6 @@
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS base
 USER root
 WORKDIR /app
-EXPOSE 8080
 EXPOSE 8081
 
 

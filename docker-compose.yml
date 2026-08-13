@@ -97,35 +97,34 @@ services:
       retries: 3
       start_period: 20s
 
-  # nebula-web:
-  #   build:
-  #     context: .
-  #     dockerfile: Nebula.App/Nebula.App.Web/Dockerfile
-  #   container_name: nebula_app_web
-  #   depends_on:
-  #     ollama:
-  #       condition: service_healthy
-  #     mongodb:
-  #       condition: service_healthy
-  #     postgres:
-  #       condition: service_healthy
-  #   ports:
-  #     - "8080:8080"
-  #     - "8081:8081"
-  #   environment:
-  #     ASPNETCORE_ENVIRONMENT: "Production"
-  #     ASPNETCORE_HTTP_PORTS: "8080"
-  #     LLAMA_URL: "http://ollama:11434/api/generate"
-  #     LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
-  #     MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
-  #     MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
-  #     POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
-  #     Research__SearXng__BaseUrl: "http://searxng:8080"
-  #   restart: unless-stopped
+  nebula-web:
+    build:
+      context: .
+      dockerfile: Nebula.App/Nebula.App.Web/Dockerfile
+    container_name: nebula_app_web
+    depends_on:
+      ollama:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_HTTP_PORTS: "8081"
+      LLAMA_URL: "http://ollama:11434/api/generate"
+      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
+      MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
+      MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
+      POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
+      Research__SearXng__BaseUrl: "http://searxng:8080"
+    restart: unless-stopped
 
 volumes:
   ollama-data:
   mongodb-data:
   postgres-data:
   searxng-cache:
-  # nebula-web:
+  nebula-web:
