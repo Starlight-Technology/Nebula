@@ -57,6 +57,22 @@ public sealed class AgentApprovedAction
 
     public IReadOnlyList<PlannedPatchFile>? PlannedFiles { get; set; }
 
+    /// <summary>
+    /// File content proposed by the agent (FileWrite/ScriptContent). Needed to
+    /// replay an approved action without the LLM.
+    /// </summary>
+    public string? Content { get; set; }
+
+    /// <summary>
+    /// Script language of the proposed content (ScriptContent).
+    /// </summary>
+    public string? Language { get; set; }
+
+    /// <summary>
+    /// Template id of the proposed scaffold (ProjectScaffold).
+    /// </summary>
+    public string? TemplateId { get; set; }
+
     public string? WorkingDirectory { get; set; }
 
     public ApprovalScope Scope { get; set; } = ApprovalScope.Once;

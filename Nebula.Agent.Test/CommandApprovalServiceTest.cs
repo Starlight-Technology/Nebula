@@ -31,14 +31,19 @@ public sealed class CommandApprovalServiceTest
             workspaceAutoApproveCategories ?? []);
 
     [Fact]
-    public void is_approval_overridable_must_cover_terminal_script_and_read()
+    public void is_approval_overridable_must_cover_operations_that_can_ask_approval()
     {
         Assert.True(service.IsApprovalOverridable(OperationKind.TerminalCommand));
         Assert.True(service.IsApprovalOverridable(OperationKind.ScriptExecution));
         Assert.True(service.IsApprovalOverridable(OperationKind.FileRead));
-        Assert.False(service.IsApprovalOverridable(OperationKind.FileWrite));
-        Assert.False(service.IsApprovalOverridable(OperationKind.PlannedPatch));
+        Assert.True(service.IsApprovalOverridable(OperationKind.FileWrite));
+        Assert.True(service.IsApprovalOverridable(OperationKind.ScriptContent));
+        Assert.True(service.IsApprovalOverridable(OperationKind.PlannedPatch));
+        Assert.True(service.IsApprovalOverridable(OperationKind.ProjectScaffold));
         Assert.False(service.IsApprovalOverridable(OperationKind.Research));
+        Assert.False(service.IsApprovalOverridable(OperationKind.Learning));
+        Assert.False(service.IsApprovalOverridable(OperationKind.Chat));
+        Assert.False(service.IsApprovalOverridable(OperationKind.Unknown));
     }
 
     [Fact]
@@ -58,11 +63,36 @@ public sealed class CommandApprovalServiceTest
     {
         var result = service.EvaluateOverride(
             AskApproval,
-            OperationKind.FileWrite,
+            OperationKind.Research,
             CreateInput(hasUserApprovedAction: true));
 
         Assert.Equal(ApprovalOverrideSource.None, result.Source);
         Assert.False(result.CanProceed);
+    }
+
+    [Fact]
+    public void evaluate_override_must_apply_auto_approval_to_file_writes()
+    {
+        var result = service.EvaluateOverride(
+            AskApproval,
+            OperationKind.FileWrite,
+            CreateInput(autoApproveEnabled: true));
+
+        Assert.Equal(ApprovalOverrideSource.Auto, result.Source);
+        Assert.True(result.CanProceed);
+    }
+
+    [Fact]
+    public void evaluate_override_must_apply_manual_approval_to_planned_patch()
+    {
+        var result = service.EvaluateOverride(
+            AskApproval,
+            OperationKind.PlannedPatch,
+            CreateInput(hasUserApprovedAction: true));
+
+        Assert.Equal(ApprovalOverrideSource.Manual, result.Source);
+        Assert.True(result.CanProceed);
+        Assert.Contains("manual", result.Note, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

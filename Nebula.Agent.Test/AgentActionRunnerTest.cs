@@ -1657,6 +1657,94 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_auto_approve_non_allowlisted_write_when_auto_approval_enabled()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "index.html");
+        const string content = "<!doctype html><title>Olá</title>";
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the web page.",
+                "Create index.html",
+                OperationKind.FileWrite,
+                content: content,
+                targetPath: targetPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The web page was created.",
+                "Created index.html.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock: CreateExecutorMock(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutoApproveCommands = true
+            });
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create an index.html in the workspace."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(targetPath));
+        Assert.Equal(content, await File.ReadAllTextAsync(targetPath));
+        Assert.Single(result.Commands);
+        Assert.True(result.Commands[0].Executed);
+        Assert.True(result.Commands[0].AutoApproved);
+        Assert.False(result.Commands[0].ApprovedByUser);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, result.Commands[0].SafetyDecision);
+    }
+
+    [Fact]
+    public async Task run_async_must_execute_explicitly_approved_write_replaying_original_content()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "index.html");
+        const string content = "<!doctype html><title>Aprovado</title>";
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupAffirmativeVerification(llamaClientMock);
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock: CreateExecutorMock());
+
+        var request = CreateRequest("Aprovar e executar: gravar index.html");
+        request.MaxSteps = 1;
+        request.MaxRetriesPerStep = 0;
+        request.ApprovedAction = new AgentApprovedAction
+        {
+            Objective = "Create index.html",
+            Command = $"write-file \"{targetPath}\"",
+            OperationKind = OperationKind.FileWrite,
+            TargetPath = targetPath,
+            Content = content,
+            WorkingDirectory = workspace.Path
+        };
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(targetPath));
+        Assert.Equal(content, await File.ReadAllTextAsync(targetPath));
+        Assert.Single(result.Commands);
+        Assert.True(result.Commands[0].Executed);
+        Assert.True(result.Commands[0].ApprovedByUser);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, result.Commands[0].SafetyDecision);
+        llamaClientMock.Verify(
+            client => client.GetStructuredResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task run_async_must_allow_planned_patch_with_non_allowlisted_files_in_workspace_when_sandbox_enabled()
     {
         using var workspace = new TempTestWorkspace();

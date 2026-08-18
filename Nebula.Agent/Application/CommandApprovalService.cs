@@ -9,7 +9,11 @@ public sealed class CommandApprovalService : ICommandApprovalService
         operationKind is
             OperationKind.TerminalCommand or
             OperationKind.ScriptExecution or
-            OperationKind.FileRead;
+            OperationKind.FileRead or
+            OperationKind.FileWrite or
+            OperationKind.ScriptContent or
+            OperationKind.PlannedPatch or
+            OperationKind.ProjectScaffold;
 
     public ApprovalOverrideResult EvaluateOverride(
         CommandSafetyDecision decision,

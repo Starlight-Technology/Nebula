@@ -1376,8 +1376,14 @@ var turn = new ConversationEntryViewModel
                !command.Executed &&
                !command.ApprovedByUser &&
                !command.AutoApproved &&
-               command.OperationKind is (OperationKind.TerminalCommand or
-                   OperationKind.ScriptExecution) &&
+               command.OperationKind is (
+                   OperationKind.TerminalCommand or
+                   OperationKind.ScriptExecution or
+                   OperationKind.FileRead or
+                   OperationKind.FileWrite or
+                   OperationKind.ScriptContent or
+                   OperationKind.PlannedPatch or
+                   OperationKind.ProjectScaffold) &&
                !string.IsNullOrWhiteSpace(command.Run);
     }
 

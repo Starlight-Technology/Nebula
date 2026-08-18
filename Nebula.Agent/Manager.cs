@@ -228,6 +228,9 @@ public class Manager : IManager
                     OperationKind = command.OperationKind,
                     TargetPath = command.TargetPath,
                     PlannedFiles = command.PlannedFiles,
+                    Content = command.Content,
+                    Language = command.Language,
+                    TemplateId = command.TemplateId,
                     WorkingDirectory = command.WorkingDirectory,
                     Scope = scope
                 }

@@ -421,6 +421,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
             OperationKind = approved.OperationKind,
             TargetPath = approved.TargetPath,
             PlannedFiles = approved.PlannedFiles,
+            Content = approved.Content,
+            Language = approved.Language,
+            TemplateId = approved.TemplateId,
             WorkingDirectory = approved.WorkingDirectory,
             RequiresSafetyReview = true
         };
@@ -835,6 +838,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             session.RecordObservation(execution.Run, execution.Notes);
             return ActionAttemptResult.Retry(execution.Notes);
         }
+
+        execution.TemplateId = template.Id;
 
         var classification = scaffoldClassifier.Classify(targetDirectory);
         var decision = await operationPolicyEngine.EvaluateAsync(
@@ -1599,6 +1604,8 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         execution.TargetPath = targetPath;
         execution.Run = $"write-file \"{targetPath}\"";
         execution.OriginalCommand = action.Command;
+        execution.Content = content;
+        execution.Language = action.Language;
 
         var classification = operationKind == OperationKind.ScriptContent
             ? scriptContentClassifier.Classify(

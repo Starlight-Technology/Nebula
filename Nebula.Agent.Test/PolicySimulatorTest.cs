@@ -5,6 +5,9 @@ using Nebula.Core.Commands;
 using Nebula.Core.Memory;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
+using Nebula.Runner;
+using Nebula.Services.Commands;
+using Nebula.Services.Operations;
 
 namespace Nebula.Agent.Test;
 
