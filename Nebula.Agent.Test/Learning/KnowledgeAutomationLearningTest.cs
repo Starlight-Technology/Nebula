@@ -215,6 +215,89 @@ public sealed class KnowledgeAutomationLearningTest
         Assert.Empty(details);
     }
 
+    [Fact]
+    public async Task AnswerForAutomationAsync_excludes_stale_item()
+    {
+        var store = new InMemoryKnowledgeStore();
+        var item = CreateItem(
+            title: "dotnet build",
+            finalScore: 0.95,
+            isDangerous: false,
+            riskLevel: KnowledgeRiskLevel.Safe);
+        item.LastSeenAt = DateTimeOffset.UtcNow.AddDays(-400);
+        await store.SaveAsync(
+            item,
+            [],
+            [],
+            new KnowledgeExperiment { KnowledgeItemId = item.Id });
+
+        var queryService = new KnowledgeQueryService(
+            store,
+            new Mock<ILogger>().Object,
+            automationPolicy: new KnowledgeAutomationPolicy());
+
+        var answer = await queryService.AnswerForAutomationAsync("dotnet build", CancellationToken.None);
+
+        Assert.Contains("conhecimento armazenado", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("desatualizados", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnswerForAutomationAsync_keeps_fresh_item_with_custom_threshold()
+    {
+        var store = new InMemoryKnowledgeStore();
+        var item = CreateItem(
+            title: "dotnet test",
+            finalScore: 0.90,
+            isDangerous: false,
+            riskLevel: KnowledgeRiskLevel.Safe);
+        item.LastSeenAt = DateTimeOffset.UtcNow.AddDays(-200);
+        await store.SaveAsync(
+            item,
+            [],
+            [],
+            new KnowledgeExperiment { KnowledgeItemId = item.Id });
+
+        var queryService = new KnowledgeQueryService(
+            store,
+            new Mock<ILogger>().Object,
+            automationPolicy: new KnowledgeAutomationPolicy(),
+            stalenessThreshold: TimeSpan.FromDays(365));
+
+        var answer = await queryService.AnswerForAutomationAsync("dotnet test", CancellationToken.None);
+
+        Assert.Contains("dotnet test", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Nao ha conhecimento", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnswerAsync_flags_stale_item_without_excluding_it()
+    {
+        var store = new InMemoryKnowledgeStore();
+        var item = CreateItem(
+            title: "robocopy",
+            finalScore: 0.90,
+            isDangerous: false,
+            riskLevel: KnowledgeRiskLevel.Safe);
+        item.Content = "robocopy C:/src C:/dst /MIR";
+        item.LastSeenAt = DateTimeOffset.UtcNow.AddDays(-200);
+        await store.SaveAsync(
+            item,
+            [],
+            [],
+            new KnowledgeExperiment { KnowledgeItemId = item.Id });
+
+        var queryService = new KnowledgeQueryService(
+            store,
+            new Mock<ILogger>().Object);
+
+        var answer = await queryService.AnswerAsync("robocopy", CancellationToken.None);
+
+        Assert.Contains("robocopy", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("desatualizado", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Nao ha conhecimento", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ConversationContextService CreateContextService(IKnowledgeStore store)
     {
         var builder = new NebulaContextBuilder();

@@ -44,6 +44,18 @@ public class ConversationTurn
 
     public List<AgentApprovalRecord> Approvals { get; set; } = [];
 
+    /// <summary>
+    /// Architecture options compared before a large change, when the agent
+    /// provided an <c>architectureComparison</c>.
+    /// </summary>
+    public List<ArchitectureOption> ArchitectureOptions { get; set; } = [];
+
+    /// <summary>
+    /// True when this turn was produced in dry-run (preview) mode without
+    /// executing or writing anything.
+    /// </summary>
+    public bool IsDryRun { get; set; }
+
     public bool IsCancelled { get; set; }
 }
 
@@ -110,6 +122,16 @@ public class CommandExecution
 
     public bool Sandboxed { get; set; }
 
+    /// <summary>
+    /// True when this entry is a dry-run preview: nothing was executed or written.
+    /// </summary>
+    public bool IsDryRun { get; set; }
+
+    /// <summary>
+    /// Intent attributed by the safety classifier that produced <see cref="SafetyDecision"/>.
+    /// </summary>
+    public CommandIntent? Intent { get; set; }
+
     public bool Required { get; set; } = true;
 
     public bool IsCorrect { get; set; }
@@ -170,7 +192,8 @@ public enum ActionExecutionEventKind
     Unsafe,
     ApprovalRequired,
     Cancelled,
-    StreamOutput
+    StreamOutput,
+    ArchitectureComparison
 }
 
 public class ActionExecutionEvent

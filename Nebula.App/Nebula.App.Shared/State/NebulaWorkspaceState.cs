@@ -3,6 +3,7 @@ using Corona.Components.Enums;
 using Microsoft.JSInterop;
 
 using Nebula.Agent;
+using Nebula.Agent.Application;
 using Nebula.Agent.Data;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Agent;
@@ -31,7 +32,8 @@ public sealed class NebulaWorkspaceState(
     ICommandRepository? commandRepository = null,
     ICommandAllowlistService? commandAllowlistService = null,
     IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
-    IPolicySimulator? policySimulator = null) : IDisposable, IAsyncDisposable
+    IPolicySimulator? policySimulator = null,
+    IUserMemoryService? userMemoryService = null) : IDisposable, IAsyncDisposable
 {
     private const string QuickSettingsStorageKey = "nebula.quick-settings.v1";
 
@@ -201,6 +203,16 @@ public sealed class NebulaWorkspaceState(
 
     public string? WorkspaceCategoriesFeedback { get; private set; }
 
+    public string UserLanguagePreference { get; set; } = "pt-BR";
+
+    public string UserDetailPreference { get; set; } = "normal";
+
+    public string UserAutonomyPreference { get; set; } = "normal";
+
+    public string UserStylePreference { get; set; } = "direto";
+
+    public string? UserPreferencesFeedback { get; private set; }
+
     public string PolicySimulatorText { get; set; } = string.Empty;
 
     public PolicySimulationResult? PolicySimulation { get; private set; }
@@ -263,6 +275,11 @@ public sealed class NebulaWorkspaceState(
     public async Task SendAsync()
     {
         await SubmitPromptAsync(ComposerText);
+    }
+
+    public async Task SendDryRunAsync()
+    {
+        await SubmitDryRunAsync(ComposerText);
     }
 
     public async Task SendStarterAsync(string prompt)
@@ -474,6 +491,46 @@ var turn = new ConversationEntryViewModel
         activeTurnCancellationSource = turnCancellationSource;
 
         _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource);
+    }
+
+    /// <summary>
+    /// Submits the prompt in dry-run (preview) mode: the agent plans and the
+    /// system previews the safety decisions for each proposed action, without
+    /// executing commands or writing files.
+    /// </summary>
+    public async Task SubmitDryRunAsync(string prompt)
+    {
+        if (IsSending)
+        {
+            return;
+        }
+
+        var normalizedPrompt = prompt.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedPrompt))
+        {
+            return;
+        }
+
+        var turn = new ConversationEntryViewModel
+        {
+            Prompt = normalizedPrompt,
+            Mode = SelectedInteractionMode,
+            RequestedModel = ActiveModelName,
+            ConversationId = ActiveConversationId
+        };
+
+        turns.Add(turn);
+        ComposerText = string.Empty;
+        IsSending = true;
+        NotifyChanged();
+
+        activeTurnCancellationSource?.Cancel();
+        activeTurnCancellationSource?.Dispose();
+
+        var turnCancellationSource = new CancellationTokenSource();
+        activeTurnCancellationSource = turnCancellationSource;
+
+        _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource, isDryRun: true);
     }
 
     public Task ApproveCommandAsync(CommandExecution command)
@@ -708,6 +765,54 @@ var turn = new ConversationEntryViewModel
         AllowlistFeedback =
             $"Comando adicionado a allowlist deste workspace: {command}";
         await LoadAllowlistAsync();
+    }
+
+    public async Task SaveUserPreferencesAsync()
+    {
+        if (userMemoryService is null)
+        {
+            UserPreferencesFeedback = "Memoria do usuario nao esta disponivel.";
+            NotifyChanged();
+            return;
+        }
+
+        UserPreferencesFeedback = null;
+        NotifyChanged();
+
+        try
+        {
+            var userId = userMemoryService.DefaultUserId;
+            await userMemoryService.SetPreferenceAsync(
+                userId,
+                UserMemoryKind.Language,
+                UserMemoryKind.Language.ToString(),
+                UserLanguagePreference);
+            await userMemoryService.SetPreferenceAsync(
+                userId,
+                UserMemoryKind.DetailLevel,
+                UserMemoryKind.DetailLevel.ToString(),
+                UserDetailPreference);
+            await userMemoryService.SetPreferenceAsync(
+                userId,
+                UserMemoryKind.AutonomyTolerance,
+                UserMemoryKind.AutonomyTolerance.ToString(),
+                UserAutonomyPreference);
+            await userMemoryService.SetPreferenceAsync(
+                userId,
+                UserMemoryKind.Style,
+                UserMemoryKind.Style.ToString(),
+                UserStylePreference);
+            UserPreferencesFeedback =
+                "Preferencias salvas; o agente e o chat vao se ajustar a elas nas proximas respostas.";
+        }
+        catch (Exception ex)
+        {
+            UserPreferencesFeedback = $"Nao consegui salvar as preferencias: {ex.Message}";
+        }
+        finally
+        {
+            NotifyChanged();
+        }
     }
 
     public async Task LoadWorkspaceCategoriesAsync()
@@ -1509,7 +1614,8 @@ var turn = new ConversationEntryViewModel
     private async Task CompleteTurnAsync(
         ConversationEntryViewModel turn,
         string normalizedPrompt,
-        CancellationTokenSource turnCancellationSource)
+        CancellationTokenSource turnCancellationSource,
+        bool isDryRun = false)
     {
         try
         {
@@ -1533,7 +1639,8 @@ var turn = new ConversationEntryViewModel
                 new UserMessage(
                     normalizedPrompt,
                     turn.Mode,
-                    WorkspaceRoot: QuickSettings.WorkspaceRoot),
+                    WorkspaceRoot: QuickSettings.WorkspaceRoot,
+                    IsDryRun: isDryRun),
                 progress,
                 turnCancellationSource.Token);
             turn.StreamingClassification = null;

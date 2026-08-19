@@ -82,6 +82,66 @@ public sealed class WorkspaceMemoryServiceTest
         Assert.Equal(string.Empty, summary);
     }
 
+    [Fact]
+    public async Task record_working_strategy_must_store_strategy_entry()
+    {
+        var store = new InMemoryWorkspaceMemoryStore();
+        var service = CreateService(store);
+
+        await service.RecordWorkingStrategyAsync(
+            "ws1",
+            "DotNet",
+            "error CS0103",
+            "dotnet build -c Release");
+
+        var entries = await store.GetRecentAsync("ws1");
+        var strategy = Assert.Single(entries, entry => entry.Kind == WorkspaceMemoryKind.Strategy);
+        Assert.Equal("dotnet|error cs0103", strategy.Key);
+        Assert.Equal("dotnet build -c Release", strategy.Value);
+    }
+
+    [Fact]
+    public async Task record_working_strategy_must_deduplicate()
+    {
+        var store = new InMemoryWorkspaceMemoryStore();
+        var service = CreateService(store);
+
+        await service.RecordWorkingStrategyAsync("ws1", "DotNet", "build error", "dotnet build");
+        await service.RecordWorkingStrategyAsync("ws1", "DotNet", "build error", "dotnet build");
+
+        var entries = await store.GetRecentAsync("ws1");
+        var strategies = entries.Where(entry => entry.Kind == WorkspaceMemoryKind.Strategy).ToList();
+        Assert.Single(strategies);
+    }
+
+    [Fact]
+    public async Task build_strategies_summary_must_include_known_strategies()
+    {
+        var store = new InMemoryWorkspaceMemoryStore();
+        var service = CreateService(store);
+        await service.RecordWorkingStrategyAsync(
+            "ws1",
+            "DotNet",
+            "XML parse failure",
+            "dotnet restore --force-evaluate");
+
+        var summary = await service.BuildStrategiesSummaryAsync("ws1", "DotNet");
+
+        Assert.Contains("DotNet", summary);
+        Assert.Contains("dotnet restore --force-evaluate", summary);
+    }
+
+    [Fact]
+    public async Task build_strategies_summary_must_be_empty_for_unknown_workspace()
+    {
+        var store = new InMemoryWorkspaceMemoryStore();
+        var service = CreateService(store);
+
+        var summary = await service.BuildStrategiesSummaryAsync("unknown-ws", "DotNet");
+
+        Assert.Equal(string.Empty, summary);
+    }
+
     private static WorkspaceMemoryService CreateService(
         IWorkspaceMemoryStore store) =>
         new(store, new Mock<ILogger>().Object);

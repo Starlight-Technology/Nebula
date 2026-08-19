@@ -35,6 +35,12 @@ public sealed class AgentActionRunRequest
     public AgentApprovedAction? ApprovedAction { get; set; }
 
     /// <summary>
+    /// Dry-run mode: the agent plans and previews the commands it would run
+    /// (with real safety decisions) but nothing is executed or written.
+    /// </summary>
+    public bool DryRun { get; set; }
+
+    /// <summary>
     /// Normalized commands already approved for this conversation. The runner
     /// skips approval for identical commands while processing this request.
     /// </summary>

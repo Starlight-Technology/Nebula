@@ -54,6 +54,10 @@ internal sealed class AgentActionSession
 
     public AgentActionRunRequest Request { get; }
 
+    public bool IsDryRun => Request.DryRun;
+
+    public List<ArchitectureOption> ArchitectureOptions { get; } = [];
+
     /// <summary>
     /// The reference workspace this run operates on. Always resolved to an
     /// existing folder (created when missing), defaulting to a fresh empty
@@ -129,7 +133,8 @@ internal sealed class AgentActionSession
             ExecutionHistory = ExecutionHistory.Entries.ToList(),
             StepNumber = StepNumber,
             RetryNumber = RetryNumber,
-            WorkspaceRoot = WorkspaceRoot.Root
+            WorkspaceRoot = WorkspaceRoot.Root,
+            DryRun = IsDryRun
         };
     }
 
@@ -352,6 +357,31 @@ public void EmitApprovalGranted(CommandExecution execution)
         ExecutionHistory.Add(entry);
     }
 
+    public void ApplyArchitectureComparison(
+        IReadOnlyList<ArchitectureOption>? options)
+    {
+        if (options is null || options.Count == 0)
+        {
+            return;
+        }
+
+        ArchitectureOptions.Clear();
+        ArchitectureOptions.AddRange(options);
+
+        var recommendation = options
+            .Select(option => $"{option.Name} (risco {option.Risk}): {option.Recommendation}")
+            .FirstOrDefault(option => !string.IsNullOrWhiteSpace(option));
+
+        var summary = recommendation is not null
+            ? recommendation
+            : $"{options.Count} opcoes ou caminhos de arquitetura comparados.";
+        Emit(
+            ActionExecutionEventKind.ArchitectureComparison,
+            ActionExecutionStatus.Planning,
+            "Architecture comparison",
+            summary);
+    }
+
     public void RecordDeduplicationBlocked(
         CommandExecution execution,
         string reason)
@@ -444,7 +474,9 @@ public void EmitApprovalGranted(CommandExecution execution)
                     Id = incoming.Id,
                     Description = incoming.Description,
                     DependsOn = incoming.DependsOn,
-                    Status = incoming.Status
+                    Status = incoming.Status,
+                    Risk = NormalizeRisk(incoming.Risk),
+                    IsCheckpoint = incoming.IsCheckpoint
                 });
                 continue;
             }
@@ -461,7 +493,21 @@ public void EmitApprovalGranted(CommandExecution execution)
 
             existing.DependsOn = incoming.DependsOn;
             existing.Status = incoming.Status;
+            if (!string.IsNullOrWhiteSpace(incoming.Risk))
+            {
+                existing.Risk = NormalizeRisk(incoming.Risk);
+            }
+
+            existing.IsCheckpoint = incoming.IsCheckpoint;
         }
+    }
+
+    private static string NormalizeRisk(string? risk)
+    {
+        var normalized = risk?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized is "low" or "medium" or "high" or "critical"
+            ? normalized
+            : "low";
     }
 
     private void MarkPlanStepCompleted(string objective)
@@ -559,6 +605,44 @@ public void EmitApprovalGranted(CommandExecution execution)
             ActionExecutionStatus.Completed,
             "Completed",
             response);
+    }
+
+    public ConversationTurn CompleteDryRun(string? completionMessage)
+    {
+        var response = string.IsNullOrWhiteSpace(completionMessage)
+            ? BuildDryRunSummary()
+            : completionMessage.Trim();
+        var turn = Finish(
+            ActionExecutionEventKind.Completed,
+            ActionExecutionStatus.Completed,
+            "Dry run preview",
+            response);
+        turn.IsDryRun = true;
+        return turn;
+    }
+
+    private string BuildDryRunSummary()
+    {
+        if (Commands.Count == 0)
+        {
+            return "Dry run concluido: nenhuma acao foi planejada para esta tarefa.";
+        }
+
+        var lines = Commands
+            .Select(command =>
+                $"- {command.Run} -> {command.SafetyDecision} " +
+                $"(intent: {command.Intent}; motivo: {SummarizeNotes(command)})");
+        return
+            $"Dry run concluido: {Commands.Count} acao(oes) seriam executadas, " +
+            "mas nada foi executado nem escrito. Previsao:" + Environment.NewLine +
+            string.Join(Environment.NewLine, lines);
+    }
+
+    private static string SummarizeNotes(CommandExecution command)
+    {
+        var notes = command.Notes ?? string.Empty;
+        var firstReason = notes.Split('|').FirstOrDefault()?.Trim();
+        return string.IsNullOrWhiteSpace(firstReason) ? "sem motivo adicional" : firstReason;
     }
 
     public ConversationTurn FailStepLimit()
@@ -716,6 +800,7 @@ public void EmitApprovalGranted(CommandExecution execution)
             CurrentPlan = SecretRedaction.Apply(BuildCurrentPlan()) ?? string.Empty,
             Artifacts = BuildArtifactRecords(),
             Approvals = BuildApprovalRecords(),
+            ArchitectureOptions = ArchitectureOptions.ToList(),
             FinalReport = BuildFinalReport(status),
             IsCancelled = isCancelled
         };
@@ -770,6 +855,23 @@ public void EmitApprovalGranted(CommandExecution execution)
         var report = new StringBuilder();
         report.AppendLine("# Relatorio final");
         report.AppendLine();
+
+        if (ArchitectureOptions.Count > 0)
+        {
+            report.AppendLine("## Comparacao de arquitetura");
+            foreach (var option in ArchitectureOptions)
+            {
+                report.AppendLine($"- **{option.Name}** (risco {option.Risk})");
+                report.AppendLine($"  - Pros: {option.Pros}");
+                report.AppendLine($"  - Contras: {option.Cons}");
+                if (!string.IsNullOrWhiteSpace(option.Recommendation))
+                {
+                    report.AppendLine($"  - Recomendacao: {option.Recommendation}");
+                }
+            }
+
+            report.AppendLine();
+        }
 
         var changedFiles = Evidence
             .Where(value => value.Success &&
@@ -868,12 +970,18 @@ public void EmitApprovalGranted(CommandExecution execution)
             WorkingDirectory = execution.WorkingDirectory,
             TargetPath = execution.TargetPath,
             PlannedFiles = execution.PlannedFiles,
+            Content = execution.Content,
+            Language = execution.Language,
+            TemplateId = execution.TemplateId,
             ContentHash = execution.ContentHash,
             ClassificationSource = execution.ClassificationSource,
             ClassificationConfidence = execution.ClassificationConfidence,
             SafetyDecision = execution.SafetyDecision,
+            Intent = execution.Intent,
             ApprovedByUser = execution.ApprovedByUser,
             AutoApproved = execution.AutoApproved,
+            Sandboxed = execution.Sandboxed,
+            IsDryRun = execution.IsDryRun,
             Required = execution.Required,
             IsCorrect = execution.IsCorrect,
             IsSafe = execution.IsSafe,
@@ -886,8 +994,7 @@ public void EmitApprovalGranted(CommandExecution execution)
             ExecutedAt = execution.ExecutedAt,
             Output = SecretRedaction.Apply(execution.Output),
             Notes = SecretRedaction.Apply(execution.Notes),
-            Error = SecretRedaction.Apply(execution.Error),
-            Sandboxed = execution.Sandboxed
+            Error = SecretRedaction.Apply(execution.Error)
         };
     }
 
@@ -968,7 +1075,10 @@ public void EmitApprovalGranted(CommandExecution execution)
                     var deps = step.DependsOn.Count == 0
                         ? string.Empty
                         : $" (depends on {string.Join(",", step.DependsOn)})";
-                    return $"#{step.Id} [{step.Status}]{deps} {step.Description}";
+                    var checkpoint = step.IsCheckpoint
+                        ? " [checkpoint]"
+                        : string.Empty;
+                    return $"#{step.Id} [{step.Status}]{checkpoint} [risk={step.Risk}]{deps} {step.Description}";
                 });
             return string.Join(Environment.NewLine, planLines);
         }

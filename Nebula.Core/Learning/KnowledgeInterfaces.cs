@@ -196,3 +196,50 @@ public interface IKnowledgeQueryService
         CancellationToken cancellationToken = default)
         => AnswerAsync(topic, cancellationToken);
 }
+
+public sealed record KnowledgeSearchHit(
+    KnowledgeItem Item,
+    double Score,
+    string Snippet);
+
+public sealed record ProjectFileSearchHit(
+    string Path,
+    double Score,
+    string Snippet);
+
+/// <summary>
+/// Deterministic local search over stored knowledge and workspace files.
+/// Ranks candidates by query-token overlap over title/summary/content/tags.
+/// </summary>
+public interface IKnowledgeSearchService
+{
+    Task<IReadOnlyList<KnowledgeSearchHit>> SearchKnowledgeAsync(
+        string query,
+        int maxResults = 5,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ProjectFileSearchHit>> SearchProjectAsync(
+        string workspaceRoot,
+        string query,
+        int maxResults = 5,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IProjectDocumentationIndexer
+{
+    /// <summary>
+    /// Scans the workspace for project documentation (README, docs folder,
+    /// markdown files) and persists deterministic knowledge items derived from it.
+    /// Idempotent: files already indexed by content hash are skipped.
+    /// </summary>
+    Task<ProjectDocumentationIndexResult> IndexAsync(
+        string workspaceRoot,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record ProjectDocumentationIndexResult(
+    bool Success,
+    string Message,
+    int FilesScanned,
+    int CreatedCount,
+    int SkippedCount);

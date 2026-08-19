@@ -57,24 +57,24 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 ## Fase 5 - Planejamento autonomo avancado
 
 - [x] Substituir planos livres por um schema estruturado de plano com etapas, dependencias, criterios de sucesso e riscos (`AgentActionDecision.Plan` + `AgentPlanStep` com `id`/`description`/`dependsOn`/`status`, schema `plan` no JSON de decisao e render `#id [status] (depends on x)` na UI).
-- [ ] Permitir que o agente decomponha tarefas grandes em subtarefas com checkpoints.
-- [ ] Adicionar estimativa de risco por etapa: baixo, medio, alto e critico.
+- [x] Permitir que o agente decomponha tarefas grandes em subtarefas com checkpoints (`AgentPlanStep.IsCheckpoint` + `[checkpoint]` no render do plano, marcadores na UI e prompt orientando checkpoints pos scaffold/build/test/verificacao).
+- [x] Adicionar estimativa de risco por etapa: baixo, medio, alto e critico (`AgentPlanStep.Risk` + `[risk=X]` no render do plano e destaque visual de etapas high/critical na UI).
 - [x] Implementar replanejamento quando uma observacao contradiz o plano.
-- [ ] Criar memoria de estrategias que funcionaram por stack e tipo de erro.
-- [ ] Adicionar comparacao entre opcoes de arquitetura antes de implementar mudancas grandes.
-- [ ] Criar capacidade de "dry run": mostrar plano e comandos previstos sem executar.
+- [x] Criar memoria de estrategias que funcionaram por stack e tipo de erro (`WorkspaceMemoryKind.Strategy` com chave `{stack}|{erro}`, `WorkspaceMemoryService.RecordWorkingStrategyAsync` grava o comando que resolveu apos falha anterior, resumo de estrategias no decision prompt via `BuildStrategiesSummaryAsync`).
+- [x] Adicionar comparacao entre opcoes de arquitetura antes de implementar mudancas grandes (`architectureComparison` no JSON de decisao com `ArchitectureOption` name/pros/cons/recommendation/risk, aplicado na sessao como evento + bloco no relatorio final e card de comparacao na UI).
+- [x] Criar capacidade de "dry run": mostrar plano e comandos previstos sem executar (`UserMessage.IsDryRun` -> `AgentActionRunRequest.DryRun` -> preview no `AgentActionRunner` com decisoes reais de seguranca por acao, turno marcado com `IsDryRun` e botao "Prever" na UI; nada e executado nem escrito).
 - [x] Implementar politicas de parada para loops repetitivos, erros identicos e baixa confianca.
 
 ## Fase 6 - Memoria, aprendizado e conhecimento
 
-- [ ] Indexar documentacao do projeto, README, comentarios publicos e exemplos internos.
+- [x] Indexar documentacao do projeto, README, comentarios publicos e exemplos internos (`ProjectDocumentationIndexer` indexa README/docs .md em itens determinísticos Concept/CodeSnippet/Command idempotentes por hash; inicializado no inicio de cada run do agente e tambem sob demanda).
 - [x] Criar memoria por workspace: comandos que funcionam, portas usadas, setup, stack, padroes e convencoes (`WorkspaceMemoryService` + `IWorkspaceMemoryStore` com `WorkspaceMemoryKind` WorkingCommand/UsedPort/Script/Note, `PostgresWorkspaceMemoryStore` com upsert por `{workspace, kind, key}` e resumo no decision prompt).
-- [ ] Criar memoria por usuario: preferencias de estilo, idioma, nivel de detalhe e tolerancia a autonomia.
+- [x] Criar memoria por usuario: preferencias de estilo, idioma, nivel de detalhe e tolerancia a autonomia (`UserMemoryKind` Language/Style/DetailLevel/AutonomyTolerance, `IUserMemoryStore` + `PostgresUserMemoryStore` na tabela `user_memory` com unique `{userId, kind, key}`, `UserMemoryService` em `Nebula.Agent/Application/UserMemoryService.cs`; preferencias injetadas no prompt: secao `[user_preferences]` no Chat via `ConversationContextService` e bloco no decision prompt do agente via `BuildUserPreferencesAsync`; `NebulaRuntimeSettings.UserId` define o usuario atual; UI: secao "Preferencias do usuario" em `Settings.razor` com selects salvos via `NebulaWorkspaceState.SaveUserPreferencesAsync`).
 - [x] Adicionar avaliacao de confianca para cada item aprendido.
 - [x] Guardar evidencias de aprendizado: fonte, experimento, resultado e data.
-- [ ] Implementar esquecimento ou revalidacao de conhecimento antigo.
-- [ ] Criar busca semantica local para codigo e conhecimento.
-- [ ] Usar conhecimento aprendido para reduzir tentativas repetidas e melhorar comandos sugeridos.
+- [x] Implementar esquecimento ou revalidacao de conhecimento antigo (`KnowledgeQueryService`: itens stale por `LastSeenAt` nao sao injetados automaticamente no agente - `AnswerForAutomationAsync` filtra e avisa - e respostas no Chat ganham alerta de conhecimento desatualizado; limiar configuravel de 90 dias por padrao).
+- [x] Criar busca semantica local para codigo e conhecimento (`KnowledgeSearchService` em `Nebula.Services/Learning/KnowledgeSearchService.cs`: overlap de tokens sobre `IKnowledgeStore` melhorado por tags/fonte/relevancia + busca em arquivos do workspace com ignore de `bin/obj/node_modules/.git`, hierarquia de frequencia, snippets e limites configuraveis; usado no runner para aumentar observacoes de falha e preencher decisoes com conhecimento).
+- [x] Usar conhecimento aprendido para reduzir tentativas repetidas e melhorar comandos sugeridos (falha de comando/observacao e enriquecida com conhecimento e busca local antes de voltar para o agente - `AugmentFailureWithKnowledgeAsync` no `AgentActionRunner`, incluindo o bloco de deduplicacao - e a documentacao do projeto e indexada no inicio de cada run).
 
 ## Fase 7 - UI de agente profissional
 

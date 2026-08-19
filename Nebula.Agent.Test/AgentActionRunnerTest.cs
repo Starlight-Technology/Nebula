@@ -2144,6 +2144,114 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_dry_run_must_preview_without_executing_or_writing()
+    {
+        using var workspace = new TempTestWorkspace();
+        var scriptPath = Path.Combine(workspace.Path, "hello.py");
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to preview creating the script.",
+                "Create hello.py",
+                OperationKind.ScriptContent,
+                content: "print('hello world')",
+                targetPath: scriptPath,
+                language: "python"),
+            CompleteDecision(
+                "The previewed actions are safe.",
+                "Previsao concluida: nada foi executado.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        SetupAffirmativeVerification(llamaClientMock);
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(llamaClientMock, executorMock);
+        var request = CreateRequest("Create a Python script that prints hello world.");
+        request.DryRun = true;
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(result.IsDryRun);
+        Assert.DoesNotContain(result.Commands, command => command.Executed);
+        Assert.All(result.Commands, command => Assert.True(command.IsDryRun));
+        Assert.All(result.Commands, command => Assert.NotNull(command.SafetyDecision));
+        Assert.False(File.Exists(scriptPath));
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task dry_run_decision_prompt_must_include_preview_instructions()
+    {
+        var llamaClientMock = CreateLlamaClientMock();
+        string? capturedPrompt = null;
+        llamaClientMock
+            .Setup(client => client.GetStructuredResponseAsync(
+                It.IsAny<string>(),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, object?, CancellationToken>(
+                (prompt, _, _) => capturedPrompt = prompt)
+            .ReturnsAsync(CompleteDecision(
+                "Nothing to preview.",
+                "Nada para prever."));
+
+        var runner = CreateRunner(llamaClientMock);
+        var request = CreateRequest("List all files in the workspace.");
+        request.DryRun = true;
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(result.IsDryRun);
+        Assert.NotNull(capturedPrompt);
+        Assert.Contains("DRY RUN MODE", capturedPrompt);
+        Assert.Contains("MUST NOT execute", capturedPrompt);
+    }
+
+    [Fact]
+    public async Task non_dry_run_turn_must_not_be_marked_as_preview()
+    {
+        using var workspace = new TempTestWorkspace();
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "Echoing to prove the run is real.",
+                "Echo done",
+                OperationKind.TerminalCommand,
+                command: "echo done"),
+            CompleteDecision("Done.", "Done.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        SetupAffirmativeVerification(llamaClientMock);
+
+        var executorMock = CreateExecutorMock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync("echo done", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("done");
+
+        var runner = CreateRunner(llamaClientMock, executorMock);
+        var result = await runner.RunAsync(
+            CreateRequest("Echo done."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.False(result.IsDryRun);
+        Assert.Contains(result.Commands, command => command.Executed && !command.IsDryRun);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync("echo done", It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task run_async_must_scaffold_project_from_template()
     {
         using var workspace = new TempTestWorkspace();

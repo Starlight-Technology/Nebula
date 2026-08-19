@@ -9,4 +9,5 @@ public enum InteractionMode
 public sealed record UserMessage(
     string Content,
     InteractionMode Mode,
-    string? WorkspaceRoot = null);
+    string? WorkspaceRoot = null,
+    bool IsDryRun = false);

@@ -15,6 +15,8 @@ internal sealed record ConversationRequest(
 
     public string? WorkspaceRoot => Message.WorkspaceRoot;
 
+    public bool IsDryRun => Message.IsDryRun;
+
     public IReadOnlyCollection<string>? ConversationApprovedCommands { get; init; }
 
     public PromptRequest CreatePromptRequest()
@@ -44,6 +46,7 @@ internal sealed record ConversationRequest(
             MaxSteps = maxSteps,
             MaxRetriesPerStep = maxRetriesPerStep,
             WorkspaceRoot = WorkspaceRoot,
+            DryRun = IsDryRun,
             ConversationApprovedCommands = ConversationApprovedCommands
         };
     }

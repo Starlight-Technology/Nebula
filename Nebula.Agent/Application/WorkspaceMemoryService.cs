@@ -135,6 +135,120 @@ public sealed partial class WorkspaceMemoryService
         }
     }
 
+    public const int MaxStrategyCommandLength = 400;
+
+    /// <summary>
+    /// Records a recovery strategy: a command that succeeded right after a
+    /// failure with the given error signature, for a detected stack.
+    /// Key: "{stackLabel}|{errorSignature}".
+    /// </summary>
+    public async Task RecordWorkingStrategyAsync(
+        string workspace,
+        string stackLabel,
+        string errorSignature,
+        string successfulCommand,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(workspace) ||
+            string.IsNullOrWhiteSpace(stackLabel) ||
+            string.IsNullOrWhiteSpace(errorSignature) ||
+            string.IsNullOrWhiteSpace(successfulCommand))
+        {
+            return;
+        }
+
+        var key = NormalizeKey($"{stackLabel}|{errorSignature}");
+        var value = successfulCommand.Length > MaxStrategyCommandLength
+            ? successfulCommand[..MaxStrategyCommandLength] + "..."
+            : successfulCommand;
+
+        try
+        {
+            var exists = await store.ExistsAsync(
+                workspace,
+                WorkspaceMemoryKind.Strategy,
+                key,
+                cancellationToken);
+            if (exists)
+            {
+                return;
+            }
+
+            await store.SaveAsync(
+                new WorkspaceMemoryEntry(
+                    Guid.NewGuid(),
+                    workspace,
+                    WorkspaceMemoryKind.Strategy,
+                    key,
+                    value,
+                    $"Recovery strategy: command succeeded after error signature '{errorSignature}'.",
+                    DateTimeOffset.UtcNow),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[WORKSPACE-MEMORY] Strategy store failed (non-fatal): {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Builds a compact summary of recovery strategies that worked for the
+    /// current stack label (and any stack, as a fallback).
+    /// </summary>
+    public async Task<string> BuildStrategiesSummaryAsync(
+        string workspace,
+        string stackLabel,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var entries = await store.GetRecentAsync(workspace, cancellationToken: cancellationToken);
+            var strategies = entries
+                .Where(entry =>
+                    entry.Kind == WorkspaceMemoryKind.Strategy &&
+                    !string.IsNullOrWhiteSpace(entry.Key))
+                .OrderByDescending(entry => entry.CreatedAt)
+                .Select(entry =>
+                {
+                    var separator = entry.Key.IndexOf('|');
+                    var error = separator >= 0
+                        ? entry.Key[(separator + 1)..]
+                        : entry.Key;
+                    return $"  - para erro \"{error}\": {entry.Value}";
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(10)
+                .ToList();
+            if (strategies.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return
+                $"Estrategias que ja funcionaram neste workspace (stack atual: {stackLabel}):" +
+                Environment.NewLine +
+                string.Join(Environment.NewLine, strategies);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[WORKSPACE-MEMORY] Strategy read failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
     private async Task SaveDetectedPortsAsync(
         string workspace,
         CommandExecution execution,

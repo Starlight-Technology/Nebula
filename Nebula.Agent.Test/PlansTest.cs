@@ -75,8 +75,23 @@ public sealed class PlansTest
 
         var plan = session.CurrentPlan;
 
-        Assert.Contains("#1 [pending] Build", plan);
-        Assert.Contains("#2 [pending] (depends on 1) Test", plan);
+        Assert.Contains("#1 [pending] [risk=low] Build", plan);
+        Assert.Contains("#2 [pending] [risk=low] (depends on 1) Test", plan);
+    }
+
+    [Fact]
+    public void current_plan_must_render_checkpoint_and_risk_markers()
+    {
+        var session = CreateSession();
+        session.ApplyPlan([
+            new AgentPlanStep { Id = 1, Description = "Scaffold", IsCheckpoint = true, Risk = "high" },
+            new AgentPlanStep { Id = 2, Description = "Test", Risk = "medium" }
+        ]);
+
+        var plan = session.CurrentPlan;
+
+        Assert.Contains("#1 [pending] [checkpoint] [risk=high] Scaffold", plan);
+        Assert.Contains("#2 [pending] [risk=medium] Test", plan);
     }
 
     [Fact]
@@ -114,6 +129,49 @@ public sealed class PlansTest
         var stream = events.Where(value => value.Kind == ActionExecutionEventKind.StreamOutput).ToList();
 
         Assert.Equal(2, stream.Count);
+    }
+
+    [Fact]
+    public void apply_architecture_comparison_must_store_options_and_emit_event()
+    {
+        var session = CreateSession();
+
+        session.ApplyArchitectureComparison([
+            new ArchitectureOption
+            {
+                Name = "Monolith",
+                Pros = "Simple",
+                Cons = "Scales poorly",
+                Recommendation = "Start simple",
+                Risk = "low"
+            },
+            new ArchitectureOption
+            {
+                Name = "Microservices",
+                Pros = "Scales",
+                Cons = "Complex",
+                Recommendation = "Overkill now",
+                Risk = "high"
+            }
+        ]);
+
+        Assert.Equal(2, session.ArchitectureOptions.Count);
+        var snapshot = session.Snapshot(ActionExecutionStatus.Planning, "planning");
+        Assert.Contains(snapshot.ActionEvents, value =>
+            value.Kind == ActionExecutionEventKind.ArchitectureComparison
+            && value.Message.Contains("Monolith"));
+        Assert.Equal(2, snapshot.ArchitectureOptions.Count);
+    }
+
+    [Fact]
+    public void apply_architecture_comparison_must_ignore_empty()
+    {
+        var session = CreateSession();
+
+        session.ApplyArchitectureComparison(null);
+        session.ApplyArchitectureComparison([]);
+
+        Assert.Empty(session.ArchitectureOptions);
     }
 
     private static AgentActionSession CreateSession()

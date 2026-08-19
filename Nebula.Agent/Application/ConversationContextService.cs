@@ -28,11 +28,14 @@ public sealed class ConversationContextService(
     IConversationMemoryRepository? conversationRepository,
     NebulaContextBuilder contextBuilder,
     ILogger logger,
-    IKnowledgeQueryService? knowledgeQueryService = null) : IConversationContextService
+    IKnowledgeQueryService? knowledgeQueryService = null,
+    IUserMemoryService? userMemoryService = null) : IConversationContextService
 {
     private static readonly TimeSpan PersistenceTimeout = TimeSpan.FromMilliseconds(1500);
 
     private const int MaxInjectedKnowledgeChars = 3000;
+
+    private const int MaxInjectedUserPreferencesChars = 1200;
 
     public async Task<PreparedConversationContext> PrepareAsync(
         Guid conversationId,
@@ -54,9 +57,11 @@ public sealed class ConversationContextService(
                 [currentMessage],
                 currentMessage,
                 mode);
+            var augmented = await AugmentWithKnowledgeAsync(noRepoModelPrompt, prompt, mode, cancellationToken);
+            augmented = await AugmentWithUserPreferencesAsync(augmented, mode, cancellationToken);
             return new PreparedConversationContext(
                 conversationId,
-                await AugmentWithKnowledgeAsync(noRepoModelPrompt, prompt, mode, cancellationToken),
+                augmented,
                 PreviousState: null);
         }
 
@@ -83,10 +88,46 @@ public sealed class ConversationContextService(
             recentMessages,
             userMessage,
             mode);
+        var finalPrompt = await AugmentWithKnowledgeAsync(modelPrompt, prompt, mode, cancellationToken);
+        finalPrompt = await AugmentWithUserPreferencesAsync(finalPrompt, mode, cancellationToken);
         return new PreparedConversationContext(
             conversationId,
-            await AugmentWithKnowledgeAsync(modelPrompt, prompt, mode, cancellationToken),
+            finalPrompt,
             conversationState);
+    }
+
+    private async Task<string> AugmentWithUserPreferencesAsync(
+        string modelPrompt,
+        InteractionMode mode,
+        CancellationToken cancellationToken)
+    {
+        if (mode != InteractionMode.Chat || userMemoryService is null)
+        {
+            return modelPrompt;
+        }
+
+        try
+        {
+            var preferences = await userMemoryService.BuildUserPreferencesSummaryAsync(
+                userMemoryService.DefaultUserId,
+                cancellationToken);
+            if (string.IsNullOrWhiteSpace(preferences))
+            {
+                return modelPrompt;
+            }
+
+            if (preferences.Length > MaxInjectedUserPreferencesChars)
+            {
+                preferences = preferences[..MaxInjectedUserPreferencesChars];
+            }
+
+            return $"{modelPrompt}\n\n[user_preferences]\n{preferences}";
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[CHAT] User preferences augmentation failed (non-fatal): {ex.Message}");
+            return modelPrompt;
+        }
     }
 
     private async Task<string> AugmentWithKnowledgeAsync(

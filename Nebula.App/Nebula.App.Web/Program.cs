@@ -192,10 +192,15 @@ builder.Services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepos
 builder.Services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
 builder.Services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 builder.Services.AddScoped<IKnowledgeStore, PostgresKnowledgeStore>();
+builder.Services.AddScoped<IKnowledgeRepository, PostgresKnowledgeStore>();
 builder.Services.AddScoped<IAgentRunStore, PostgresAgentRunStore>();
 builder.Services.AddScoped<IFetchedPageCache, PostgresFetchedPageCache>();
 builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
 builder.Services.AddScoped<WorkspaceMemoryService>();
+builder.Services.AddScoped<IUserMemoryStore, PostgresUserMemoryStore>();
+builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
+builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
+builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 builder.Services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
 builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();

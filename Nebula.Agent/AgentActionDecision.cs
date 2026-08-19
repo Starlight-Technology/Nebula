@@ -27,6 +27,11 @@ public sealed class AgentActionDecisionRequest
     /// When null, the runner falls back to the resolved default workspace.
     /// </summary>
     public string? WorkspaceRoot { get; set; }
+
+    /// <summary>
+    /// True when this decision is a dry-run preview: nothing may be executed or written.
+    /// </summary>
+    public bool DryRun { get; set; }
 }
 
 public sealed class AgentActionDecision
@@ -40,6 +45,25 @@ public sealed class AgentActionDecision
     public AgentToolAction? Action { get; set; }
 
     public IReadOnlyList<AgentPlanStep>? Plan { get; set; }
+
+    /// <summary>
+    /// Optional comparison of architecture options considered before a large
+    /// change. Emitted before implementation so the human can review the trade-offs.
+    /// </summary>
+    public IReadOnlyList<ArchitectureOption>? ArchitectureComparison { get; set; }
+}
+
+public sealed class ArchitectureOption
+{
+    public string Name { get; set; } = string.Empty;
+
+    public string Pros { get; set; } = string.Empty;
+
+    public string Cons { get; set; } = string.Empty;
+
+    public string Recommendation { get; set; } = string.Empty;
+
+    public string Risk { get; set; } = "medium";
 }
 
 public sealed class AgentPlanStep
@@ -51,6 +75,16 @@ public sealed class AgentPlanStep
     public IReadOnlyList<int> DependsOn { get; set; } = [];
 
     public string Status { get; set; } = "pending";
+
+    /// <summary>
+    /// Estimated risk of the step: low, medium, high or critical.
+    /// </summary>
+    public string Risk { get; set; } = "low";
+
+    /// <summary>
+    /// Milestones (verification gates such as build/test) of a large task.
+    /// </summary>
+    public bool IsCheckpoint { get; set; }
 }
 
 public sealed class AgentToolAction

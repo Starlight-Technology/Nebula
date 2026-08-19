@@ -77,7 +77,13 @@ public sealed class AgentActionRunner : IAgentActionRunner
                             {
                                 ["type"] = "string",
                                 ["enum"] = new JsonArray("pending", "inProgress", "completed")
-                            }
+                            },
+                            ["risk"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                                ["enum"] = new JsonArray("low", "medium", "high", "critical")
+                            },
+                            ["isCheckpoint"] = new JsonObject { ["type"] = "boolean" }
                         },
                         ["required"] = new JsonArray("id", "description")
                     }
@@ -117,6 +123,27 @@ public sealed class AgentActionRunner : IAgentActionRunner
                         ["requiresSafetyReview"] = new JsonObject { ["type"] = "boolean" }
                     },
                     ["required"] = new JsonArray("objective", "command", "operationKind")
+                },
+                ["architectureComparison"] = new JsonObject
+                {
+                    ["type"] = new JsonArray("array", "null"),
+                    ["items"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["name"] = new JsonObject { ["type"] = "string" },
+                            ["pros"] = new JsonObject { ["type"] = "string" },
+                            ["cons"] = new JsonObject { ["type"] = "string" },
+                            ["recommendation"] = new JsonObject { ["type"] = "string" },
+                            ["risk"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                                ["enum"] = new JsonArray("low", "medium", "high", "critical")
+                            }
+                        },
+                        ["required"] = new JsonArray("name", "pros", "cons")
+                    }
                 }
             },
             ["required"] = new JsonArray("reasoningSummary", "isComplete", "completionMessage")
@@ -159,8 +186,13 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly WorkspaceMemoryService? workspaceMemoryService;
     private readonly ICommandAllowlistService? commandAllowlistService;
     private readonly IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService;
+    private readonly IKnowledgeSearchService? knowledgeSearchService;
+    private readonly IProjectDocumentationIndexer? projectDocumentationIndexer;
+    private readonly IUserMemoryService? userMemoryService;
     private readonly int defaultMaxRetriesPerStep;
     private readonly int defaultMaxSteps;
+    private static readonly IWorkspaceStackDetector StackDetector =
+        new DeterministicStackDetector();
 
     public AgentActionRunner(
         ILlamaClient llamaClient,
@@ -198,7 +230,10 @@ public sealed class AgentActionRunner : IAgentActionRunner
         ICommandApprovalService? approvalService = null,
         WorkspaceMemoryService? workspaceMemoryService = null,
         ICommandAllowlistService? commandAllowlistService = null,
-        IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null)
+        IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
+        IKnowledgeSearchService? knowledgeSearchService = null,
+        IProjectDocumentationIndexer? projectDocumentationIndexer = null,
+        IUserMemoryService? userMemoryService = null)
     {
         this.llamaClient = llamaClient;
         this.executor = executor;
@@ -257,6 +292,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.workspaceMemoryService = workspaceMemoryService;
         this.commandAllowlistService = commandAllowlistService;
         this.workspaceCategoryPolicyService = workspaceCategoryPolicyService;
+        this.knowledgeSearchService = knowledgeSearchService;
+        this.projectDocumentationIndexer = projectDocumentationIndexer;
+        this.userMemoryService = userMemoryService;
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -268,29 +306,32 @@ public sealed class AgentActionRunner : IAgentActionRunner
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Prompt);
 
-        if (request.ApprovedAction is not null)
+        if (!request.DryRun)
         {
-            return await RunApprovedActionAsync(request, progress, cancellationToken);
-        }
+            if (request.ApprovedAction is not null)
+            {
+                return await RunApprovedActionAsync(request, progress, cancellationToken);
+            }
 
-        if (TryExtractKnowledgeTopic(request.Prompt, out var knowledgeTopic))
-        {
-            return await RunKnowledgeQueryAsync(
-                request,
-                knowledgeTopic,
-                cancellationToken);
-        }
+            if (TryExtractKnowledgeTopic(request.Prompt, out var knowledgeTopic))
+            {
+                return await RunKnowledgeQueryAsync(
+                    request,
+                    knowledgeTopic,
+                    cancellationToken);
+            }
 
-        var requestOperation = operationKindDetector.Detect(new AgentStep
-        {
-            SessionId = request.ConversationId,
-            OriginalText = request.Prompt,
-            Objective = request.Prompt,
-            WorkingDirectory = ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root
-        });
-        if (requestOperation is OperationKind.Learning or OperationKind.Research)
-        {
-            return await RunLearningAsync(request, cancellationToken);
+            var requestOperation = operationKindDetector.Detect(new AgentStep
+            {
+                SessionId = request.ConversationId,
+                OriginalText = request.Prompt,
+                Objective = request.Prompt,
+                WorkingDirectory = ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root
+            });
+            if (requestOperation is OperationKind.Learning or OperationKind.Research)
+            {
+                return await RunLearningAsync(request, cancellationToken);
+            }
         }
 
         var session = new AgentActionSession(
@@ -304,6 +345,11 @@ public sealed class AgentActionRunner : IAgentActionRunner
         try
         {
             var turn = await RunCoreAsync(session, cancellationToken);
+            if (request.DryRun)
+            {
+                turn.IsDryRun = true;
+            }
+
             await EnrichTurnWithGitDiffAsync(turn, session, cancellationToken);
             await PersistRunAsync(request, turn, cancellationToken);
             return turn;
@@ -350,13 +396,20 @@ public sealed class AgentActionRunner : IAgentActionRunner
             workspaceRoot.Root,
             cancellationToken);
         var templateContext = BuildTemplateContext();
+        var strategyContext = await BuildStrategyContextAsync(
+            workspaceRoot.Root,
+            cancellationToken);
+        var userPreferencesContext = await BuildUserPreferencesAsync(
+            cancellationToken);
         var decisionPrompt = CreateDecisionPrompt(
             request,
             environmentDetector.Detect(workspaceRoot.Root),
             runtimeSettings.BuildResponseLanguageInstruction(),
             knowledgeContext,
             workspaceContext,
-            templateContext);
+            templateContext,
+            strategyContext,
+            userPreferencesContext);
         var rawResponse = await llamaClient.GetStructuredResponseAsync(
             decisionPrompt,
             DecisionJsonSchema,
@@ -380,6 +433,62 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
         ValidateDecision(decision);
         return decision;
+    }
+
+    private async Task<string> BuildStrategyContextAsync(
+        string workspaceRoot,
+        CancellationToken cancellationToken)
+    {
+        if (workspaceMemoryService is null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var stack = StackDetector.Detect(workspaceRoot).Kind.ToString();
+            return await workspaceMemoryService.BuildStrategiesSummaryAsync(
+                workspaceRoot,
+                stack,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Strategy context failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    private async Task<string> BuildUserPreferencesAsync(
+        CancellationToken cancellationToken)
+    {
+        if (userMemoryService is null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var userId = string.IsNullOrWhiteSpace(runtimeSettings.UserId)
+                ? userMemoryService.DefaultUserId
+                : runtimeSettings.UserId.Trim();
+            return await userMemoryService.BuildUserPreferencesSummaryAsync(
+                userId,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] User preferences context failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
     }
 
     private async Task<ConversationTurn> RunApprovedActionAsync(
@@ -494,6 +603,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             return session.BlockUnsafeRequest(requestValidation.Reason);
         }
 
+        await TryIndexProjectDocumentationAsync(session, cancellationToken);
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -515,9 +626,16 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 decision.ReasoningSummary, cancellationToken);
             session.EmitReasoning(translatedReasoning);
             session.ApplyPlan(decision.Plan);
+            session.ApplyArchitectureComparison(decision.ArchitectureComparison);
 
             if (decision.IsComplete)
             {
+                if (session.IsDryRun)
+                {
+                    var dryRunTurn = session.CompleteDryRun(decision.CompletionMessage);
+                    return await TranslateTurnResponseAsync(dryRunTurn, cancellationToken);
+                }
+
                 var verificationFailure = await VerifyCompletionDeterministicallyAsync(
                     session,
                     cancellationToken);
@@ -562,10 +680,15 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     session.FailStepLimit(), cancellationToken);
             }
 
-            var actionResult = await ExecuteActionAsync(
-                session,
-                decision.Action!,
-                cancellationToken);
+            var actionResult = session.IsDryRun
+                ? await PreviewActionAsync(
+                    session,
+                    decision.Action!,
+                    cancellationToken)
+                : await ExecuteActionAsync(
+                    session,
+                    decision.Action!,
+                    cancellationToken);
             if (actionResult.TerminalTurn is not null)
             {
                 return await TranslateTurnResponseAsync(
@@ -731,7 +854,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             var decision = await GenerateNextStepAsync(
                 session.CreateDecisionRequest(),
                 cancellationToken);
-            if (decision.IsComplete && session.Evidence.Count == 0)
+            if (decision.IsComplete && !session.IsDryRun && session.Evidence.Count == 0)
             {
                 var failure = "You claimed the task is complete, but no actions were executed. " +
                               "You must execute at least one action and collect evidence before completing.";
@@ -796,6 +919,145 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             _ => ActionAttemptResult.Terminal(
                 session.BlockUnsupportedOperation(operationKind))
         };
+    }
+
+    private async Task<ActionAttemptResult> PreviewActionAsync(
+        AgentActionSession session,
+        AgentToolAction action,
+        CancellationToken cancellationToken)
+    {
+        var step = session.CreateStep(action);
+        var operationKind = operationKindDetector.Detect(step);
+        logger.Log(
+            $"[AGENT] Dry-run preview detected: sessionId={step.SessionId}; " +
+            $"stepId={step.Id}; operationKind={operationKind}; objective={step.Objective}");
+
+        var execution = session.CreateExecution(action, step, operationKind);
+        execution.Skipped = true;
+        execution.Executed = false;
+
+        CommandClassification classification;
+        OperationPolicyRequest operationRequest;
+        var workingDirectory = execution.WorkingDirectory;
+
+        if (operationKind is OperationKind.TerminalCommand or OperationKind.ScriptExecution)
+        {
+            var environment = environmentDetector.Detect(workingDirectory);
+            var commandRequest = commandIntentParser.Parse(
+                session.Request.Prompt,
+                action.Command,
+                workingDirectory);
+            var resolvedCommand = commandResolver.Resolve(commandRequest, environment);
+            ApplyResolution(execution, resolvedCommand, environment);
+            var validation = await commandValidationService.ValidateAsync(
+                execution,
+                cancellationToken);
+            classification = new CommandClassification(
+                execution.Run,
+                validation.SafetyDecision.Intent,
+                validation.SafetyDecision.Confidence,
+                "CommandSafetyClassifier",
+                validation.SafetyDecision.Reasons);
+            operationRequest = new OperationPolicyRequest(
+                session.Request.ConversationId,
+                execution.StepId,
+                operationKind,
+                session.Request.Prompt,
+                execution.Run,
+                execution.TargetPath,
+                classification);
+        }
+        else
+        {
+            var targetPath = ResolveOperationPath(action.TargetPath, workingDirectory);
+            execution.TargetPath = targetPath;
+            execution.Run = $"{operationKind.ToString().ToLowerInvariant()} \"{targetPath}\"";
+
+            if (operationKind == OperationKind.FileRead)
+            {
+                classification = ClassifyFileRead(targetPath, workingDirectory);
+            }
+            else if (operationKind is OperationKind.PlannedPatch)
+            {
+                var files = action.PlannedFiles ?? [];
+                classification = ClassifyPlannedPatch(session, targetPath, files);
+            }
+            else if (operationKind is OperationKind.ProjectScaffold)
+            {
+                var template = projectTemplateCatalog is null
+                    ? null
+                    : projectTemplateCatalog.FindById(
+                          action.TemplateId ?? string.Empty)
+                      ?? projectTemplateCatalog.Suggest(
+                          action.Objective,
+                          null);
+                classification = template is null
+                    ? new CommandClassification(
+                        action.TemplateId ?? "<null>",
+                        CommandIntent.Blocked,
+                        0.99,
+                        "PreviewProjectScaffoldSafetyClassifier",
+                        ["Nenhum template de projeto correspondeu ao objetivo."])
+                    : scaffoldClassifier.Classify(targetPath);
+                execution.TemplateId = template?.Id;
+            }
+            else if (operationKind is OperationKind.ScriptContent)
+            {
+                classification = scriptContentClassifier.Classify(
+                    action.Content ?? string.Empty,
+                    action.Language ?? string.Empty,
+                    targetPath);
+            }
+            else
+            {
+                classification = fileWriteSafetyClassifier.Classify(targetPath);
+            }
+
+            operationRequest = new OperationPolicyRequest(
+                session.Request.ConversationId,
+                execution.StepId,
+                operationKind,
+                session.Request.Prompt,
+                execution.Run,
+                targetPath,
+                classification);
+        }
+
+        var decision = await operationPolicyEngine.EvaluateAsync(
+            operationRequest,
+            cancellationToken);
+        ApplyOperationClassification(execution, classification, decision);
+        execution.Notes = string.IsNullOrWhiteSpace(execution.Notes)
+            ? BuildDryRunNote(operationKind, decision, classification)
+            : execution.Notes + " | " + BuildDryRunNote(operationKind, decision, classification);
+        execution.IsDryRun = true;
+        session.Commands.Add(execution);
+        session.EmitActionStarted(execution);
+        session.EmitActionCompleted(execution);
+
+        var reason = classification.Reasons.Count > 0
+            ? classification.Reasons[0]
+            : operationKind.ToString();
+        var observation =
+            $"DRY RUN (nada executado): {execution.Run} -> " +
+            $"decision={decision.Decision}; intent={classification.Intent}; motivo={reason}";
+        return ActionAttemptResult.Completed(observation);
+    }
+
+    private static string BuildDryRunNote(
+        OperationKind operationKind,
+        CommandSafetyDecision decision,
+        CommandClassification classification)
+    {
+        var intentLine =
+            $"DRY RUN ({operationKind}): decisao de seguranca={decision.Decision}; " +
+            $"intent={classification.Intent}; confianca={classification.Confidence:F3}";
+        if (classification.Reasons.Count == 0)
+        {
+            return intentLine;
+        }
+
+        return intentLine + " | motivos: " + string.Join("; ", classification.Reasons);
     }
 
     private async Task<ActionAttemptResult> ExecuteProjectScaffoldAsync(
@@ -1444,13 +1706,17 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             session.ExecutionHistory);
         if (!deduplication.Allowed)
         {
-            session.RecordDeduplicationBlocked(execution, deduplication.Reason);
+            var deduplicationReason = await AugmentFailureWithKnowledgeAsync(
+                session,
+                execution.Run,
+                deduplication.Reason);
+            session.RecordDeduplicationBlocked(execution, deduplicationReason);
             await commandAuditService.UpdateExecutionAsync(
                 storedCommand?.Id,
                 executed: false,
-                deduplication.Reason,
+                deduplicationReason,
                 cancellationToken);
-            return ActionAttemptResult.Retry(deduplication.Reason);
+            return ActionAttemptResult.Retry(deduplicationReason);
         }
 
         session.EmitActionStarted(execution);
@@ -2059,6 +2325,130 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         return ActionAttemptResult.Retry(observationMessage);
     }
 
+    private async Task TryRecordWorkingStrategyAsync(
+        AgentActionSession session,
+        CancellationToken cancellationToken)
+    {
+        if (workspaceMemoryService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var entries = session.ExecutionHistory.Entries;
+            if (entries.Count < 2)
+            {
+                return;
+            }
+
+            var current = entries[^1];
+            var previous = entries[^2];
+            if (!current.Success ||
+                previous.Success ||
+                string.IsNullOrWhiteSpace(previous.ErrorSignature) ||
+                string.Equals(
+                    current.Command,
+                    previous.Command,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+            await workspaceMemoryService.RecordWorkingStrategyAsync(
+                session.WorkspaceRoot.Root,
+                stack,
+                previous.ErrorSignature,
+                current.Command,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Strategy memory failed (non-fatal): {ex.Message}");
+        }
+    }
+
+    private async Task TryIndexProjectDocumentationAsync(
+        AgentActionSession session,
+        CancellationToken cancellationToken)
+    {
+        if (projectDocumentationIndexer is null || session.IsDryRun)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await projectDocumentationIndexer.IndexAsync(
+                session.WorkspaceRoot.Root,
+                cancellationToken);
+            logger.Log(
+                $"[AGENT] Project docs index: scanned={result.FilesScanned}; " +
+                $"created={result.CreatedCount}; skipped={result.SkippedCount}");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Project docs index failed (non-fatal): {ex.Message}");
+        }
+    }
+
+    private async Task<string> AugmentFailureWithKnowledgeAsync(
+        AgentActionSession session,
+        string command,
+        string baseObservation)
+    {
+        if (knowledgeSearchService is null)
+        {
+            return baseObservation;
+        }
+
+        try
+        {
+            var hits = await knowledgeSearchService.SearchKnowledgeAsync(command, maxResults: 3);
+            if (hits.Count == 0)
+            {
+                return baseObservation;
+            }
+
+            var knowledgeBlock = new StringBuilder();
+            knowledgeBlock.AppendLine();
+            knowledgeBlock.AppendLine(
+                "Conhecimento local relevante (use para escolher o proximo comando):");
+            foreach (var hit in hits.Take(3))
+            {
+                var item = hit.Item;
+                var summary = string.IsNullOrWhiteSpace(item.Summary)
+                    ? item.Content
+                    : item.Summary;
+                knowledgeBlock.AppendLine(
+                    $"- {item.Title} (score {hit.Score:F1}): " +
+                    TextTruncation.Truncate(summary, 300));
+                if (!string.IsNullOrWhiteSpace(item.NormalizedCommand))
+                {
+                    knowledgeBlock.AppendLine($"  Comando conhecido: {item.NormalizedCommand}");
+                }
+            }
+
+            var text = knowledgeBlock.ToString().Trim();
+            var suffix = text.Length > 1500 ? text[..1500] : text;
+            return $"{baseObservation}\n{suffix}";
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Knowledge suggestion failed (non-fatal): {ex.Message}");
+            return baseObservation;
+        }
+    }
+
     private async Task<(string Observation, ExecutionHistoryEntry HistoryEntry)> RecordToolOutcomeAsync(
         AgentActionSession session,
         CommandExecution execution,
@@ -2075,6 +2465,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             toolResult,
             environmentSnapshot);
         session.RecordExecution(historyEntry);
+        await TryRecordWorkingStrategyAsync(session, cancellationToken);
         session.RecordEvidence(evidenceCollector.Collect(
             new ExecutionEvidenceInput(
                 session.Request.ConversationId,
@@ -2089,6 +2480,14 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 Success: toolResult.Success)));
 
         var observationMessage = BuildObservationMessage(execution);
+        if (execution.Executed && execution.ExitCode is not 0)
+        {
+            observationMessage = await AugmentFailureWithKnowledgeAsync(
+                session,
+                execution.Run,
+                observationMessage);
+        }
+
         session.EmitToolObservation(execution, observationMessage, toolResult.CombinedOutput);
         session.RecordObservation(execution.Run, observationMessage);
 
@@ -2984,6 +3383,7 @@ return (observationMessage, historyEntry);
         execution.ClassificationSource = classification.Source;
         execution.ClassificationConfidence = classification.Confidence;
         execution.SafetyDecision = decision.Decision;
+        execution.Intent = classification.Intent;
         execution.Notes = BuildOperationVerificationNotes(execution, decision);
     }
 
@@ -3442,7 +3842,9 @@ return (observationMessage, historyEntry);
         string responseLanguageInstruction,
         string knowledgeContext = "",
         string workspaceContext = "",
-        string templateContext = "")
+        string templateContext = "",
+        string strategyContext = "",
+        string userPreferencesContext = "")
     {
         var knowledgeSection = string.IsNullOrWhiteSpace(knowledgeContext)
             ? string.Empty
@@ -3468,6 +3870,33 @@ return (observationMessage, historyEntry);
             {templateContext}
             """;
 
+        var strategiesSection = string.IsNullOrWhiteSpace(strategyContext)
+            ? string.Empty
+            : $"""
+
+            {strategyContext}
+            """;
+
+        var userPreferencesSection = string.IsNullOrWhiteSpace(userPreferencesContext)
+            ? string.Empty
+            : $"""
+
+            These are the user's saved preferences. Adjust style, detail level, language and autonomy decisions accordingly (do not override safety policies):
+            {userPreferencesContext}
+            """;
+
+        var dryRunSection = request.DryRun
+            ? $"""
+
+            DRY RUN MODE (preview only):
+            - This is a planning and safety preview. You MUST NOT execute commands, write files, scaffold projects or run scripts.
+            - Everything you propose in the action field is only PREVIEWED: the system classifies it for safety and reports the expected decision, intent and reason - nothing runs.
+            - Propose one realistic action per response exactly as if it were going to run, so the preview shows the real safety decision.
+            - Once you have previewed every step of the plan, set isComplete=true with a summary of the previewed actions and their decisions.
+            - The "after command, verify with Test-Path" rules do NOT apply here: there is no real output to verify.
+            """
+            : string.Empty;
+
         return $$"""
             You are a task execution agent on {{environment.OS}} ({{environment.Shell}}).
             Respond ONLY with valid JSON and no markdown.
@@ -3482,6 +3911,9 @@ return (observationMessage, historyEntry);
             {{knowledgeSection}}
             {{workspaceSection}}
             {{templatesSection}}
+            {{strategiesSection}}
+            {{userPreferencesSection}}
+            {{dryRunSection}}
             Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
             For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
             For FileWrite (text/markdown/json): provide content, targetPath with actual .txt/.md/.json path.
@@ -3490,6 +3922,9 @@ return (observationMessage, historyEntry);
             For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
             For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Prefer PlannedPatch over many separate FileWrite steps.
             For large projects, first create a PROJECT_SPEC.md file (FileWrite) with requirements and architecture BEFORE writing code files.
+            For large tasks, decompose them into subtasks in the plan and mark milestone steps as checkpoints (isCheckpoint: true), for example right after scaffolding, after tests build, and after verification succeeds. Each checkpoint must have a deterministic way to confirm it (build, test or file listing).
+            Before implementing a large change (new module, architecture decision, major refactor), provide an architectureComparison: an array of at least 2 options (name, pros, cons, recommendation, risk) comparing the viable approaches. Emit it in the same decision that starts the change, before the first implementation action, so the user can review the trade-offs. For small or localized changes, omit it.
+            Estimate the risk of every plan step: risk "low" for simple reads/writes and safe commands, "medium" for commands with side effects, "high" for destructive or network operations, "critical" when the step could destroy data or escalate privileges. Review high/critical steps before executing them.
             targetPath must be a real absolute path.
             Do NOT use variables like $CurrentDirectory or relative paths.
             Your working directory is: {{environment.WorkingDirectory}}

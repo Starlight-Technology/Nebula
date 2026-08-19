@@ -399,9 +399,9 @@
                                                                              Align="CoronaStackAlign.Center"
                                                                              Justify="CoronaStackJustify.End"
                                                                              Spacing=".5rem">
-                                                                    <CoronaBadge Content="@(command.Skipped ? "Ignorado" : command.Executed ? "Executado" : command.SafetyDecision == CommandSafetyDecisionType.AskApproval ? "Aguardando aprovacao" : "Bloqueado")"
-                                                                                 Variant="CoronaBadgeVariant.Soft"
-                                                                                 Color="@(command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
+                                                                    <CoronaBadge Content="@(command.IsDryRun ? "Previa" : command.Skipped ? "Ignorado" : command.Executed ? "Executado" : command.SafetyDecision == CommandSafetyDecisionType.AskApproval ? "Aguardando aprovacao" : "Bloqueado")"
+                                                     Variant="CoronaBadgeVariant.Soft"
+                                                     Color="@(command.IsDryRun ? CoronaColorSemantic.Neutral : command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
 
                                                                     @if (WorkspaceState.CanApproveCommand(command))
                                                                     {
@@ -562,6 +562,15 @@
                                 </CoronaButton>
                             }
 
+                            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                          Size="CoronaComponentSize.Large"
+                                          Color="CoronaColorSemantic.Primary"
+                                          Icon="@CoronaIcons.MagnifyingGlass"
+                                          Disabled="@(!WorkspaceState.CanSend)"
+                                          OnClick="WorkspaceState.SendDryRunAsync">
+                                Prever
+                            </CoronaButton>
+
                             <CoronaButton Size="CoronaComponentSize.Large"
                                           Loading="@WorkspaceState.IsSending"
                                           Disabled="@(!WorkspaceState.CanSend)"
@@ -591,6 +600,13 @@
                         <CoronaBadge Content="@(executedCount + " executado(s)")"
                                      Variant="CoronaBadgeVariant.Soft"
                                      Color="CoronaColorSemantic.Primary" />
+
+                        @if (missionTurn.Result?.IsDryRun == true)
+                        {
+                            <CoronaBadge Content="Previa (nada executado)"
+                                         Variant="CoronaBadgeVariant.Outlined"
+                                         Color="CoronaColorSemantic.Success" />
+                        }
                     </div>
 
                     <p class="nebula-mission-plan__objective">@missionTurn.Prompt</p>
@@ -611,8 +627,15 @@
                             {
                                 var isDone = line.Contains("completed", StringComparison.OrdinalIgnoreCase)
                                              || line.Contains("concluido", StringComparison.OrdinalIgnoreCase);
-                                <div class="nebula-mission-item @(isDone ? "nebula-mission-item--done" : "")">
-                                    <span class="nebula-mission-item__marker">@(isDone ? "✓" : "•")</span>
+                                var isCheckpoint = line.Contains("[checkpoint]", StringComparison.OrdinalIgnoreCase);
+                                var isHighRisk = line.Contains("risk=high", StringComparison.OrdinalIgnoreCase)
+                                                 || line.Contains("risk=critical", StringComparison.OrdinalIgnoreCase);
+                                var itemClass = "nebula-mission-item"
+                                    + (isDone ? " nebula-mission-item--done" : "")
+                                    + (isCheckpoint ? " nebula-mission-item--checkpoint" : "")
+                                    + (isHighRisk ? " nebula-mission-item--risk" : "");
+                                <div class="@itemClass">
+                                    <span class="nebula-mission-item__marker">@(isDone ? "✓" : isCheckpoint ? "◆" : "•")</span>
                                     <span>@line.Trim()</span>
                                 </div>
                             }
@@ -633,6 +656,33 @@
                             <strong>@approvals</strong>
                         </div>
                     </div>
+
+                    @{
+                        var architectureOptions = missionTurn.Result?.ArchitectureOptions ?? [];
+                    }
+                    @if (architectureOptions.Count > 0)
+                    {
+                        <div class="nebula-architecture">
+                            <p class="nebula-kicker">Comparacao de arquitetura</p>
+                            @foreach (var option in architectureOptions)
+                            {
+                                var riskClass = option.Risk switch
+                                {
+                                    "high" or "critical" => " nebula-architecture__option--risk",
+                                    _ => string.Empty
+                                };
+                                <div class="nebula-architecture__option@(riskClass)">
+                                    <p class="nebula-architecture__name">@option.Name</p>
+                                    <p><strong>Prós:</strong> @option.Pros</p>
+                                    <p><strong>Contras:</strong> @option.Cons</p>
+                                    @if (!string.IsNullOrWhiteSpace(option.Recommendation))
+                                    {
+                                        <p><strong>Recomendação:</strong> @option.Recommendation</p>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
                 </CoronaCard>
             }
 

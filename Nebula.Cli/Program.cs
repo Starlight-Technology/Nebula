@@ -204,6 +204,7 @@ services.AddScoped<IPromptRequestRepository, CompositePromptRequestRepository>()
 services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepository>();
 services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 services.AddScoped<IKnowledgeStore, PostgresKnowledgeStore>();
+services.AddScoped<IKnowledgeRepository, PostgresKnowledgeStore>();
 services.AddScoped<IFetchedPageCache, PostgresFetchedPageCache>();
 services.AddScoped<ILearningEngine, LearningEngine>();
 services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
@@ -217,6 +218,10 @@ services.AddScoped<IProjectStackValidator, ProjectStackValidator>();
 services.AddScoped<IPlannedPatchApplier, PlannedPatchApplier>();
 services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
 services.AddScoped<WorkspaceMemoryService>();
+services.AddScoped<IUserMemoryStore, PostgresUserMemoryStore>();
+services.AddScoped<IUserMemoryService, UserMemoryService>();
+services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
+services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
 services.AddScoped<IPolicySimulator, PolicySimulator>();

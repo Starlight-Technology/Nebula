@@ -27,6 +27,8 @@ public sealed class NebulaRuntimeSettings
 
     public string WorkspaceRoot { get; set; } = string.Empty;
 
+    public string UserId { get; set; } = string.Empty;
+
     public bool RequireDeterministicVerification { get; set; } = true;
 
     public int CommandTimeoutSeconds { get; set; } = 300;
@@ -69,6 +71,7 @@ public sealed class NebulaRuntimeSettings
         AutoApproveCommands = snapshot.AutoApproveCommands;
         AutoApproveCategories = snapshot.AutoApproveCategories?.ToList() ?? [];
         WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
+        UserId = snapshot.UserId?.Trim() ?? string.Empty;
         RequireDeterministicVerification = snapshot.RequireDeterministicVerification;
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
@@ -92,6 +95,7 @@ public sealed class NebulaRuntimeSettings
             AutoApproveCommands = AutoApproveCommands,
             AutoApproveCategories = AutoApproveCategories.ToList(),
             WorkspaceRoot = WorkspaceRoot,
+            UserId = UserId,
             RequireDeterministicVerification = RequireDeterministicVerification,
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
@@ -142,6 +146,8 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public List<string> AutoApproveCategories { get; set; } = [];
 
     public string WorkspaceRoot { get; set; } = string.Empty;
+
+    public string UserId { get; set; } = string.Empty;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 

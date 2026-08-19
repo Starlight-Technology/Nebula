@@ -295,6 +295,64 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Preferencias do usuario</h3>
+                        <p>Memoria por usuario: idioma, nivel de detalhe, autonomia e estilo. O agente e o chat se ajustam a elas (sem alterar politicas de seguranca).</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Idioma</span>
+                        <select @bind="WorkspaceState.UserLanguagePreference">
+                            <option value="pt-BR">Portugues (Brasil)</option>
+                            <option value="en-US">English (United States)</option>
+                            <option value="es-ES">Espanol</option>
+                            <option value="livre">Livre (seguir conversa)</option>
+                        </select>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Nivel de detalhe</span>
+                        <select @bind="WorkspaceState.UserDetailPreference">
+                            <option value="resumido">Resumido</option>
+                            <option value="normal">Normal</option>
+                            <option value="detalhado">Detalhado (passo a passo)</option>
+                        </select>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Tolerancia a autonomia</span>
+                        <select @bind="WorkspaceState.UserAutonomyPreference">
+                            <option value="conservadora">Conservadora (perguntar antes)</option>
+                            <option value="normal">Normal</option>
+                            <option value="autonoma">Autonoma (executar quando seguro)</option>
+                        </select>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Estilo</span>
+                        <select @bind="WorkspaceState.UserStylePreference">
+                            <option value="formal">Formal</option>
+                            <option value="direto">Direto</option>
+                            <option value="amigavel">Amigavel</option>
+                            <option value="tecnico">Tecnico</option>
+                        </select>
+                    </label>
+
+                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Primary"
+                                  OnClick="WorkspaceState.SaveUserPreferencesAsync">
+                        Salvar preferencias
+                    </CoronaButton>
+
+                    @if (WorkspaceState.UserPreferencesFeedback is not null)
+                    {
+                        <small class="nebula-feedback">@WorkspaceState.UserPreferencesFeedback</small>
+                    }
+                </section>
+            </CoronaCard>
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>Simulador de policy</h3>
                         <p>Veja como um comando seria classificado e decidido pela policy sem executar nada.</p>
                     </div>

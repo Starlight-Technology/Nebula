@@ -25,6 +25,7 @@ public class PostgresContext : DbContext
     public DbSet<AgentArtifactEntity> AgentArtifacts { get; set; } = null!;
     public DbSet<AgentApprovalEntity> AgentApprovals { get; set; } = null!;
     public DbSet<WorkspaceMemoryEntry> WorkspaceMemoryEntries { get; set; } = null!;
+    public DbSet<UserMemoryEntry> UserMemoryEntries { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -322,6 +323,21 @@ public class PostgresContext : DbContext
             b.HasIndex(x => new { x.Workspace, x.Kind, x.Key })
                 .IsUnique();
             b.HasIndex(x => new { x.Workspace, x.CreatedAt });
+        });
+
+        modelBuilder.Entity<UserMemoryEntry>(b =>
+        {
+            b.ToTable("user_memory");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.UserId).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Kind).IsRequired();
+            b.Property(x => x.Key).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Value).IsRequired().HasMaxLength(4000);
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => new { x.UserId, x.Kind, x.Key })
+                .IsUnique();
+            b.HasIndex(x => new { x.UserId, x.UpdatedAt });
         });
     }
 }

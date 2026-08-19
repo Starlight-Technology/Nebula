@@ -7,7 +7,8 @@ public enum WorkspaceMemoryKind
     Script,
     Note,
     AllowlistedCommand,
-    AutoApprovedCategory
+    AutoApprovedCategory,
+    Strategy
 }
 
 public sealed record WorkspaceMemoryEntry(
