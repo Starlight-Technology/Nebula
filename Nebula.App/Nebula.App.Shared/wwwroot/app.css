@@ -1642,6 +1642,104 @@ pre {
     color: #ffd4cf !important;
 }
 
+.nebula-command-editor {
+    width: 100%;
+    min-height: 5rem;
+    max-height: 12rem;
+    resize: vertical;
+    outline: none;
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    border-radius: var(--nebula-radius);
+    padding: 0.75rem;
+    font: inherit;
+    line-height: 1.5;
+    box-sizing: border-box;
+    border: 1px solid var(--nebula-border-strong);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.85rem;
+}
+
+.nebula-command-editor:focus {
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-timeline-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
+    padding: 0.75rem;
+    border-radius: var(--nebula-radius);
+    background: rgba(7, 8, 9, 0.46);
+    border: 1px solid rgba(208, 199, 184, 0.1);
+}
+
+.nebula-timeline-filters__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.nebula-timeline-filters__search {
+    flex: 1 1 14rem;
+    min-height: 2.2rem;
+    padding: 0.4rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-border-strong);
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    font-size: 0.82rem;
+}
+
+.nebula-timeline-filters__search:focus {
+    outline: none;
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-timeline-filters__select {
+    min-height: 2.2rem;
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-border-strong);
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    font-size: 0.82rem;
+}
+
+.nebula-timeline-filters__check {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--nebula-muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.nebula-timeline-filters__check input {
+    accent-color: var(--nebula-teal);
+}
+
+.nebula-timeline-filters__count {
+    margin-left: auto;
+    color: var(--nebula-muted);
+    font-size: 0.78rem;
+}
+
+.nebula-timeline-empty {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border-radius: 6px;
+    background: rgba(7, 8, 9, 0.46);
+    border: 1px dashed rgba(208, 199, 184, 0.18);
+    color: var(--nebula-muted);
+    font-size: 0.82rem;
+    text-align: center;
+}
+
 @media (max-width: 560px) {
     .nebula-metrics-grid,
     .nebula-workspace-grid {

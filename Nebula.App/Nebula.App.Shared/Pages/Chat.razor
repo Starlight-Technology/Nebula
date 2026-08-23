@@ -224,48 +224,96 @@
 
                                         @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
                                         {
+                                            var allStreamingEvents = NebulaWorkspaceState.GetActionEvents(turn);
+                                            var streamingEvents = WorkspaceState.GetFilteredActionEvents(turn);
                                             <section class="nebula-panel-section">
                                                 <div class="nebula-panel-section__header">
-                                                    <CoronaBadge Content="@($"Execucao ({NebulaWorkspaceState.GetActionEvents(turn).Count})")"
+                                                    <CoronaBadge Content="@($"Execucao ({streamingEvents.Count}/{allStreamingEvents.Count})")"
                                                                  Variant="CoronaBadgeVariant.Soft"
                                                                  Color="CoronaColorSemantic.Primary" />
                                                 </div>
 
+                                                <div class="nebula-timeline-filters">
+                                                    <div class="nebula-timeline-filters__row">
+                                                        <input class="nebula-timeline-filters__search"
+                                                               placeholder="Filtrar por texto..."
+                                                               value="@WorkspaceState.TimelineFilterText"
+                                                               @oninput="(e) => WorkspaceState.SetTimelineFilterText(e.Value?.ToString() ?? string.Empty)" />
+                                                        <select class="nebula-timeline-filters__select"
+                                                                value="@(WorkspaceState.TimelineFilterKind?.ToString() ?? "all")"
+                                                                @onchange="(e) => WorkspaceState.SetTimelineFilterKind(e.Value?.ToString())">
+                                                            <option value="all">Todos os tipos</option>
+                                                            @foreach (var k in Enum.GetNames<ActionExecutionEventKind>())
+                                                            {
+                                                                <option value="@k">@k</option>
+                                                            }
+                                                        </select>
+                                                        <select class="nebula-timeline-filters__select"
+                                                                value="@(WorkspaceState.TimelineFilterStatus?.ToString() ?? "all")"
+                                                                @onchange="(e) => WorkspaceState.SetTimelineFilterStatus(e.Value?.ToString())">
+                                                            <option value="all">Todos os status</option>
+                                                            @foreach (var s in Enum.GetNames<ActionExecutionStatus>())
+                                                            {
+                                                                <option value="@s">@s</option>
+                                                            }
+                                                        </select>
+                                                    </div>
+                                                    <div class="nebula-timeline-filters__row">
+                                                        <label class="nebula-timeline-filters__check">
+                                                            <input type="checkbox" checked="@WorkspaceState.TimelineShowOnlyErrors" @onchange="(e) => WorkspaceState.ToggleTimelineShowOnlyErrors((bool)(e.Value ?? false))" />
+                                                            Apenas erros
+                                                        </label>
+                                                        <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                                      Size="CoronaComponentSize.Small"
+                                                                      OnClick="@(() => WorkspaceState.ClearTimelineFilters())">
+                                                            Limpar filtros
+                                                        </CoronaButton>
+                                                        <span class="nebula-timeline-filters__count">@streamingEvents.Count de @allStreamingEvents.Count</span>
+                                                    </div>
+                                                </div>
+
                                                 <div class="nebula-action-log">
-                                                    @foreach (var actionEvent in NebulaWorkspaceState.GetActionEvents(turn))
+                                                    @if (streamingEvents.Count == 0)
                                                     {
-                                                        <div class="nebula-action-event">
-                                                            <div class="nebula-action-event__header">
-                                                                <div>
-                                                                    <strong>@actionEvent.Title</strong>
-                                                                    <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
+                                                        <p class="nebula-timeline-empty">Nenhum evento corresponde aos filtros.</p>
+                                                    }
+                                                    else
+                                                    {
+                                                        @foreach (var actionEvent in streamingEvents)
+                                                        {
+                                                            <div class="nebula-action-event">
+                                                                <div class="nebula-action-event__header">
+                                                                    <div>
+                                                                        <strong>@actionEvent.Title</strong>
+                                                                        <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
+                                                                    </div>
+
+                                                                    <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
+                                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                                 Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
                                                                 </div>
 
-                                                                <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
-                                                                             Variant="CoronaBadgeVariant.Soft"
-                                                                             Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
+                                                                {
+                                                                    <p>@actionEvent.Message</p>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
+                                                                {
+                                                                    <code>@actionEvent.Command</code>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
+                                                                {
+                                                                    <pre>@actionEvent.ToolResponse</pre>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+                                                                {
+                                                                    <p class="nebula-action-event__error">@actionEvent.Error</p>
+                                                                }
                                                             </div>
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
-                                                            {
-                                                                <p>@actionEvent.Message</p>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
-                                                            {
-                                                                <code>@actionEvent.Command</code>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
-                                                            {
-                                                                <pre>@actionEvent.ToolResponse</pre>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
-                                                            {
-                                                                <p class="nebula-action-event__error">@actionEvent.Error</p>
-                                                            }
-                                                        </div>
+                                                        }
                                                     }
                                                 </div>
                                             </section>
@@ -327,48 +375,96 @@
 
                                         @if (NebulaWorkspaceState.GetActionEvents(turn).Count > 0)
                                         {
+                                            var allEvents = NebulaWorkspaceState.GetActionEvents(turn);
+                                            var filteredEvents = WorkspaceState.GetFilteredActionEvents(turn);
                                             <section class="nebula-panel-section">
                                                 <div class="nebula-panel-section__header">
-                                                    <CoronaBadge Content="@($"Execucao ({NebulaWorkspaceState.GetActionEvents(turn).Count})")"
+                                                    <CoronaBadge Content="@($"Execucao ({filteredEvents.Count}/{allEvents.Count})")"
                                                                  Variant="CoronaBadgeVariant.Soft"
                                                                  Color="CoronaColorSemantic.Primary" />
                                                 </div>
 
+                                                <div class="nebula-timeline-filters">
+                                                    <div class="nebula-timeline-filters__row">
+                                                        <input class="nebula-timeline-filters__search"
+                                                               placeholder="Filtrar por texto..."
+                                                               value="@WorkspaceState.TimelineFilterText"
+                                                               @oninput="(e) => WorkspaceState.SetTimelineFilterText(e.Value?.ToString() ?? string.Empty)" />
+                                                        <select class="nebula-timeline-filters__select"
+                                                                value="@(WorkspaceState.TimelineFilterKind?.ToString() ?? "all")"
+                                                                @onchange="(e) => WorkspaceState.SetTimelineFilterKind(e.Value?.ToString())">
+                                                            <option value="all">Todos os tipos</option>
+                                                            @foreach (var k in Enum.GetNames<ActionExecutionEventKind>())
+                                                            {
+                                                                <option value="@k">@k</option>
+                                                            }
+                                                        </select>
+                                                        <select class="nebula-timeline-filters__select"
+                                                                value="@(WorkspaceState.TimelineFilterStatus?.ToString() ?? "all")"
+                                                                @onchange="(e) => WorkspaceState.SetTimelineFilterStatus(e.Value?.ToString())">
+                                                            <option value="all">Todos os status</option>
+                                                            @foreach (var s in Enum.GetNames<ActionExecutionStatus>())
+                                                            {
+                                                                <option value="@s">@s</option>
+                                                            }
+                                                        </select>
+                                                    </div>
+                                                    <div class="nebula-timeline-filters__row">
+                                                        <label class="nebula-timeline-filters__check">
+                                                            <input type="checkbox" checked="@WorkspaceState.TimelineShowOnlyErrors" @onchange="(e) => WorkspaceState.ToggleTimelineShowOnlyErrors((bool)(e.Value ?? false))" />
+                                                            Apenas erros
+                                                        </label>
+                                                        <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                                      Size="CoronaComponentSize.Small"
+                                                                      OnClick="@(() => WorkspaceState.ClearTimelineFilters())">
+                                                            Limpar filtros
+                                                        </CoronaButton>
+                                                        <span class="nebula-timeline-filters__count">@filteredEvents.Count de @allEvents.Count</span>
+                                                    </div>
+                                                </div>
+
                                                 <div class="nebula-action-log">
-                                                    @foreach (var actionEvent in NebulaWorkspaceState.GetActionEvents(turn))
+                                                    @if (filteredEvents.Count == 0)
                                                     {
-                                                        <div class="nebula-action-event">
-                                                            <div class="nebula-action-event__header">
-                                                                <div>
-                                                                    <strong>@actionEvent.Title</strong>
-                                                                    <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
+                                                        <p class="nebula-timeline-empty">Nenhum evento corresponde aos filtros.</p>
+                                                    }
+                                                    else
+                                                    {
+                                                        @foreach (var actionEvent in filteredEvents)
+                                                        {
+                                                            <div class="nebula-action-event">
+                                                                <div class="nebula-action-event__header">
+                                                                    <div>
+                                                                        <strong>@actionEvent.Title</strong>
+                                                                        <span>Passo @actionEvent.Step, tentativa @actionEvent.Attempt</span>
+                                                                    </div>
+
+                                                                    <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
+                                                                                 Variant="CoronaBadgeVariant.Soft"
+                                                                                 Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
                                                                 </div>
 
-                                                                <CoronaBadge Content="@NebulaWorkspaceState.GetActionEventLabel(actionEvent)"
-                                                                             Variant="CoronaBadgeVariant.Soft"
-                                                                             Color="@NebulaWorkspaceState.GetActionStatusColor(actionEvent.Status)" />
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
+                                                                {
+                                                                    <p>@actionEvent.Message</p>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
+                                                                {
+                                                                    <code>@actionEvent.Command</code>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
+                                                                {
+                                                                    <pre>@actionEvent.ToolResponse</pre>
+                                                                }
+
+                                                                @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
+                                                                {
+                                                                    <p class="nebula-action-event__error">@actionEvent.Error</p>
+                                                                }
                                                             </div>
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Message))
-                                                            {
-                                                                <p>@actionEvent.Message</p>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Command))
-                                                            {
-                                                                <code>@actionEvent.Command</code>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.ToolResponse))
-                                                            {
-                                                                <pre>@actionEvent.ToolResponse</pre>
-                                                            }
-
-                                                            @if (!string.IsNullOrWhiteSpace(actionEvent.Error))
-                                                            {
-                                                                <p class="nebula-action-event__error">@actionEvent.Error</p>
-                                                            }
-                                                        </div>
+                                                        }
                                                     }
                                                 </div>
                                             </section>
@@ -383,84 +479,122 @@
                                                                  Color="CoronaColorSemantic.Success" />
                                                 </div>
 
-                                                <div class="nebula-steps">
-                                                    @foreach (var command in turn.Result.Commands)
-                                                    {
-                                                        <div class="nebula-step-card">
-                                                            <div class="nebula-step-card__top">
-                                                                <div>
-                                                                    <strong>@command.Objective</strong>
-                                                                    <span class="nebula-step-card__attempt">Tentativa @command.Attempt, passo @command.Id</span>
-                                                                    <code>@command.Run</code>
-                                                                </div>
+<div class="nebula-steps">
+                                                     @foreach (var command in turn.Result.Commands)
+                                                     {
+                                                         var isEditing = WorkspaceState.IsEditingCommand(command.Id);
+                                                         <div class="nebula-step-card">
+                                                             <div class="nebula-step-card__top">
+                                                                 <div>
+                                                                     <strong>@command.Objective</strong>
+                                                                     <span class="nebula-step-card__attempt">Tentativa @command.Attempt, passo @command.Id</span>
+                                                                     @if (isEditing)
+                                                                     {
+                                                                         <textarea class="nebula-command-editor"
+                                                                                   value="@WorkspaceState.GetEditedCommand(command.Id)"
+                                                                                   @oninput="(e) => WorkspaceState.HandleEditedCommandInput(command.Id, e.Value?.ToString() ?? string.Empty)"
+                                                                                   rows="3"
+                                                                                   placeholder="Edite o comando antes de aprovar..."></textarea>
+                                                                     }
+                                                                     else
+                                                                     {
+                                                                         <code>@command.Run</code>
+                                                                     }
+                                                                 </div>
 
-                                                                <CoronaStack Direction="CoronaStackDirection.Row"
-                                                                             Wrap="CoronaStackWrap.Wrap"
-                                                                             Align="CoronaStackAlign.Center"
-                                                                             Justify="CoronaStackJustify.End"
-                                                                             Spacing=".5rem">
-                                                                    <CoronaBadge Content="@(command.IsDryRun ? "Previa" : command.Skipped ? "Ignorado" : command.Executed ? "Executado" : command.SafetyDecision == CommandSafetyDecisionType.AskApproval ? "Aguardando aprovacao" : "Bloqueado")"
-                                                     Variant="CoronaBadgeVariant.Soft"
-                                                     Color="@(command.IsDryRun ? CoronaColorSemantic.Neutral : command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
+                                                                 <CoronaStack Direction="CoronaStackDirection.Row"
+                                                                              Wrap="CoronaStackWrap.Wrap"
+                                                                              Align="CoronaStackAlign.Center"
+                                                                              Justify="CoronaStackJustify.End"
+                                                                              Spacing=".5rem">
+                                                                     <CoronaBadge Content="@(command.IsDryRun ? "Previa" : command.Skipped ? "Ignorado" : command.Executed ? "Executado" : command.SafetyDecision == CommandSafetyDecisionType.AskApproval ? "Aguardando aprovacao" : "Bloqueado")"
+                                                      Variant="CoronaBadgeVariant.Soft"
+                                                      Color="@(command.IsDryRun ? CoronaColorSemantic.Neutral : command.Executed ? CoronaColorSemantic.Success : command.Skipped ? CoronaColorSemantic.Neutral : CoronaColorSemantic.Warning)" />
 
-                                                                    @if (WorkspaceState.CanApproveCommand(command))
-                                                                    {
-                                                                        <select class="nebula-approval-scope"
-                                                                                value="@WorkspaceState.SelectedApprovalScope"
-                                                                                @onchange="@((ChangeEventArgs args) => WorkspaceState.SelectedApprovalScope = NebulaWorkspaceState.ParseApprovalScope(args.Value?.ToString()))"
-                                                                                title="Escopo da aprovacao">
-                                                                            <option value="@ApprovalScope.Once">Aprovar uma vez</option>
-                                                                            <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
-                                                                            <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
-                                                                            <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
-                                                                        </select>
-                                                                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                                                                      Size="CoronaComponentSize.Small"
-                                                                                      Color="CoronaColorSemantic.Warning"
-                                                                                      Icon="@CoronaIcons.Check"
-                                                                                      OnClick="@(() => WorkspaceState.ApproveCommandAsync(command))">
-                                                                            Executar aprovado
-                                                                        </CoronaButton>
-                                                                    }
-                                                                </CoronaStack>
-                                                            </div>
+                                                                     @if (WorkspaceState.CanApproveCommand(command))
+                                                                     {
+                                                                         <select class="nebula-approval-scope"
+                                                                                 value="@WorkspaceState.SelectedApprovalScope"
+                                                                                 @onchange="@((ChangeEventArgs args) => WorkspaceState.SelectedApprovalScope = NebulaWorkspaceState.ParseApprovalScope(args.Value?.ToString()))"
+                                                                                 title="Escopo da aprovacao">
+                                                                             <option value="@ApprovalScope.Once">Aprovar uma vez</option>
+                                                                             <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
+                                                                             <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
+                                                                             <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
+                                                                         </select>
 
-                                                            <div class="nebula-step-card__checks">
-                                                                <span>Corretude: @NebulaWorkspaceState.FormatBoolean(command.IsCorrect)</span>
-                                                                <span>Seguranca do modelo: @NebulaWorkspaceState.FormatBoolean(command.IsSafe)</span>
-                                                                <span>Seguranca local: @NebulaWorkspaceState.FormatBoolean(command.PassedLocalSafety)</span>
-                                                                @if (command.SafetyDecision is CommandSafetyDecisionType safetyDecision)
-                                                                {
-                                                                    <span>Policy: @safetyDecision</span>
-                                                                }
+                                                                         @if (isEditing)
+                                                                         {
+                                                                             <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                                                                       Size="CoronaComponentSize.Small"
+                                                                                       Color="CoronaColorSemantic.Primary"
+                                                                                       Icon="@CoronaIcons.Check"
+                                                                                       OnClick="@(() => WorkspaceState.ApproveCommandAsync(command))">
+                                                                                 Aprovar e executar
+                                                                             </CoronaButton>
+                                                                             <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                                                       Size="CoronaComponentSize.Small"
+                                                                                       Icon="@CoronaIcons.Xmark"
+                                                                                       OnClick="@(() => WorkspaceState.CancelEditingCommand(command.Id))">
+                                                                                 Cancelar
+                                                                             </CoronaButton>
+                                                                         }
+                                                                         else
+                                                                         {
+                                                                             <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                                                                       Size="CoronaComponentSize.Small"
+                                                                                       Color="CoronaColorSemantic.Warning"
+                                                                                       Icon="@CoronaIcons.Check"
+                                                                                       OnClick="@(() => WorkspaceState.ApproveCommandAsync(command))">
+                                                                                 Executar aprovado
+                                                                             </CoronaButton>
+                                                                             <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                                                       Size="CoronaComponentSize.Small"
+                                                                                       Icon="@CoronaIcons.Pen"
+                                                                                       OnClick="@(() => WorkspaceState.StartEditingCommand(command))">
+                                                                                 Editar
+                                                                             </CoronaButton>
+                                                                         }
+                                                                     }
+                                                                 </CoronaStack>
+                                                             </div>
 
-                                                                @if (command.AutoApproved)
-                                                                {
-                                                                    <span>Aprovacao: automatica</span>
-                                                                }
-                                                                else if (command.ApprovedByUser)
-                                                                {
-                                                                    <span>Aprovacao: manual</span>
-                                                                }
-                                                            </div>
+                                                             <div class="nebula-step-card__checks">
+                                                                 <span>Corretude: @NebulaWorkspaceState.FormatBoolean(command.IsCorrect)</span>
+                                                                 <span>Seguranca do modelo: @NebulaWorkspaceState.FormatBoolean(command.IsSafe)</span>
+                                                                 <span>Seguranca local: @NebulaWorkspaceState.FormatBoolean(command.PassedLocalSafety)</span>
+                                                                 @if (command.SafetyDecision is CommandSafetyDecisionType safetyDecision)
+                                                                 {
+                                                                     <span>Policy: @safetyDecision</span>
+                                                                 }
 
-                                                            @if (!string.IsNullOrWhiteSpace(command.Notes))
-                                                            {
-                                                                <p class="nebula-step-card__notes">@command.Notes</p>
-                                                            }
+                                                                 @if (command.AutoApproved)
+                                                                 {
+                                                                     <span>Aprovacao: automatica</span>
+                                                                 }
+                                                                 else if (command.ApprovedByUser)
+                                                                 {
+                                                                     <span>Aprovacao: manual</span>
+                                                                 }
+                                                             </div>
 
-                                                            @if (!string.IsNullOrWhiteSpace(command.Output))
-                                                            {
-                                                                <pre class="nebula-step-card__output">@command.Output</pre>
-                                                            }
+                                                             @if (!string.IsNullOrWhiteSpace(command.Notes))
+                                                             {
+                                                                 <p class="nebula-step-card__notes">@command.Notes</p>
+                                                             }
 
-                                                            @if (!string.IsNullOrWhiteSpace(command.Error))
-                                                            {
-                                                                <p class="nebula-action-event__error">@command.Error</p>
-                                                            }
-                                                        </div>
-                                                    }
-                                                </div>
+                                                             @if (!string.IsNullOrWhiteSpace(command.Output))
+                                                             {
+                                                                 <pre class="nebula-step-card__output">@command.Output</pre>
+                                                             }
+
+                                                             @if (!string.IsNullOrWhiteSpace(command.Error))
+                                                             {
+                                                                 <p class="nebula-action-event__error">@command.Error</p>
+                                                             }
+                                                         </div>
+                                                     }
+                                                 </div>
                                             </section>
                                         }
                                     </div>

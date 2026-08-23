@@ -533,16 +533,39 @@ var turn = new ConversationEntryViewModel
         _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource, isDryRun: true);
     }
 
-    public Task ApproveCommandAsync(CommandExecution command)
+public Task ApproveCommandAsync(CommandExecution command)
     {
         if (!CanApproveCommand(command))
         {
             return Task.CompletedTask;
         }
 
-var turn = new ConversationEntryViewModel
+        var editedRun = ConsumeEditedCommand(command.Id);
+        var commandToRun = string.IsNullOrWhiteSpace(editedRun)
+            ? command
+            : new CommandExecution
+            {
+                StepId = command.StepId,
+                OperationKind = command.OperationKind,
+                Attempt = command.Attempt,
+                Id = command.Id,
+                Objective = command.Objective,
+                Run = editedRun,
+                OriginalCommand = command.OriginalCommand,
+                ResolvedFileName = command.ResolvedFileName,
+                ResolvedArguments = command.ResolvedArguments,
+                OperatingSystem = command.OperatingSystem,
+                Shell = command.Shell,
+                ResolutionReasons = command.ResolutionReasons,
+                WorkingDirectory = command.WorkingDirectory,
+                TargetPath = command.TargetPath,
+                PlannedFiles = command.PlannedFiles,
+                Content = command.Content
+            };
+
+        var turn = new ConversationEntryViewModel
         {
-            Prompt = $"Aprovar e executar: {command.Run}",
+            Prompt = $"Aprovar e executar: {commandToRun.Run}",
             Mode = InteractionMode.Agent,
             RequestedModel = ActiveModelName,
             ConversationId = ActiveConversationId
@@ -562,7 +585,7 @@ var turn = new ConversationEntryViewModel
         var scope = SelectedApprovalScope;
         _ = CompleteApprovedCommandTurnAsync(
             turn,
-            command,
+            commandToRun,
             scope,
             turnCancellationSource);
         return Task.CompletedTask;
@@ -1473,6 +1496,148 @@ var turn = new ConversationEntryViewModel
     }
 
     public ApprovalScope SelectedApprovalScope { get; set; } = ApprovalScope.Once;
+
+    private readonly Dictionary<int, string> editingCommands = new();
+
+    public bool IsEditingCommand(int commandId) => editingCommands.ContainsKey(commandId);
+
+    public string GetEditedCommand(int commandId) =>
+        editingCommands.TryGetValue(commandId, out var text) ? text : string.Empty;
+
+    public void StartEditingCommand(CommandExecution command)
+    {
+        if (CanApproveCommand(command))
+        {
+            editingCommands[command.Id] = command.Run;
+            NotifyChanged();
+        }
+    }
+
+    public void UpdateEditedCommand(int commandId, string newCommand)
+    {
+        if (editingCommands.ContainsKey(commandId))
+        {
+            editingCommands[commandId] = newCommand;
+        }
+    }
+
+    public void HandleEditedCommandInput(int commandId, string newCommand)
+    {
+        if (editingCommands.ContainsKey(commandId))
+        {
+            editingCommands[commandId] = newCommand;
+        }
+    }
+
+    public void CancelEditingCommand(int commandId)
+    {
+        editingCommands.Remove(commandId);
+        NotifyChanged();
+    }
+
+    public string ConsumeEditedCommand(int commandId)
+    {
+        if (editingCommands.TryGetValue(commandId, out var text))
+        {
+            editingCommands.Remove(commandId);
+            return text;
+        }
+        return string.Empty;
+    }
+
+    public string TimelineFilterText { get; set; } = string.Empty;
+
+    public ActionExecutionEventKind? TimelineFilterKind { get; set; }
+
+    public ActionExecutionStatus? TimelineFilterStatus { get; set; }
+
+    public bool TimelineShowOnlyErrors { get; set; }
+
+    public void SetTimelineFilterText(string text)
+    {
+        TimelineFilterText = text ?? string.Empty;
+        NotifyChanged();
+    }
+
+    public void SetTimelineFilterKind(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value == "all")
+        {
+            TimelineFilterKind = null;
+        }
+        else if (Enum.TryParse<ActionExecutionEventKind>(value, out var kind))
+        {
+            TimelineFilterKind = kind;
+        }
+        NotifyChanged();
+    }
+
+    public void SetTimelineFilterStatus(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value == "all")
+        {
+            TimelineFilterStatus = null;
+        }
+        else if (Enum.TryParse<ActionExecutionStatus>(value, out var status))
+        {
+            TimelineFilterStatus = status;
+        }
+        NotifyChanged();
+    }
+
+    public void ToggleTimelineShowOnlyErrors(bool value)
+    {
+        TimelineShowOnlyErrors = value;
+        NotifyChanged();
+    }
+
+    public void ClearTimelineFilters()
+    {
+        TimelineFilterText = string.Empty;
+        TimelineFilterKind = null;
+        TimelineFilterStatus = null;
+        TimelineShowOnlyErrors = false;
+        NotifyChanged();
+    }
+
+    public IReadOnlyList<ActionExecutionEvent> GetFilteredActionEvents(ConversationEntryViewModel turn)
+    {
+        var events = GetActionEvents(turn);
+        if (events.Count == 0)
+        {
+            return events;
+        }
+
+        var filtered = events.AsEnumerable();
+
+        if (TimelineFilterKind.HasValue)
+        {
+            filtered = filtered.Where(e => e.Kind == TimelineFilterKind.Value);
+        }
+
+        if (TimelineFilterStatus.HasValue)
+        {
+            filtered = filtered.Where(e => e.Status == TimelineFilterStatus.Value);
+        }
+
+        if (TimelineShowOnlyErrors)
+        {
+            filtered = filtered.Where(e => e.IsError || e.Status == ActionExecutionStatus.Failed || e.Status == ActionExecutionStatus.Unsafe);
+        }
+
+        if (!string.IsNullOrWhiteSpace(TimelineFilterText))
+        {
+            var q = TimelineFilterText.Trim();
+            filtered = filtered.Where(e =>
+                e.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                e.Message.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                (e.Command != null && e.Command.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (e.ToolResponse != null && e.ToolResponse.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (e.Error != null && e.Error.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return filtered.ToList();
+    }
 
     public bool CanApproveCommand(CommandExecution command)
     {
