@@ -1,0 +1,36 @@
+{
+  "name": ".NET 10 MAUI Android",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+
+  "overrideCommand": true,
+
+  "remoteUser": "root",
+
+  "workspaceFolder": "/workspace",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.vscode-dotnet-runtime",
+        "ms-dotnettools.dotnet-maui",
+        "visualstudioexptteam.vscodeintellicode"
+      ],
+
+      "settings": {
+        "dotnet.telemetry.optOut": true,
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  "containerEnv": {
+    "JAVA_HOME": "/usr/lib/jvm/java-21-openjdk-amd64",
+    "ANDROID_HOME": "/opt/android-sdk",
+    "ANDROID_SDK_ROOT": "/opt/android-sdk"
+  }
+}
