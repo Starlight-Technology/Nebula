@@ -90,10 +90,32 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
             "The target is an allowed file inside the workspace or controlled temp directory.");
     }
 
-    private string ResolvePath(string path) =>
-        Path.IsPathRooted(path)
-            ? Path.GetFullPath(path)
-            : Path.GetFullPath(path, workspaceRoot);
+    private string ResolvePath(string path)
+    {
+        var normalized = NormalizePathSeparators(path);
+        return Path.IsPathRooted(normalized)
+            ? Path.GetFullPath(normalized)
+            : Path.GetFullPath(normalized, workspaceRoot);
+    }
+
+    private static string NormalizePathSeparators(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        if (path.Length >= 2 &&
+            char.IsLetter(path[0]) &&
+            path[1] == ':')
+        {
+            return path;
+        }
+
+        return Path.DirectorySeparatorChar == '/'
+            ? path.Replace('\\', '/')
+            : path.Replace('/', '\\');
+    }
 
     private static bool IsUnder(string candidate, string root)
     {

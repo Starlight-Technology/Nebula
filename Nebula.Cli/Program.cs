@@ -124,12 +124,17 @@ services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
 services.AddSingleton<ICommandResolver, CommandResolver>();
 services.AddSingleton<IOperationKindDetector, OperationKindDetector>();
 services.AddSingleton<IExecutionEvidenceCollector, ExecutionEvidenceCollector>();
-services.AddSingleton<IFileWriteSafetyClassifier, FileWriteSafetyClassifier>();
+services.AddSingleton<IFileWriteSafetyClassifier>(provider =>
+    new FileWriteSafetyClassifier(
+        ReferenceWorkspace.Resolve(
+            provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root));
 services.AddSingleton<IScriptContentSafetyClassifier, ScriptContentSafetyClassifier>();
 services.AddSingleton<IJsonExtractor, JsonExtractor>();
 services.AddSingleton<ILogger, ConsoleLogger>();
-services.AddSingleton<DeterministicCommandClassifier>(_ =>
-    new DeterministicCommandClassifier(Environment.CurrentDirectory));
+services.AddSingleton<DeterministicCommandClassifier>(provider =>
+    new DeterministicCommandClassifier(
+        ReferenceWorkspace.Resolve(
+            provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root));
 services.AddScoped<MlNetCommandClassifier>(provider =>
     new MlNetCommandClassifier(
         provider.GetRequiredService<IMlModelStore>(),

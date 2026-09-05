@@ -3248,9 +3248,34 @@ return (observationMessage, historyEntry);
             return string.Empty;
         }
 
-        return Path.IsPathRooted(targetPath)
-            ? Path.GetFullPath(targetPath)
-            : Path.GetFullPath(targetPath, workingDirectory);
+        var normalized = NormalizePathSeparators(targetPath);
+        return Path.IsPathRooted(normalized)
+            ? Path.GetFullPath(normalized)
+            : Path.GetFullPath(normalized, workingDirectory);
+    }
+
+    /// <summary>
+    /// Converts backslash separators to the host separator so paths emitted by
+    /// the model with Windows-style separators resolve correctly on POSIX hosts.
+    /// Windows drive-letter paths (e.g. "C:\foo") are preserved unchanged.
+    /// </summary>
+    internal static string NormalizePathSeparators(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        if (path.Length >= 2 &&
+            char.IsLetter(path[0]) &&
+            path[1] == ':')
+        {
+            return path;
+        }
+
+        return Path.DirectorySeparatorChar == '/'
+            ? path.Replace('\\', '/')
+            : path.Replace('/', '\\');
     }
 
     private static string? TryExtractScriptPath(

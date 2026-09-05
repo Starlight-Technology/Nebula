@@ -145,13 +145,17 @@ public static class MauiProgram
         builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
         builder.Services.AddSingleton<IOperationKindDetector, OperationKindDetector>();
         builder.Services.AddSingleton<IExecutionEvidenceCollector, ExecutionEvidenceCollector>();
-        builder.Services.AddSingleton<IFileWriteSafetyClassifier, FileWriteSafetyClassifier>();
+        builder.Services.AddSingleton<IFileWriteSafetyClassifier>(provider =>
+            new FileWriteSafetyClassifier(
+                ReferenceWorkspace.Resolve(
+                    provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root));
         builder.Services.AddSingleton<IScriptContentSafetyClassifier, ScriptContentSafetyClassifier>();
         builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
         builder.Services.AddSingleton<Agent.ILogger, ConsoleLogger>();
         builder.Services.AddSingleton<DeterministicCommandClassifier>(provider =>
             new DeterministicCommandClassifier(
-                Environment.CurrentDirectory,
+                ReferenceWorkspace.Resolve(
+                    provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root,
                 provider.GetRequiredService<IScriptContentSafetyClassifier>()));
         builder.Services.AddScoped<MlNetCommandClassifier>(provider =>
             new MlNetCommandClassifier(

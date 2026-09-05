@@ -105,7 +105,7 @@ Use these categories when describing Nebula:
 | Optional per-workspace Docker sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw`, imagem default `mcr.microsoft.com/powershell:lts`; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
 | OpenClaw integration | Not found | No `OpenClaw` references were found outside the user request. |
 | Redis/SQLite/queues/background worker | Not found | No Redis, SQLite, Hangfire, Quartz, `BackgroundService`, `IHostedService`, or queue worker implementation found. |
-| Web app Docker service | Partial | Dockerfile exists and `nebula-web` service is present but commented in `docker-compose.yml`. Docker daemon was unavailable during build validation. |
+| Web app Docker service | Implemented | `nebula-web` service is active in `docker-compose.yml` (container runs the built web app). Docker daemon was unavailable on some machines during build validation. |
 | GPU acceleration profiles | Experimental/configured | Compose override files exist for NVIDIA, AMD ROCm, and Intel Vulkan. Runtime telemetry mainly supports Docker stats and optional NVIDIA metrics. |
 | Corona design system | Implemented dependency/submodule | `Corona/Corona/Corona.csproj` is in the solution; `Corona/Corona.Tests` exists outside `Nebula.slnx`. |
 | Nebula.Shell | Legacy/placeholder | `Nebula.Shell` exists as an empty class library and is not included in `Nebula.slnx`. |
@@ -861,8 +861,10 @@ of colon-separated configuration keys.
 - `postgres`
 - `searxng`
 
-It also contains a commented `nebula-web` service. Because it is commented out,
-`docker compose up -d` does not currently start the web app container.
+It also contains a `nebula-web` service that builds and runs the web app container.
+`docker compose up -d` starts it alongside the other services (validated under
+Podman rootless; the SearXNG service requires SELinux relabel for bind mounts —
+see the Compose `:Z` flag).
 
 Validation result on 2026-06-22:
 
@@ -1123,7 +1125,8 @@ These are current gaps or cautions confirmed by inspection.
   succeeded with 0 warnings and 0 errors.
 - Docker Compose config validates without a running daemon, but Docker image build
   could not be validated because Docker Desktop's Linux engine was unavailable.
-- The `nebula-web` compose service is commented out.
+- The `nebula-web` compose service is active (not commented). Its Docker image
+  build could not be fully validated when the Docker engine was unavailable.
 - `ollama-start.sh` is mounted but not invoked by the default compose entrypoint.
 - The Dockerfile should be revalidated when Docker is available. It copies several
   project files before restore; confirm every transitive project reference is copied

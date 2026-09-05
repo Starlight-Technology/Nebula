@@ -188,6 +188,21 @@ public class Manager : IManager
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Run);
+        return RunApprovedCommandCoreAsync(
+            command,
+            progress,
+            scope,
+            cancellationToken);
+    }
+
+    private async Task<ConversationTurn> RunApprovedCommandCoreAsync(
+        CommandExecution command,
+        IProgress<ConversationTurn>? progress,
+        ApprovalScope scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Run);
 
         var prompt = $"Executar comando aprovado: {command.Run}";
         logger.Log(
@@ -203,11 +218,21 @@ public class Manager : IManager
                 .Add(normalized);
         }
 
-        return actionRunner.RunAsync(
+        var requestId = Guid.NewGuid();
+        var promptRequest = new PromptRequest
+        {
+            Id = requestId,
+            Prompt = prompt,
+            Mode = InteractionMode.Agent,
+            Classification = InteractionMode.Agent.ToString()
+        };
+        await promptAuditService.SaveAsync(promptRequest, cancellationToken);
+
+        return await actionRunner.RunAsync(
             new AgentActionRunRequest
             {
                 ConversationId = activeConversationId,
-                RequestId = Guid.NewGuid(),
+                RequestId = requestId,
                 Prompt = prompt,
                 Mode = InteractionMode.Agent,
                 ChatHistoryContext =

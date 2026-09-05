@@ -128,7 +128,8 @@ public sealed class LearningEngine : ILearningEngine
         return webConfigured
             ?
             [
-                new WebResearchProvider(researchService, webConfigured)
+                new WebResearchProvider(researchService, webConfigured),
+                new ManualSeedResearchProvider()
             ]
             :
             [

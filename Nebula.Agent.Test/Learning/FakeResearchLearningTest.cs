@@ -111,7 +111,7 @@ public sealed class FakeResearchLearningTest
     }
 
     [Fact]
-    public async Task empty_fake_research_stops_once_without_creating_knowledge()
+    public async Task empty_fake_research_falls_back_to_manual_seeds_when_no_other_source()
     {
         var store = new InMemoryKnowledgeStore();
         var provider = new FakeResearchProvider();
@@ -120,16 +120,14 @@ public sealed class FakeResearchLearningTest
 
         var report = await engine.LearnAsync(
             new LearningRequest(
-                "Assunto sem fonte",
-                KnowledgeDomain.General),
+                "Aprenda boas praticas de seguranca para comandos shell",
+                KnowledgeDomain.ShellSecurity),
             CancellationToken.None);
 
-        Assert.False(report.Success);
+        Assert.True(report.Success, report.Error);
         Assert.Equal(1, provider.SearchCalls);
-        Assert.Equal(0, extractor.ExtractCalls);
-        Assert.Empty(report.Items);
-        Assert.Empty(report.Sources);
-        Assert.Empty(report.Experiments);
+        Assert.NotEmpty(report.Items);
+        Assert.NotEmpty(report.Sources);
     }
 
     private static LearningEngine CreateEngine(

@@ -112,13 +112,17 @@ builder.Services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
 builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
 builder.Services.AddSingleton<IOperationKindDetector, OperationKindDetector>();
 builder.Services.AddSingleton<IExecutionEvidenceCollector, ExecutionEvidenceCollector>();
-builder.Services.AddSingleton<IFileWriteSafetyClassifier, FileWriteSafetyClassifier>();
+builder.Services.AddSingleton<IFileWriteSafetyClassifier>(provider =>
+    new FileWriteSafetyClassifier(
+        ReferenceWorkspace.Resolve(
+            provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root));
 builder.Services.AddSingleton<IScriptContentSafetyClassifier, ScriptContentSafetyClassifier>();
 builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
 builder.Services.AddSingleton<Nebula.Agent.ILogger, ConsoleLogger>();
 builder.Services.AddSingleton<DeterministicCommandClassifier>(provider =>
     new DeterministicCommandClassifier(
-        Environment.CurrentDirectory,
+        ReferenceWorkspace.Resolve(
+            provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root,
         provider.GetRequiredService<IScriptContentSafetyClassifier>()));
 builder.Services.AddScoped<MlNetCommandClassifier>(provider =>
     new MlNetCommandClassifier(
@@ -183,7 +187,7 @@ catch (Exception ex)
     builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 
-var pgConn = builder.Configuration["POSTGRES_CONNECTION"] ?? "Host=localhost;Database=nebula;Username=postgres;Password=postgres123";
+var pgConn = builder.Configuration["POSTGRES_CONNECTION"] ?? "Host=postgres-nebula;Database=nebula;Username=postgres;Password=postgres123";
 builder.Services.AddDbContext<PostgresContext>(options => options.UseNpgsql(pgConn));
 builder.Services.AddScoped<IMlModelStore, PostgresMlModelStore>();
 builder.Services.AddScoped<ICommandRepository, PostgresCommandRepository>();

@@ -131,6 +131,12 @@ public sealed class LearningOrchestrator : ILearningOrchestrator
                 continue;
             }
 
+            if (provider.SourceType == LearningSourceType.ManualSeed &&
+                documents.Count > 0)
+            {
+                continue;
+            }
+
             if (!provider.IsConfigured)
             {
                 if (provider.SourceType == LearningSourceType.WebResearch &&
