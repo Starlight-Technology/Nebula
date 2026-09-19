@@ -1,5 +1,6 @@
 using Nebula.Core.Agent;
 using Nebula.Core.Configuration;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Agent.Test;
 
@@ -57,5 +58,19 @@ public sealed class LocalFirstArchitectureTest
         Assert.Equal(ProviderMode.LocalPreferred, snapshot.ProviderMode);
         snapshot.ProviderMode = ProviderMode.LocalOnly;
         Assert.Equal(ProviderMode.LocalOnly, snapshot.ProviderMode);
+    }
+
+    [Fact]
+    public void user_message_should_preserve_provider_mode_for_runtime_selection()
+    {
+        var message = new UserMessage(
+            "Crie um script local",
+            InteractionMode.Agent,
+            WorkspaceRoot: "/tmp/workspace",
+            IsDryRun: true,
+            ProviderMode: ProviderMode.LocalOnly);
+
+        Assert.Equal(ProviderMode.LocalOnly, message.ProviderMode);
+        Assert.True(message.IsDryRun);
     }
 }

@@ -388,6 +388,8 @@ public class Manager : IManager
             maxActionStepCount,
             maxActionRetryCount);
 
+        actionRequest.ProviderMode = request.Message.ProviderMode;
+
         var runId = await orchestrator.RunAsync(actionRequest, cancellationToken);
 
         if (progress != null)

@@ -46,6 +46,13 @@ public sealed class AgentActionRunRequest
     /// </summary>
     public IReadOnlyCollection<string>? ConversationApprovedCommands { get; set; }
 
+    /// <summary>
+    /// Provider mode selected for this invocation. The runtime should prefer
+    /// local execution unless the user explicitly allows remote behavior.
+    /// </summary>
+    public Nebula.Core.Configuration.ProviderMode ProviderMode { get; set; } =
+        Nebula.Core.Configuration.ProviderMode.LocalPreferred;
+
     [Obsolete("Use MaxRetriesPerStep instead.")]
     public int? MaxRetries { get; set; }
 }
