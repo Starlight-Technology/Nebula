@@ -14,7 +14,7 @@ Isso sobe:
 - `mongodb`
 - `postgres`
 
-Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:7b`.
+Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:8b`.
 
 ## Perfis de aceleracao GPU
 
@@ -69,7 +69,7 @@ Variaveis uteis:
 
 Modelo principal:
 
-- `OLLAMA_MODEL=deepseek-r1:7b`
+- `OLLAMA_MODEL=deepseek-r1:8b`
 
 Modelos adicionais para pre-carregar na inicializacao:
 
@@ -79,7 +79,7 @@ Exemplo:
 
 ```powershell
 $env:OLLAMA_MODEL = "qwen3:8b"
-$env:OLLAMA_MODELS = "deepseek-r1:7b,llama3.1:8b"
+$env:OLLAMA_MODELS = "deepseek-r1:8b,llama3.1:8b"
 docker compose up -d
 ```
 

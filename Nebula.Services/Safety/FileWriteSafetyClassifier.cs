@@ -42,7 +42,7 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
 
         var fullPath = ResolvePath(targetPath);
         if (SensitiveSegments.Any(segment =>
-            Path.GetFileName(fullPath).Contains(
+            fullPath.Contains(
                 segment,
                 StringComparison.OrdinalIgnoreCase)))
         {

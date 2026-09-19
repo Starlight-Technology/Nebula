@@ -8,11 +8,16 @@ using MongoDB.Driver;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Background;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
 using Nebula.Core.Agent;
+using Nebula.Core.Background;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
@@ -195,6 +200,8 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
                 fallbackExtractor: new KnowledgeExtractor(),
                 log: provider.GetRequiredService<Agent.ILogger>().Log));
         builder.Services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
+        builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+        builder.Services.AddHostedService<BackgroundTaskHostedService>();
         builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
         builder.Services.AddScoped<NebulaContextBuilder>();
         builder.Services.AddScoped<IConversationContextService, ConversationContextService>();
@@ -207,7 +214,8 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         {
             var testClient = new MongoClient(mongoConn);
             var testDb = testClient.GetDatabase(mongoDb);
-            testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token).GetAwaiter().GetResult();
 
             builder.Services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
             builder.Services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
@@ -216,6 +224,11 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         catch (MongoAuthenticationException ex)
         {
             Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
+            builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("Warning: MongoDB ping timed out after 2s. Falling back to NoOpPromptRequestRepository.");
             builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
         }
         catch (Exception ex)
@@ -261,8 +274,58 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
         builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();
         builder.Services.AddScoped<ICommandApprovalService, CommandApprovalService>();
-        builder.Services.AddScoped<IAgentActionRunner, AgentActionRunner>();
-        builder.Services.AddScoped<IManager, Manager>();
+
+        builder.Services.AddSingleton<IAgentRunEventPublisher, ChannelAgentRunEventPublisher>();
+        builder.Services.AddSingleton<IAgentRunQueue, AgentRunBackgroundService>();
+        builder.Services.AddHostedService<AgentRunBackgroundService>(provider => (AgentRunBackgroundService)provider.GetRequiredService<IAgentRunQueue>());
+        builder.Services.AddScoped<IAgentRunOrchestrator, AgentRunOrchestrator>();
+
+        builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner(
+            provider.GetRequiredService<ILlamaClient>(),
+            provider.GetRequiredService<IShellExecutor>(),
+            provider.GetRequiredService<IJsonExtractor>(),
+            provider.GetRequiredService<Agent.ILogger>(),
+            commandRepository: provider.GetRequiredService<ICommandRepository>(),
+            maxRetries:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_RETRIES"),
+                    out var runnerMaxRetries)
+                    ? runnerMaxRetries
+                    : 6,
+            maxSteps:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_STEPS"),
+                    out var runnerMaxSteps)
+                    ? runnerMaxSteps
+                    : 15,
+            commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+            runtimeSettings: provider.GetRequiredService<NebulaRuntimeSettings>(),
+            agentRunStore: provider.GetRequiredService<IAgentRunStore>()));
+        builder.Services.AddScoped<IManager>(provider => new Manager(
+            provider.GetRequiredService<ILlamaClient>(),
+            provider.GetRequiredService<IShellExecutor>(),
+            provider.GetRequiredService<IJsonExtractor>(),
+            provider.GetRequiredService<Agent.ILogger>(),
+            commandRepository: provider.GetRequiredService<ICommandRepository>(),
+            promptRepository: provider.GetRequiredService<IPromptRequestRepository>(),
+            conversationMemoryRepository: provider.GetRequiredService<IConversationMemoryRepository>(),
+            contextBuilder: provider.GetRequiredService<NebulaContextBuilder>(),
+            maxActionRetries:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_RETRIES"),
+                    out var maxActionRetries)
+                    ? maxActionRetries
+                    : 6,
+            maxActionSteps:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_STEPS"),
+                    out var maxActionSteps)
+                    ? maxActionSteps
+                    : 15,
+            actionRunner: provider.GetRequiredService<IAgentActionRunner>(),
+            conversationContextService: provider.GetRequiredService<IConversationContextService>(),
+            commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+            orchestrator: provider.GetRequiredService<IAgentRunOrchestrator>()));
 
         builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
@@ -274,6 +337,9 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
                 migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
             PostgresDatabaseInitializer.Initialize(postgresContext);
         }
+
+        var llamaClient = app.Services.GetRequiredService<ILlamaClient>();
+        _ = llamaClient.EnsureInstalledModelSelectedAsync();
 
         return app;
     }

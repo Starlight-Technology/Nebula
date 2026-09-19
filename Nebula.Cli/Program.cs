@@ -1,12 +1,18 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Background;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Core.Agent;
+using Nebula.Core.Background;
 using Nebula.Core.Commands;
 using Nebula.Core.Interactions;
 using Nebula.Core.Learning;
@@ -170,6 +176,8 @@ services.AddScoped<IKnowledgeExtractor>(provider =>
         fallbackExtractor: new KnowledgeExtractor(),
         log: provider.GetRequiredService<ILogger>().Log));
 services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
+services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+services.AddHostedService<BackgroundTaskHostedService>();
 services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
 services.AddScoped<NebulaContextBuilder>();
 services.AddScoped<IConversationContextService, ConversationContextService>();
@@ -183,7 +191,8 @@ try
     mongoSettings.ConnectTimeout = TimeSpan.FromSeconds(3);
     var testClient = new MongoClient(mongoSettings);
     var testDb = testClient.GetDatabase(mongoDb);
-    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token).GetAwaiter().GetResult();
 
     services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
     services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
@@ -192,6 +201,11 @@ try
 catch (MongoAuthenticationException ex)
 {
     Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
+    services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("Warning: MongoDB ping timed out after 2s. Falling back to NoOpPromptRequestRepository.");
     services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 catch (Exception ex)
@@ -233,6 +247,10 @@ services.AddScoped<IPolicySimulator, PolicySimulator>();
 services.AddScoped<IGitDiffService, GitDiffService>();
 services.AddScoped<ICommandApprovalService, CommandApprovalService>();
 
+services.AddSingleton<IAgentRunEventPublisher, ChannelAgentRunEventPublisher>();
+services.AddSingleton<IAgentRunQueue, AgentRunBackgroundService>();
+services.AddScoped<IAgentRunOrchestrator, AgentRunOrchestrator>();
+
 services.AddScoped<IAgentActionRunner, AgentActionRunner>();
 services.AddScoped<IManager>(provider => new Manager(
     provider.GetRequiredService<ILlamaClient>(),
@@ -253,13 +271,17 @@ services.AddScoped<IManager>(provider => new Manager(
             : 15,
     actionRunner: provider.GetRequiredService<IAgentActionRunner>(),
     conversationContextService: provider.GetRequiredService<IConversationContextService>(),
-    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>()));
+    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+    orchestrator: provider.GetRequiredService<IAgentRunOrchestrator>()));
 
 var provider = services.BuildServiceProvider();
 using var scope = provider.CreateScope();
 
 await PostgresDatabaseInitializer.InitializeAsync(
     scope.ServiceProvider.GetRequiredService<PostgresContext>());
+
+var llamaClient = scope.ServiceProvider.GetRequiredService<ILlamaClient>();
+await llamaClient.EnsureInstalledModelSelectedAsync();
 
 var manager = scope.ServiceProvider.GetRequiredService<IManager>();
 var runtimeSettings = scope.ServiceProvider.GetRequiredService<NebulaRuntimeSettings>();

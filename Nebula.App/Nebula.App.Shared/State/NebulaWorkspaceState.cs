@@ -471,7 +471,9 @@ public sealed class NebulaWorkspaceState(
             return;
         }
 
-var turn = new ConversationEntryViewModel
+        await EnsureSettingsLoadedAsync();
+
+        var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
             Mode = SelectedInteractionMode,
@@ -510,6 +512,8 @@ var turn = new ConversationEntryViewModel
         {
             return;
         }
+
+        await EnsureSettingsLoadedAsync();
 
         var turn = new ConversationEntryViewModel
         {
@@ -1050,7 +1054,9 @@ public Task ApproveCommandAsync(CommandExecution command)
         return run.FinishedAt is null &&
                run.Status != nameof(ActionExecutionStatus.Completed) &&
                run.Status != nameof(ActionExecutionStatus.Failed) &&
-               run.Status != nameof(ActionExecutionStatus.Unsafe);
+               run.Status != nameof(ActionExecutionStatus.Unsafe) &&
+               run.Status != nameof(ActionExecutionStatus.Blocked) &&
+               run.Status != nameof(ActionExecutionStatus.Cancelled);
     }
 
     public ConversationEntryViewModel? ActiveMissionTurn
@@ -1804,7 +1810,7 @@ public Task ApproveCommandAsync(CommandExecution command)
                 new UserMessage(
                     normalizedPrompt,
                     turn.Mode,
-                    WorkspaceRoot: QuickSettings.WorkspaceRoot,
+                    WorkspaceRoot: RuntimeSettings.WorkspaceRoot,
                     IsDryRun: isDryRun),
                 progress,
                 turnCancellationSource.Token);

@@ -363,3 +363,12 @@ MigrationBackup/
 FodyWeavers.xsd
 # Locally trained command safety models
 models/*.zip
+
+# Nebula local secrets and build outputs
+/.env
+*.out
+*.binlog
+.codex-temp/
+%USERPROFILE%/
+hello.py
+New\ Text\ Document.txt

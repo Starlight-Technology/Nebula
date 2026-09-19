@@ -835,6 +835,11 @@ private static void AssertReasoningBeforeResponse(
             return Task.FromResult(true);
         }
 
+        public Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
         public Task<LlamaPullResult> PullModelAsync(string modelName, bool activateAfterInstall = false, IProgress<LlamaPullProgress>? progress = null, CancellationToken cancellationToken = default)
         {
             SelectedModel = modelName;

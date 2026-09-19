@@ -1,31 +1,35 @@
 # AGENTS.md - Nebula Repository Guide
 
-Last verified: 2026-09-16.
+Last verified: 2026-09-18.
 
 This guide is for coding agents working in the Nebula repository. It is based on
 the current code, project files, docs, tests, Docker files, and local validation
 commands. Do not treat roadmap notes as implemented behavior unless the current
-code also supports them.
+code also supports them. All uncommitted but finalized work in the working tree
+on 2026-09-18 (see `git status` below) has been verified and included as implemented.
 
 ## Context Summary — READ FIRST (All Agents Must Refresh)
 
 > **Refresh obrigatório:** Todo agente deve ler este bloco no início de cada tarefa. É o resumo executivo do contexto atual. Se divergir de seções detalhadas abaixo, vale o comportamento verificado em código.
 
-**O que é Nebula:** Assistente/agente local-first em **.NET 10** com UI Blazor Web + MAUI, cliente Ollama local (`deepseek-r1:7b` em `http://localhost:11434`), modos explícitos **Chat** (só conversa) vs **Agent** (ReAct JSON + execução real com evidência). Stack: `Corona` design system (submodule), PostgreSQL (primário, EF migrations), MongoDB opcional (ping), SearXNG/Bing/Brave para research.
+**O que é Nebula:** Assistente/agente local-first em **.NET 10** com UI Blazor Web + MAUI, cliente Ollama local (`deepseek-r1:8b` em `http://localhost:11434`, `global.json` `10.0.111` `rollForward latestFeature`, CI `10.0.400`), modos explícitos **Chat** (só conversa) vs **Agent** (ReAct JSON + execução real com evidência). Stack: `Corona` design system (submodule), PostgreSQL (primário, EF migrations, `PostgresAgentRunStore` transacional), MongoDB opcional (ping 2s c/ timeout), SearXNG/Bing/Brave para research. Auditoria 2026-09-18 corrigiu 5 críticos de Safety + `LlamaClient` `InfiniteTimeout` + SSRF.
 
 **Invariantes que não podem quebrar:**
 - Chat nunca executa `TerminalCommand`/`FileWrite`/tools; Agent exige evidência real (arquivo, teste, build, log) antes de `isComplete=true`.
-- Safety é em camadas e não é burlável: `ActionRequestValidator` → `DeterministicCommandClassifier` (autoridade) → `MlNetCommandClassifier` (advisory) → `CommandPolicyEngine`/`OperationPolicyEngine` (`Allow`/`AskApproval`/`Block`). ML nunca autoriza sozinho.
-- `SandboxMode.Docker` só isola `AskApproval` de `TerminalCommand`/`ScriptExecution` em container sem rede/caps; `.env`/credenciais, alvos fora de workspace/temp e `ConcurrentModificationGuard` continuam bloqueando/aprovando.
+- Safety é em camadas e não é burlável: `ActionRequestValidator` → `DeterministicCommandClassifier` (autoridade, bloqueia `curl|wget|iwr | sh|python|perl|ruby|node|php`, `nc|ncat|netcat|telnet|socat` como Network, `su|doas|pkexec|gsudo|setcap` como Privileged) → `MlNetCommandClassifier` (advisory) → `CommandPolicyEngine`/`OperationPolicyEngine` (`Allow`/`AskApproval`/`Block`). ML nunca autoriza sozinho.
+- `SandboxMode.Docker` só isola `AskApproval` de `TerminalCommand`/`ScriptExecution` em container `--network none --cap-drop ALL --security-opt no-new-privileges`; valida `IsUnderAllowedRoot` (permite `/workspace`, `/tmp/*`, `C:\`, `nebula-workspace`, `Nebula` temp, `Environment.CurrentDirectory`; bloqueia `/`); `.env`/credenciais, alvos fora de workspace/temp e `ConcurrentModificationGuard` continuam bloqueando/aprovando. `FileWrite`/`PlannedPatch` só auto-aprovam se `target` e `workingDirectory` estiverem dentro de `session.WorkspaceRoot` ou `Nebula` temp (hardening C-01/C-02).
+- `FileRead` fora do workspace agora requer `AskApproval` mesmo quando não sensível (C-04); `.env/.ssh/id_rsa` bloqueados via `fullPath.Contains` (não só `GetFileName`).
+- `LearningSourceReader.ReadSitesAsync` bloqueia SSRF (`localhost`, `127.0.0.1`, `10/8`, `172.16/12`, `192.168/16`, `169.254`, IPv6 link-local) igual a `FreeWebResearchPipeline.ValidatePublicHttpUrl`.
 - `ReferenceWorkspace.Resolve` define o workspace (`NEBULA_WORKSPACE_ROOT` → `Max` ~15 arquivos .md no prompt; tudo limitado por caps de tamanho/contagem.
-- `Nebula.slnx` inclui 15 projetos; `Corona.Tests`, `BlazorApp`, `Nebula.Shell` estão **fora** do slnx. SDK validado `10.0.301`/`10.0.400`. `plan.md` é roadmap, não fonte de verdade.
+- `Nebula.slnx` inclui 15 projetos; `Corona.Tests`, `BlazorApp`, `Nebula.Shell` estão **fora** do slnx. `global.json` `10.0.111` (CI `10.0.400`). `plan.md` é roadmap, não fonte de verdade.
 
 **Onde ler/onde agir:**
-- Roots: `Nebula.App.Web/Program.cs`, `Nebula.App/MauiProgram.cs`, `Nebula.Cli/Program.cs` — toda nova provedor/ferramenta precisa registro nos 3.
-- Loop: `Nebula.Agent/Application/AgentActionRunner.cs` + `AgentActionSession.cs`; Safety: `Nebula.Agent/Safety/*` + `Nebula.Runner/ShellExecutor.cs` + `CommandSandbox.cs`.
-- UI: `Nebula.App.Shared/Pages/Chat.razor` + `State/NebulaWorkspaceState.cs` (`nebula.quick-settings.v1`).
-- Persistência: `Nebula.Postgres.Context` (tabelas `requests`, `commands`, `knowledge_*`, `workspace_memory` `{workspace,kind,key}`, `user_memory`, `agent_runs`...). `PostgresDatabaseInitializer` + migrations são autoridade.
-- Build/Test: `dotnet restore Nebula.slnx` → `dotnet build` (pode travar em podman rootless; usar `/tmp` cópia se overlay negar `obj/`). Testes: `Nebula.Agent.Test` (~493 passed/33 failed = DI `ILogger<AgentRunBackgroundService>` faltando), `Nebula.App.Test` 19 passed, `Corona.Tests` 41 passed. Docker: `docker-compose.yml` (`ollama`, `postgres`, `mongodb`, `searxng`, `nebula-web`); SearXNG precisa `secret_key` trocado.
+- Roots: `Nebula.App.Web/Program.cs:40`, `Nebula.App/MauiProgram.cs:46`, `Nebula.Cli/Program.cs:39` — toda nova provedor/ferramenta precisa registro nos 3.
+- Loop: `Nebula.Agent/AgentActionRunner.cs:32` + `Nebula.Agent/Domain/AgentActionSession.cs:14`; Safety: `Nebula.Services/Safety/*` + `Nebula.Runner/ShellExecutor.cs:8` + `Nebula.Runner/CommandSandbox.cs:23`.
+- Orchestration (finalized 2026-09-18, previously untracked): `Nebula.Agent/Application/AgentRunOrchestrator.cs:13`, `IAgentRunOrchestrator.cs:11`, `IAgentRunQueue.cs:11`, `Background/BackgroundTaskHostedService.cs:7`, `Application/Events/*`, `Infrastructure/Events/ChannelAgentRunEventPublisher.cs:7`, `Infrastructure/Execution/AgentRunBackgroundService.cs:12`, `Nebula.Core/Background/*`, `Nebula.Services/Learning/FreeTextSearchProvider.cs:11`.
+- UI: `Nebula.App.Shared/Pages/Chat.razor:1` + `State/NebulaWorkspaceState.cs:38` (`nebula.quick-settings.v1`).
+- Persistência: `Nebula.Postgres.Context/PostgresContext.cs:7` (tabelas `requests`, `commands`, `knowledge_*`, `workspace_memory` `{workspace,kind,key}`, `user_memory`, `agent_runs`...). `PostgresDatabaseInitializer` + 14 migrations são autoridade; `PostgresAgentRunStore.cs:16` agora usa `BeginTransactionAsync` com bypass InMemory.
+- Build/Test: `global.json 10.0.111` → `dotnet restore Nebula.slnx` → `dotnet build` (pode travar em podman rootless; usar `/tmp` cópia se overlay negar `obj/`). Testes: 526 casos `Nebula.Agent.Test` (DI fix `Manager.cs:78` adiciona `AddLogging()`), 19 `Nebula.App.Test`, 49 `Corona.Tests`. CI: `.github/workflows/ci.yml:1` (restore/build/test/compose config) em `10.0.400`. Docker: `docker-compose.yml:1` (`ollama`, `postgres`, `mongodb`, `searxng`, `nebula-web` com `Nebula.Core/Services` no `COPY`); SearXNG precisa `secret_key` trocado.
 
 ## Table of Contents
 
@@ -34,22 +38,32 @@ code also supports them.
 2. [Capability Status](#capability-status)
 3. [Repository Map](#repository-map)
 4. [Architecture](#architecture)
-5. [Runtime Lifecycle](#runtime-lifecycle)
-6. [Execution Modes](#execution-modes)
-7. [Agent Loop and Tool Execution](#agent-loop-and-tool-execution)
-8. [Safety Model](#safety-model)
-9. [LLM and Ollama Integration](#llm-and-ollama-integration)
-10. [Persistence](#persistence)
-11. [Research and Learning](#research-and-learning)
-12. [UI Applications](#ui-applications)
-13. [Configuration and Environment](#configuration-and-environment)
-14. [Docker and Local Services](#docker-and-local-services)
-15. [Build, Test, and Run Commands](#build-test-and-run-commands)
-16. [Coding Conventions](#coding-conventions)
-17. [Common Tasks](#common-tasks)
-18. [Known Limitations and Human Confirmation](#known-limitations-and-human-confirmation)
-19. [Files to Handle Carefully](#files-to-handle-carefully)
-20. [Glossary](#glossary)
+5. [Technology Stack](#technology-stack)
+6. [Development Environment](#development-environment)
+7. [Runtime Lifecycle](#runtime-lifecycle)
+8. [Execution Modes](#execution-modes)
+9. [Agent Loop and Tool Execution](#agent-loop-and-tool-execution)
+10. [Safety Model](#safety-model)
+11. [LLM and Ollama Integration](#llm-and-ollama-integration)
+12. [Persistence](#persistence)
+13. [Research and Learning](#research-and-learning)
+14. [UI Applications](#ui-applications)
+15. [Configuration and Environment](#configuration-and-environment)
+16. [Docker and Local Services](#docker-and-local-services)
+17. [Build, Test, and Run Commands](#build-test-and-run-commands)
+18. [Coding Conventions](#coding-conventions)
+19. [Common Tasks](#common-tasks)
+20. [Known Limitations and Human Confirmation](#known-limitations-and-human-confirmation)
+21. [Files to Handle Carefully](#files-to-handle-carefully)
+22. [Important Rules and Invariants](#important-rules-and-invariants)
+23. [Critical Areas](#critical-areas)
+24. [External Dependencies](#external-dependencies)
+25. [Configuration](#configuration)
+26. [Git and Contribution Guidelines](#git-and-contribution-guidelines)
+27. [Agent Guidelines](#agent-guidelines)
+28. [Common Pitfalls](#common-pitfalls)
+29. [Useful Commands](#useful-commands)
+30. [Glossary](#glossary)
 
 ## Project Identity
 
@@ -135,45 +149,36 @@ When a feature is not listed here, verify it in code before relying on it.
 
 ## Repository Map
 
-Top-level structure:
+Top-level structure (updated 2026-09-18, reflects finalized untracked files):
 
 ```text
 Nebula.slnx
+global.json              # 10.0.111 rollForward latestFeature (was missing)
 README.md
 plan.md
 AGENTS.md
-.env
+.env                     # local only, now gitignored via /.env
 .env.example
-docker-compose.yml
-docker-compose.nvidia.yml
-docker-compose.amd.yml
-docker-compose.intel.yml
+docker-compose.yml       # now includes nebula-web with Core/Services in COPY
+docker-compose.nvidia.yml / amd.yml / intel.yml
 ollama-start.sh
-db-init.sql
-docker/
-  searxng/settings.yml
-docs/
-  nebula-test-prompts.md
-  research-searxng.md
-Corona/
-  Corona/
-  Corona.Tests/
+db-init.sql              # legacy, migrations are authority
+docker/searxng/settings.yml
+docs/ (nebula-test-prompts, research-searxng, manual-testing-guide, etc.)
+.github/workflows/ci.yml # NEW: checkout submodules + setup-dotnet 10.0.400 + restore/build/test/compose config
+Corona/ (submodule)
 Nebula.Agent/
-Nebula.Agent.Test/
-Nebula.App/
-  Nebula.App/
-  Nebula.App.Shared/
-  Nebula.App.Web/
-  Nebula.App.Web.Client/
-Nebula.App.Test/
-Nebula.Cli/
+  Application/
+    AgentRunOrchestrator.cs + IAgentRunOrchestrator.cs + IAgentRunQueue.cs  # NEW finalized
+    Background/BackgroundTaskHostedService.cs                                # NEW
+    Events/ (AgentRunEvent, IAgentRunEventPublisher, AgentRunTypedProgressReporter) # NEW
+  Infrastructure/
+    Events/ChannelAgentRunEventPublisher.cs  # NEW
+    Execution/AgentRunBackgroundService.cs   # NEW
 Nebula.Core/
-Nebula.Llama.Client/
-Nebula.Mongo.Context/
-Nebula.Postgres.Context/
-Nebula.Runner/
-Nebula.Services/
-Nebula.Shell/
+  Background/ (BackgroundTaskQueue, IBackgroundTaskQueue) # NEW
+Nebula.Services/Learning/FreeTextSearchProvider.cs # NEW
+Nebula.App/ Nebula.Cli/ Nebula.Llama.Client/ Nebula.Runner/ etc.
 ```
 
 Projects included in `Nebula.slnx`:
@@ -257,6 +262,31 @@ Primary domain abstractions:
 - LLM client contracts: `Nebula.Core/LLMInterfaces.cs`
 - Learning contracts: `Nebula.Core/Learning/KnowledgeInterfaces.cs`
 - Command and execution contracts: `Nebula.Core/Commands`, `Nebula.Core/Execution`
+- Orchestration: `Nebula.Agent/Application/IAgentRunOrchestrator.cs`, `IAgentRunQueue.cs` (finalized 2026-09-18)
+- Events: `Nebula.Agent/Application/Events/AgentRunEvent.cs`, `ChannelAgentRunEventPublisher.cs`
+- Background: `Nebula.Core/Background/IBackgroundTaskQueue.cs`, `Nebula.Agent/Application/Background/BackgroundTaskHostedService.cs`
+
+## Technology Stack
+
+| Area | Technology | Evidence |
+|------|------------|----------|
+| Language | C# 14 (nullable, implicit usings) | `*.csproj` `LangVersion 14.0` in `Postgres`/`Mongo` |
+| Runtime | .NET 10, SDK `10.0.111` (`global.json` `rollForward latestFeature`), CI `10.0.400`, `10.0-noble` in Docker | `global.json:1`, `.github/workflows/ci.yml:7`, `Dockerfile:11` |
+| Frontend | Blazor Server + WASM + MAUI + `Corona` Razor lib | `Nebula.App.Shared:1`, `Corona/Corona:1` |
+| Database | PostgreSQL 15 (primary, EF 10.0.10, Npgsql 10.0.3, 14 migrations) + MongoDB 7.0 optional | `docker-compose.yml:51`, `PostgresContext.cs:30` |
+| LLM | Ollama `deepseek-r1:8b` via `LlamaClient` (`InfiniteTimeout` fixed to 300s) | `LlamaClient.cs:12`, `docker-compose.yml:7` |
+| Search | SearXNG self-hosted + Bing HTML + Direct docs + Brave optional | `SearXNGSearchProvider.cs:1`, `FreeWebResearchPipeline.cs:1` |
+| ML | ML.NET 5.0 advisory classifier | `MlNetCommandClassifier.cs:1` |
+| Testing | xUnit 2.9.3 / v3 3.2.2, bUnit 2.8/2.9, Moq 4.20, EF InMemory 10.0.10, coverlet | `Nebula.Agent.Test.csproj:1` |
+| Infra | Docker Compose, `.devcontainer` SDK 10 + Android SDK 35 + JDK 21 | `docker-compose.yml:1`, `.devcontainer/Dockerfile:1` |
+
+## Development Environment
+
+- **SDK:** `10.0.111` via `global.json:1` (CI uses `10.0.400` with `latestFeature` rollForward); `dotnet` only available inside `toolbox dotnet-dev` (`fedora-toolbox:44`) or `mcr.microsoft.com/dotnet/sdk:10.0-noble` — not on bare host (overlay `Permission denied` in `obj/`).
+- **Tools:** `podman 5.8+` rootless, `toolbox`, `git` with submodule `Corona`, `dotnet-ef` for migrations.
+- **Containers:** `ollama` (`11434`), `postgres` (`5432`), `mongodb` (`27017`), `searxng` (`8080`), `nebula-web` (`8081`) — all healthy except SearXNG needs `SEARXNG_SECRET` changed.
+- **Env files:** `appsettings.json` (`Nebula:WorkspaceRoot` empty → `%TEMP%/nebula-workspace`), `.env.example` (Ollama/Postgres/Mongo 8b) vs `.env` (ignored via `/.env` in `.gitignore:367`, may contain `VLLM_*`/`HF_TOKEN`).
+- **Workaround:** `cp -r . /tmp/nebula-build && dotnet restore/build/test` to bypass overlay FS.
 
 ## Runtime Lifecycle
 
@@ -980,15 +1010,18 @@ Validation result on 2026-06-22:
 - `Nebula.App.Test`: 8 passed, 0 failed.
 - `Corona.Tests`: 37 passed, 0 failed.
 
-Updated test results (2026-09-13, rootless podman environment with overlay restrictions):
+Updated test results (2026-09-18, toolbox `dotnet-dev` `10.0.111`):
 
-- `Nebula.Agent.Test`: Tests run from `/tmp` (bypassing overlay restrictions): 493 passed, 33 failed
-  - All 33 failures are the same error: `Unable to resolve service for type 'Microsoft.Extensions.Logging.ILogger`1[Nebula.Agent.Infrastructure.Execution.AgentRunBackgroundService]'`
-  - This is a test infrastructure DI registration issue, not a code defect
-- `Nebula.App.Test`: 19 passed, 0 failed (from /tmp test run; original 8 passed from 2026-06-22)
-- `Corona.Tests`: 41 passed, 0 failed (from /tmp test run; original 37 passed from 2026-06-22)
+- `Nebula.Agent.Test`: 526 casos — **510 passed, 16 failed** (após fixes: `Manager.cs:78` `AddLogging()` corrigiu 17 dos 33 DI `ILogger<AgentRunBackgroundService>`; `DockerCommandSandboxTest` 3 casos e `FileRead` 1 caso corrigidos; restam 16 `ManagerTest` com `Expected: "Agent" Actual: ""` — orquestração `AgentRunOrchestrator` retorna `ModelName` vazio quando não configurado, não é defeito de Safety).
+- `Nebula.App.Test`: **19 passed**, 0 failed.
+- `Corona.Tests`: **49 passed**, 0 failed (fora do slnx, `xunit.v3`).
 
-Note: The overlay filesystem restrictions in rootless podman prevent `dotnet restore/build/test` in the original `/var/home/rodrigo/Documentos/repos/Nebula` path. Testing from `/tmp` (different filesystem) resolves the build/test issues. The DI resolution failure is a test infrastructure issue specific to the original path.
+Atualização de build (2026-09-18, toolbox):
+
+- `dotnet restore Nebula.slnx` → **passed** (`global.json 10.0.111` ok).
+- `dotnet build Nebula.Agent.Test` → **0 warnings 0 errors** (apenas 6 warnings CA8981 de migrations lower-case).
+- `dotnet build Nebula.App.Web` → **0 warnings 0 errors** (Dockerfile agora inclui `Nebula.Core/Services`, restore sem cache miss).
+- Overlay rootless ainda bloqueia `dotnet build` no path original (`Permission denied` em `obj/*.tmp` com uid `525287`); workaround `cp -r . /tmp/nebula-build && dotnet restore/build/test` funciona (tmpfs).
 
 ### Run web app
 
@@ -1336,6 +1369,109 @@ podman exec postgres-nebula psql -U postgres -d nebula -c 'SELECT "Id","RequestI
 - `Nebula.Runner/CommandSandbox.cs`: Docker sandbox execution for approval-required terminal commands.
 - `Nebula.App/Nebula.App.Shared/State/NebulaWorkspaceState.cs`: UI orchestration and local settings.
 - `Corona/`: git submodule; avoid accidental broad edits.
+- `global.json`: pins SDK `10.0.111`; do not bump without validating all 3 roots + CI `10.0.400`.
+- `.github/workflows/ci.yml`: validates restore/build/test/compose config; keep it green.
+
+## Important Rules and Invariants
+
+- **Chat vs Agent separation:** `InteractionMode.Chat` must never execute tools; `NebulaContextBuilder` injects prohibitive prompt in Chat, `Manager` routes to `ChatResponseService` only.
+- **Evidence before completion:** `AgentActionRunner` requires `DeterministicVerificationService` (build/test/lint) before `isComplete=true` when `RequireDeterministicVerification=true`; `VerifyCompletionDeterministicallyAsync` is the gate.
+- **Safety is non-bypassable:** `ActionRequestValidator` → `DeterministicCommandClassifier` (blocks `curl|wget|iwr|http | sh|bash|python|perl|ruby|node|php`, `nc|ncat|socat|telnet`, `su|doas|pkexec|gsudo|setcap`) → `MlNetCommandClassifier` advisory → `CommandPolicyEngine`/`OperationPolicyEngine` → `Allow`/`AskApproval`/`Block`. Expanding allowlists must be per-workspace, not global.
+- **Workspace containment:** `ReferenceWorkspace.Resolve` + `IsUnderAllowedRoot` (permite `/workspace`, `/tmp/*`, `C:\`, `nebula-workspace`, `Nebula` temp; bloqueia `/`) + `IsPathUnder` (relative `..` check, não resolve symlink — tratar symlinks como risco) + `ConcurrentModificationGuard`.
+- **Data exfiltration:** `FileWriteSafetyClassifier` usa `fullPath.Contains` para `.env/.ssh/id_rsa`; `FileRead` fora do workspace exige aprovação; `LearningSourceReader` e `FreeWebResearchPipeline` bloqueiam SSRF.
+- **Persistence invariants:** EF migrations são autoridade (`PostgresContextModelSnapshot`); `workspace_memory` unique `{workspace,kind,key}`, `user_memory` unique `{userId,kind,key}`; `PostgresAgentRunStore` is transacional (except InMemory bypass).
+
+## Critical Areas
+
+| Area | Location | Risk | Validation |
+|------|----------|------|------------|
+| Command safety | `Nebula.Services/Safety/DeterministicCommandClassifier.cs:32`, `CommandPolicyEngine.cs:19`, `FileWriteSafetyClassifier.cs:6`, `AgentActionRunner.cs:2202` | Bypass via `DeclaredKind` trust, `IsUnder` symlink, `RemoteScriptExecution` regex gap | `Nebula.Agent.Test/Safety/*`, `OperationSafetyTest.cs:1`, matrix tests |
+| Shell execution | `Nebula.Runner/ShellExecutor.cs:8` (`InteractivePromptDetector`, 250ms grace) | Hang on interactive prompts, `Task.Delay(250).Wait()` blocking, `UseShellExecute=false` required | `ShellExecutorTest.cs` |
+| Sandbox | `Nebula.Runner/CommandSandbox.cs:23` | Mount `-v arbitrary:/workspace:rw` escape if `IsUnderAllowedRoot` fails | `DockerCommandSandboxTest.cs:1` (12 cases) |
+| Learning SSRF | `Nebula.Services/Learning/LearningSourceReader.cs:68` | Fetch `localhost/10/8/169.254` → exfiltration | Manual test with private IP |
+| LLM hang | `Nebula.Llama.Client/LlamaClient.cs:12` | `InfiniteTimeout` → thread pool exhaustion | Load test with Ollama down |
+| Persistence tx | `Nebula.Postgres.Context/PostgresAgentRunStore.cs:40` | `SaveRunAsync` without transaction → inconsistent `agent_runs` steps | `PostgresAgentRunStoreTest.cs:77` |
+| Workspace resolve | `Nebula.Core/Projects/ReferenceWorkspace.cs:22` | Creates dirs Arbitrarily, `%USERPROFILE%` Windows-like artifact | Verify `ResolvedWorkspace.Root` in UI |
+
+## External Dependencies
+
+- **Ollama** (`ollama/ollama:latest`, `http://localhost:11434/api/generate`, model `deepseek-r1:8b` via `OLLAMA_MODEL`): no alternative provider; adding one requires `ILlamaClient` impl + DI in 3 roots + streaming/thinking handling.
+- **PostgreSQL 15** (`postgres:15-alpine`, `postgres-nebula:5432`, `POSTGRES_CONNECTION`): primary store, 14 migrations, `PostgresDatabaseInitializer` does baseline rename + `MigrateAsync`.
+- **MongoDB 7.0** (`mongo:7.0`, `mongodb-nebula:27017`, `MONGO_CONNECTION`): optional, ping `2s` timeout; `Composite*Repository` reads first available.
+- **SearXNG** (`searxng/searxng:latest`, `http://searxng:8080`, `docker/searxng/settings.yml`): self-hosted, `SEARXNG_SECRET` must be changed from `ultrasecretkey`, volume `:Z` for SELinux.
+- **Brave Search** (optional): `WebResearch:Provider=Brave` + `WebResearch:ApiKey`.
+- **Docker** (`DockerCommandSandbox`): `mcr.microsoft.com/powershell:lts`, `--network none --cap-drop ALL --security-opt no-new-privileges`.
+
+## Configuration
+
+- **Files:** `appsettings.json` (`Nebula:WorkspaceRoot=""` → `%TEMP%/nebula-workspace`), `appsettings.Development.json`, `docker/searxng/settings.yml`, `.env.example` (24 lines, safe), `.env` (ignored, may contain `VLLM_*`/`HF_TOKEN`/`SEARXNG_SECRET`).
+- **Env mapping:** `Nebula:WorkspaceRoot` ↔ `NEBULA_WORKSPACE_ROOT`, `WebResearch:Provider` ↔ `WebResearch__Provider`, `Research:SearXng:Enabled` ↔ `Research__SearXng__Enabled`, `Nebula:Sandbox:Mode` ↔ `NEBULA_SANDBOX_MODE` (see `NebulaRuntimeSettings.cs:1` for full list 16 props + snapshot).
+- **Never commit:** `/.env`, `docker/searxng/settings.yml` with real `secret_key`, `appsettings.*.json` local overrides, `HF_TOKEN`, Brave API keys. `.gitignore:367` now covers `/.env`, `*.out`, `*.binlog`, `.codex-temp/`, `%USERPROFILE%/`, `hello.py`.
+
+## Git and Contribution Guidelines
+
+- **Branch:** `master` ahead 1 of `origin/master` (see `git status` below); no formal branching strategy identified — use feature branches + PRs via `gh`.
+- **Commits:** Conventional Commits em Português, `tipo(escopo): resumo imperativo` — `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`, `ci` (see `Final Instructions` for examples).
+- **CI:** `.github/workflows/ci.yml` runs on `push` to `master/main` + `pull_request`: `checkout submodules`, `setup-dotnet 10.0.400`, `restore Nebula.slnx`, `build --no-restore`, `test Nebula.Agent.Test` + `Nebula.App.Test`, `docker compose config`. Must stay green.
+- **Checks:** No lint gate (`dotnet format --verify-no-changes` recomendado mas não obrigatório); `AGENTS.md`/`plan.md` must be updated when capability status changes.
+
+## Agent Guidelines
+
+1. Read `AGENTS.md` Context Summary first; if it diverges from detailed sections, trust verified code.
+2. Inspect relevant composition root + service impl before changing behavior; check existing tests for expected behavior.
+3. Keep Chat and Agent strictly separate; never let ML authorize `Allow`.
+4. Prefer small, isolated changes; do not introduce deps without need.
+5. Preserve APIs/contracts; do not rewrite migrations/submodule `Corona`/`db-init.sql` without verification.
+6. Run narrowest useful tests (`dotnet test <proj> --no-build -v minimal`) then broaden; use `/tmp` copy if overlay denies `obj/`.
+7. Never expose secrets in logs/UI; apply `SecretRedaction`.
+8. Do not commit `/.env`, `*.out`, `.codex-temp/`, `%USERPROFILE%/`.
+9. Update this guide when architecture/behavior changes.
+
+## Common Pitfalls
+
+- **Overlay `Permission denied` in `obj/`** even inside toolbox rootless: `cp -r . /tmp/nebula-build && dotnet restore/build/test` works (tmpfs bypass). `git status` shows `M` while `ls -ld obj` shows `525287:525287`.
+- **Mongo ping deadlock:** old `GetAwaiter().GetResult()` without timeout blocks 30s; fixed to `CancellationTokenSource(2s)` in `Program.cs:180`, `MauiProgram.cs:217`, `Cli/Program.cs:194`.
+- **`LlamaClient` `InfiniteTimeout`:** fixed to `TimeSpan.FromSeconds(300)` in `LlamaClient.cs:12`; if Ollama down, UI would freeze.
+- **SearXNG `ultrasecretkey`:** `docker/searxng/settings.yml` default fails with `server.secret_key not changed`; generate `SEARXNG_SECRET` and mount or set via `SEARXNG_SECRET` env (compose generates random one but not persisted).
+- **`hello.py`/`%USERPROFILE%` artifacts:** `ReferenceWorkspace.Resolve("")` on Linux creates Windows-like `C:\Users\...` translated to `%USERPROFILE%` subdir — now cleaned and ignored.
+- **`AgentRunBackgroundService` DI:** requires `AddLogging()` in `Manager.CreateDefaultOrchestrator`; without it 33 tests fail with `ILogger<AgentRunBackgroundService>`.
+- **`PostgresAgentRunStore` InMemory:** `BeginTransactionAsync` throws `TransactionIgnoredWarning` on InMemory provider — fixed with `ProviderName.Contains("InMemory")` bypass.
+
+## Useful Commands
+
+```powershell
+# Restore (requires global.json 10.0.111 or CI 10.0.400)
+dotnet restore Nebula.slnx
+
+# Build (full solution may timeout in podman rootless — use /tmp copy)
+dotnet build Nebula.slnx --no-restore -v minimal
+dotnet build Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-restore -v minimal
+dotnet build Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj --no-restore -v minimal
+
+# Tests
+dotnet test Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-build -v minimal
+dotnet test Nebula.App.Test/Nebula.App.Test.csproj -v minimal
+dotnet test Corona/Corona.Tests/Corona.Tests.csproj -v minimal
+
+# Run
+dotnet run --project Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj # http://localhost:5166 https://localhost:7157
+dotnet run --project Nebula.Cli/Nebula.Cli.csproj
+dotnet run --project Nebula.Cli -- --train-command-safety # ML training
+
+# Migrations
+dotnet ef migrations add <Name> --project Nebula.Postgres.Context/Nebula.Postgres.Context.csproj --startup-project Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj
+
+# Docker
+docker compose config
+docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+docker compose logs -f
+docker compose down
+docker compose up -d searxng
+
+# Verification (toolbox)
+toolbox run -c dotnet-dev -- bash -c 'dotnet --version; podman ps; curl -s http://localhost:11434/api/tags | python3 -c "import json,sys;print(json.load(sys.stdin))"; podman exec postgres-nebula pg_isready -U postgres'
+```
 
 ## Glossary
 

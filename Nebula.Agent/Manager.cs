@@ -1,9 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Memory;
@@ -20,6 +25,7 @@ public class Manager : IManager
     private readonly ILogger logger;
     private readonly ICommandPolicyEngine commandPolicyEngine;
     private readonly IAgentActionRunner actionRunner;
+    private readonly IAgentRunOrchestrator orchestrator;
     private readonly ChatResponseService chatResponseService;
     private readonly IConversationContextService conversationContextService;
     private readonly PromptRequestAuditService promptAuditService;
@@ -42,7 +48,8 @@ public class Manager : IManager
         int maxActionSteps = AgentActionRunRequest.DefaultMaxSteps,
         IAgentActionRunner? actionRunner = null,
         IConversationContextService? conversationContextService = null,
-        ICommandPolicyEngine? commandPolicyEngine = null)
+        ICommandPolicyEngine? commandPolicyEngine = null,
+        IAgentRunOrchestrator? orchestrator = null)
     {
         this.llamaClient = llamaClient;
         this.logger = logger;
@@ -55,6 +62,7 @@ public class Manager : IManager
             commandRepository,
             maxActionRetries,
             commandPolicyEngine: this.commandPolicyEngine);
+        this.orchestrator = orchestrator ?? CreateDefaultOrchestrator();
 
         var conversationContextBuilder = contextBuilder ?? new NebulaContextBuilder();
         chatResponseService = new ChatResponseService(llamaClient);
@@ -66,6 +74,17 @@ public class Manager : IManager
         promptAuditService = new PromptRequestAuditService(promptRepository, logger);
         maxActionRetryCount = Math.Max(0, maxActionRetries);
         maxActionStepCount = Math.Max(1, maxActionSteps);
+    }
+
+    private IAgentRunOrchestrator CreateDefaultOrchestrator()
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IAgentRunEventPublisher, ChannelAgentRunEventPublisher>()
+            .AddSingleton<IAgentRunQueue, AgentRunBackgroundService>()
+            .AddScoped<IAgentRunOrchestrator, AgentRunOrchestrator>();
+        var serviceProvider = services.BuildServiceProvider();
+        return serviceProvider.GetRequiredService<IAgentRunOrchestrator>();
     }
 
     public Guid ActiveConversationId => activeConversationId;
@@ -228,40 +247,24 @@ public class Manager : IManager
         };
         await promptAuditService.SaveAsync(promptRequest, cancellationToken);
 
-        return await actionRunner.RunAsync(
-            new AgentActionRunRequest
-            {
-                ConversationId = activeConversationId,
-                RequestId = requestId,
-                Prompt = prompt,
-                Mode = InteractionMode.Agent,
-                ChatHistoryContext =
-                    $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}",
-                ModelName = llamaClient.SelectedModel,
-                MaxSteps = 1,
-                MaxRetriesPerStep = 0,
-                ConversationApprovedCommands =
-                    approvedCommandsByConversation.TryGetValue(
-                        activeConversationId,
-                        out var approved)
-                        ? approved.ToList()
-                        : null,
-                ApprovedAction = new AgentApprovedAction
-                {
-                    Objective = command.Objective,
-                    Command = command.Run,
-                    OperationKind = command.OperationKind,
-                    TargetPath = command.TargetPath,
-                    PlannedFiles = command.PlannedFiles,
-                    Content = command.Content,
-                    Language = command.Language,
-                    TemplateId = command.TemplateId,
-                    WorkingDirectory = command.WorkingDirectory,
-                    Scope = scope
-                }
-            },
-            progress,
-            cancellationToken);
+        var runId = await orchestrator.RunApprovedCommandAsync(command, scope, cancellationToken);
+
+        if (progress != null)
+        {
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+        }
+
+        return new ConversationTurn
+        {
+            ConversationId = activeConversationId,
+            RequestId = requestId,
+            Prompt = prompt,
+            Mode = InteractionMode.Agent,
+            Classification = InteractionMode.Agent.ToString(),
+            ModelName = llamaClient.SelectedModel,
+            ActionStatus = ActionExecutionStatus.Started,
+            Response = "Approved command started in background..."
+        };
     }
 
     public Task<ConversationTurn> ResumeTaskAsync(
@@ -275,29 +278,24 @@ public class Manager : IManager
             $"[AGENT] Resuming task '{run.Prompt}' for ConversationId '{activeConversationId}' " +
             $"from run '{run.Id}' (previous status: {run.Status}).");
 
-        return actionRunner.RunAsync(
-            new AgentActionRunRequest
-            {
-                ConversationId = activeConversationId,
-                RequestId = Guid.NewGuid(),
-                Prompt = run.Prompt,
-                Mode = InteractionMode.Agent,
-                ChatHistoryContext = BuildResumeContext(run),
-                ModelName = string.IsNullOrWhiteSpace(run.ModelName)
-                    ? llamaClient.SelectedModel
-                    : run.ModelName,
-                MaxSteps = maxActionStepCount,
-                MaxRetriesPerStep = maxActionRetryCount,
-                WorkspaceRoot = run.WorkspaceRoot,
-                ConversationApprovedCommands =
-                    approvedCommandsByConversation.TryGetValue(
-                        activeConversationId,
-                        out var approved)
-                        ? approved.ToList()
-                        : null
-            },
-            progress,
-            cancellationToken);
+        var runId = orchestrator.ResumeAsync(run, cancellationToken).GetAwaiter().GetResult();
+
+        if (progress != null)
+        {
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+        }
+
+        return Task.FromResult(new ConversationTurn
+        {
+            ConversationId = activeConversationId,
+            RequestId = Guid.NewGuid(),
+            Prompt = $"Retomar tarefa: {run.Prompt}",
+            Mode = InteractionMode.Agent,
+            Classification = InteractionMode.Agent.ToString(),
+            ModelName = llamaClient.SelectedModel,
+            ActionStatus = ActionExecutionStatus.Started,
+            Response = "Task resume started in background..."
+        });
     }
 
     public async Task<bool> VerifyCommandCorrectAsync(Command command)
@@ -358,7 +356,7 @@ public class Manager : IManager
         return turn;
     }
 
-    private Task<ConversationTurn> CreateTurnAsync(
+    private async Task<ConversationTurn> CreateTurnAsync(
         ConversationRequest request,
         string modelPrompt,
         IProgress<ConversationTurn>? progress,
@@ -366,14 +364,8 @@ public class Manager : IManager
     {
         return request.Mode switch
         {
-            InteractionMode.Agent => actionRunner.RunAsync(
-                request.CreateActionRequest(
-                    modelPrompt,
-                    maxActionStepCount,
-                    maxActionRetryCount),
-                progress,
-                cancellationToken),
-            InteractionMode.Chat => chatResponseService.GetResponseAsync(
+            InteractionMode.Agent => await CreateAgentTurnAsync(request, modelPrompt, progress, cancellationToken),
+            InteractionMode.Chat => await chatResponseService.GetResponseAsync(
                 request,
                 modelPrompt,
                 progress,
@@ -383,6 +375,259 @@ public class Manager : IManager
                 request.Mode,
                 "Unsupported interaction mode.")
         };
+    }
+
+    private async Task<ConversationTurn> CreateAgentTurnAsync(
+        ConversationRequest request,
+        string modelPrompt,
+        IProgress<ConversationTurn>? progress,
+        CancellationToken cancellationToken)
+    {
+        var actionRequest = request.CreateActionRequest(
+            modelPrompt,
+            maxActionStepCount,
+            maxActionRetryCount);
+
+        var runId = await orchestrator.RunAsync(actionRequest, cancellationToken);
+
+        if (progress != null)
+        {
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+        }
+
+        return new ConversationTurn
+        {
+            ConversationId = request.ConversationId,
+            RequestId = request.RequestId,
+            Prompt = request.Prompt,
+            Mode = InteractionMode.Agent,
+            Classification = InteractionMode.Agent.ToString(),
+            ModelName = llamaClient.SelectedModel,
+            ActionStatus = ActionExecutionStatus.Started,
+            Response = "Agent run started in background..."
+        };
+    }
+
+    private async Task BridgeTypedEventsToLegacyProgress(
+        Guid runId,
+        IProgress<ConversationTurn> legacyProgress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var evt in orchestrator.SubscribeAsync(runId, cancellationToken))
+            {
+                if (evt is AgentRunCompletedEvent completed)
+                {
+                    legacyProgress.Report(completed.FinalTurn);
+                    break;
+                }
+                else if (evt is AgentRunFailedEvent failed)
+                {
+                    legacyProgress.Report(failed.PartialTurn ?? BuildFailedTurn(failed.ErrorMessage));
+                    break;
+                }
+                else if (evt is AgentRunCancelledEvent)
+                {
+                    legacyProgress.Report(new ConversationTurn
+                    {
+                        ConversationId = activeConversationId,
+                        RequestId = Guid.NewGuid(),
+                        Prompt = "",
+                        Mode = InteractionMode.Agent,
+                        ModelName = llamaClient.SelectedModel,
+                        Response = "Execution cancelled by user.",
+                        ActionStatus = ActionExecutionStatus.Cancelled,
+                        IsCancelled = true
+                    });
+                    break;
+                }
+                else
+                {
+                    var partialTurn = BuildPartialTurnFromEvent(evt);
+                    legacyProgress.Report(partialTurn);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private static ConversationTurn BuildFailedTurn(string errorMessage)
+    {
+        return new ConversationTurn
+        {
+            ConversationId = Guid.NewGuid(),
+            RequestId = Guid.NewGuid(),
+            Prompt = "",
+            Mode = InteractionMode.Agent,
+            ModelName = "",
+            Response = $"Agent run failed: {errorMessage}",
+            ActionStatus = ActionExecutionStatus.Failed
+        };
+    }
+
+    private static ConversationTurn BuildPartialTurnFromEvent(AgentRunEvent evt)
+    {
+        return evt switch
+        {
+            AgentRunStepStartedEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = e.Objective,
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Executing,
+                Response = e.Objective,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.ActionStarted,
+                        Status = ActionExecutionStatus.Executing,
+                        Step = e.Step,
+                        Attempt = e.Attempt,
+                        Title = "Action started",
+                        Message = e.Objective,
+                        Command = e.Command
+                    }
+                ]
+            },
+            AgentRunCommandOutputEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Executing,
+                Response = e.Chunk,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.StreamOutput,
+                        Status = ActionExecutionStatus.Executing,
+                        Step = e.Step,
+                        Attempt = e.Attempt,
+                        Title = "Stream output",
+                        Message = e.Chunk,
+                        IsError = e.IsError
+                    }
+                ]
+            },
+            AgentRunStepCompletedEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Observing,
+                Response = e.Observation,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.Observation,
+                        Status = ActionExecutionStatus.Observing,
+                        Step = e.Step,
+                        Attempt = e.Attempt,
+                        Title = "Observation",
+                        Message = e.Observation
+                    }
+                ]
+            },
+            AgentRunPlanUpdatedEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Planning,
+                Response = "",
+                CurrentPlan = BuildPlanString(e.Plan)
+            },
+            AgentRunApprovalRequiredEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.AwaitingApproval,
+                Response = e.Reason,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.ApprovalRequired,
+                        Status = ActionExecutionStatus.AwaitingApproval,
+                        Step = e.Step,
+                        Attempt = e.Attempt,
+                        Title = "Approval required",
+                        Message = e.Reason,
+                        Command = e.Command.Run
+                    }
+                ],
+                Commands = [e.Command]
+            },
+            AgentRunStepRetryEvent e => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Retrying,
+                Response = e.FailureReason,
+                ActionEvents =
+                [
+                    new ActionExecutionEvent
+                    {
+                        Kind = ActionExecutionEventKind.RetryScheduled,
+                        Status = ActionExecutionStatus.Retrying,
+                        Step = e.Step,
+                        Attempt = e.Attempt,
+                        Title = "Retry scheduled",
+                        Message = e.FailureReason
+                    }
+                ]
+            },
+            _ => new ConversationTurn
+            {
+                ConversationId = Guid.NewGuid(),
+                RequestId = Guid.NewGuid(),
+                Prompt = "",
+                Mode = InteractionMode.Agent,
+                ModelName = "",
+                ActionStatus = ActionExecutionStatus.Executing,
+                Response = ""
+            }
+        };
+    }
+
+    private static string BuildPlanString(IReadOnlyList<AgentPlanStep> plan)
+    {
+        if (plan.Count == 0)
+        {
+            return "No actions completed yet.";
+        }
+
+        var planLines = plan
+            .OrderBy(step => step.Id)
+            .Select(step =>
+            {
+                var deps = step.DependsOn.Count == 0
+                    ? string.Empty
+                    : $" (depends on {string.Join(",", step.DependsOn)})";
+                var checkpoint = step.IsCheckpoint ? " [checkpoint]" : string.Empty;
+                return $"#{step.Id} [{step.Status}]{checkpoint} [risk={step.Risk}]{deps} {step.Description}";
+            });
+        return string.Join(Environment.NewLine, planLines);
     }
 
     private async Task CompleteConversationAsync(

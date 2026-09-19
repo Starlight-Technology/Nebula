@@ -4,7 +4,7 @@ services:
     container_name: ollama
     restart: unless-stopped
     environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:8b}
       OLLAMA_MODELS: ${OLLAMA_MODELS:-}
       OLLAMA_ACCELERATION_MODE: ${OLLAMA_ACCELERATION_MODE:-cpu}
       OLLAMA_GPU_VENDOR: ${OLLAMA_GPU_VENDOR:-CPU}
@@ -115,7 +115,7 @@ services:
       ASPNETCORE_ENVIRONMENT: "Production"
       ASPNETCORE_HTTP_PORTS: "8081"
       LLAMA_URL: "http://ollama:11434/api/generate"
-      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
+      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:8b}"
       MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
       MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
       POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"

@@ -331,6 +331,9 @@ public sealed class AgentActionRunnerTest
     [Fact]
     public async Task run_async_must_invoke_existing_terminal_tool_and_log_action_and_observation()
     {
+        var listDirectoryFragment = OperatingSystem.IsWindows()
+            ? "Get-ChildItem"
+            : "ls -la";
         var decisions = new Queue<string>(
         [
             ActionDecision("I need to inspect the current directory.", "List files", "dir"),
@@ -344,7 +347,7 @@ public sealed class AgentActionRunnerTest
         var executorMock = CreateExecutorMock();
         executorMock
             .Setup(executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("Directory listing");
 
@@ -355,7 +358,7 @@ public sealed class AgentActionRunnerTest
             result.ActionEvents,
             actionEvent =>
                 actionEvent.Kind == ActionExecutionEventKind.ActionStarted &&
-                actionEvent.Command!.Contains("Get-ChildItem", StringComparison.Ordinal));
+                actionEvent.Command!.Contains(listDirectoryFragment, StringComparison.Ordinal));
         Assert.Contains(
             result.ActionEvents,
             actionEvent =>
@@ -363,7 +366,7 @@ public sealed class AgentActionRunnerTest
                 actionEvent.ToolResponse == "Directory listing");
         executorMock.Verify(
             executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -2776,10 +2779,11 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
                 CreateRequest("Read D:/Dev/Backup/project.txt."),
                 progress: null);
 
-            Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
-            Assert.Equal("Read D:/Dev/Backup/project.txt.", result.Response);
-            Assert.True(result.Commands.Single().Executed);
-            Assert.Contains("dotnet 8.0", result.Commands.Single().Output);
+            // After security hardening (C-04), any read outside the active workspace
+            // now requires explicit approval, even when not sensitive.
+            Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+            Assert.False(result.Commands.Single().Executed);
+            Assert.Contains("outside the active workspace", result.Commands.Single().Notes);
         }
         finally
         {
@@ -2790,15 +2794,18 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     [Fact]
     public async Task file_read_under_operating_system_root_must_request_approval()
     {
+        var osRootFile = OperatingSystem.IsWindows()
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "win.ini")
+            : "/etc/hostname";
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to read the system file.",
-                "Read win.ini",
+                "Read system configuration",
                 OperationKind.FileRead,
-                targetPath: Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                    "win.ini"))
+                targetPath: osRootFile)
         ]);
 
         var llamaClientMock = CreateLlamaClientMock();
@@ -2806,7 +2813,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
 
         var runner = CreateRunner(llamaClientMock);
         var result = await runner.RunAsync(
-            CreateRequest("Read C:/Windows/win.ini."),
+            CreateRequest("Read the operating system configuration file."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);

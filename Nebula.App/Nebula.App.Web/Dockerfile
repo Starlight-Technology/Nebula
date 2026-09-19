@@ -14,6 +14,8 @@ WORKDIR /src
 COPY ["Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj", "Nebula.App/Nebula.App.Web/"]
 COPY ["Nebula.App/Nebula.App.Shared/Nebula.App.Shared.csproj", "Nebula.App/Nebula.App.Shared/"]
 COPY ["Corona/Corona/Corona.csproj", "Corona/Corona/"]
+COPY ["Nebula.Core/Nebula.Core.csproj", "Nebula.Core/"]
+COPY ["Nebula.Services/Nebula.Services.csproj", "Nebula.Services/"]
 COPY ["Nebula.Agent/Nebula.Agent.csproj", "Nebula.Agent/"]
 COPY ["Nebula.Llama.Client/Nebula.Llama.Client.csproj", "Nebula.Llama.Client/"]
 COPY ["Nebula.Runner/Nebula.Runner.csproj", "Nebula.Runner/"]

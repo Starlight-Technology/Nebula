@@ -351,7 +351,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             }
 
             await EnrichTurnWithGitDiffAsync(turn, session, cancellationToken);
-            await PersistRunAsync(request, turn, cancellationToken);
+            var isFinal = turn.ActionStatus != ActionExecutionStatus.AwaitingApproval;
+            await PersistRunAsync(request, turn, cancellationToken, isFinal: isFinal);
             return turn;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1310,7 +1311,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         }
 
         if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
-            !CanApproveCreationInSandbox(execution, classification) &&
+            !CanApproveCreationInSandbox(session, execution, classification) &&
             !await TryApplyApprovalOverrideAsync(
                 session,
                 execution,
@@ -1322,7 +1323,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         }
 
         if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
-            CanApproveCreationInSandbox(execution, classification))
+            CanApproveCreationInSandbox(session, execution, classification))
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
@@ -1561,8 +1562,8 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             {
                 var sandboxWillIsolate =
                     artifactDecision.Decision == CommandSafetyDecisionType.AskApproval &&
-                    CanRunInSandbox(execution) &&
-                    CanApproveCreationInSandbox(execution);
+                    CanRunInSandbox(session, execution) &&
+                    CanApproveCreationInSandbox(session, execution);
                 var allowlistApplied =
                     artifactDecision.Decision == CommandSafetyDecisionType.AskApproval &&
                     await TryApplyWorkspaceAllowlist(
@@ -1666,7 +1667,7 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             !approvalOverrideApplied &&
             !workspaceAllowlistApplied)
         {
-            if (CanRunInSandbox(execution))
+            if (CanRunInSandbox(session, execution))
             {
                 return await ExecuteSandboxedCommandAsync(
                     session,
@@ -1907,7 +1908,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         }
 
         if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
-            !CanApproveCreationInSandbox(execution, classification) &&
+            !CanApproveCreationInSandbox(session, execution, classification) &&
             !await TryApplyApprovalOverrideAsync(
                 session,
                 execution,
@@ -1919,7 +1920,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         }
 
         if (decision.Decision == CommandSafetyDecisionType.AskApproval &&
-            CanApproveCreationInSandbox(execution, classification))
+            CanApproveCreationInSandbox(session, execution, classification))
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
@@ -2198,14 +2199,119 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             OperationKind.TerminalCommand or
             OperationKind.ScriptExecution;
 
+    private bool CanRunInSandbox(AgentActionSession session, CommandExecution execution) =>
+        CanRunInSandbox(execution) &&
+        IsWorkingDirectoryInsideAllowedRoots(session, execution.WorkingDirectory);
+
     private bool CanApproveCreationInSandbox(
         CommandExecution execution,
         CommandClassification? classification = null) =>
         commandSandbox is not null &&
         commandSandbox.Mode != SandboxMode.Disabled &&
         !string.IsNullOrWhiteSpace(execution.TargetPath) &&
-        IsPathUnder(execution.TargetPath, execution.WorkingDirectory) &&
-        !IsConcurrentModification(classification);
+        !IsConcurrentModification(classification) &&
+        IsTargetInsideAllowedRoots(execution.TargetPath, execution.WorkingDirectory) &&
+        IsWorkingDirectoryInsideAllowedRoots(execution.WorkingDirectory);
+
+    private bool CanApproveCreationInSandbox(
+        AgentActionSession session,
+        CommandExecution execution,
+        CommandClassification? classification = null) =>
+        commandSandbox is not null &&
+        commandSandbox.Mode != SandboxMode.Disabled &&
+        !string.IsNullOrWhiteSpace(execution.TargetPath) &&
+        !IsConcurrentModification(classification) &&
+        IsTargetInsideAllowedRoots(session, execution.TargetPath, execution.WorkingDirectory) &&
+        IsWorkingDirectoryInsideAllowedRoots(session, execution.WorkingDirectory);
+
+    private static bool IsWorkingDirectoryInsideAllowedRoots(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return false;
+        }
+
+        try
+        {
+            var full = Path.GetFullPath(workingDirectory);
+            var nebulaTemp = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Nebula"));
+            var defaultWorkspace = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ReferenceWorkspace.DefaultWorkspaceFolderName));
+            return IsPathUnder(full, nebulaTemp) ||
+                   IsPathUnder(full, defaultWorkspace) ||
+                   IsPathUnder(full, Path.GetFullPath(Environment.CurrentDirectory));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsWorkingDirectoryInsideAllowedRoots(AgentActionSession session, string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return false;
+        }
+
+        try
+        {
+            var full = Path.GetFullPath(workingDirectory);
+            var workspaceRoot = Path.GetFullPath(session.WorkspaceRoot.Root);
+            var nebulaTemp = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Nebula"));
+            return IsPathUnder(full, workspaceRoot) || IsPathUnder(full, nebulaTemp);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTargetInsideAllowedRoots(string targetPath, string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var resolvedTarget = Path.IsPathRooted(NormalizePathSeparators(targetPath))
+                ? Path.GetFullPath(NormalizePathSeparators(targetPath))
+                : Path.GetFullPath(NormalizePathSeparators(targetPath), workingDirectory);
+            var nebulaTemp = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Nebula"));
+            var defaultWorkspace = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ReferenceWorkspace.DefaultWorkspaceFolderName));
+            var currentWorkspace = Path.GetFullPath(Environment.CurrentDirectory);
+            return IsPathUnder(resolvedTarget, nebulaTemp) ||
+                   IsPathUnder(resolvedTarget, defaultWorkspace) ||
+                   IsPathUnder(resolvedTarget, currentWorkspace);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTargetInsideAllowedRoots(AgentActionSession session, string targetPath, string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var resolvedTarget = Path.IsPathRooted(NormalizePathSeparators(targetPath))
+                ? Path.GetFullPath(NormalizePathSeparators(targetPath))
+                : Path.GetFullPath(NormalizePathSeparators(targetPath), workingDirectory);
+            var workspaceRoot = Path.GetFullPath(session.WorkspaceRoot.Root);
+            var nebulaTemp = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Nebula"));
+            return IsPathUnder(resolvedTarget, workspaceRoot) || IsPathUnder(resolvedTarget, nebulaTemp);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static bool IsConcurrentModification(
         CommandClassification? classification)
@@ -3356,21 +3462,29 @@ return (observationMessage, historyEntry);
 
         return new CommandClassification(
             targetPath,
-            CommandIntent.SafeReadOnly,
+            CommandIntent.NeedsApproval,
             0.98,
             "FileReadSafetyClassifier",
-            ["The non-sensitive file is outside the workspace but read-only access is allowed."]);
+            ["Reading a file outside the active workspace requires approval."]);
     }
 
     private static bool IsOperatingSystemRoot(string path)
     {
-        string[] systemRoots =
-        [
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
-        ];
+        string[] systemRoots;
+        if (OperatingSystem.IsWindows())
+        {
+            systemRoots =
+            [
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
+            ];
+        }
+        else
+        {
+            systemRoots = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64"];
+        }
 
         var fullPath = Path.GetFullPath(path);
         foreach (var systemRoot in systemRoots)

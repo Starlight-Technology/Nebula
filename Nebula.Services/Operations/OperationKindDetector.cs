@@ -65,6 +65,12 @@ public sealed class OperationKindDetector : IOperationKindDetector
             return OperationKind.FileRead;
         }
 
+        if (string.IsNullOrWhiteSpace(command) &&
+            FileWriteIntentRegex.IsMatch(original))
+        {
+            return OperationKind.FileWrite;
+        }
+
         return string.IsNullOrWhiteSpace(command)
             ? OperationKind.Unknown
             : OperationKind.TerminalCommand;
@@ -102,6 +108,10 @@ public sealed class OperationKindDetector : IOperationKindDetector
 
     private static readonly Regex FileReadRegex = new(
         @"(?:^|\s)(?:cat|type|get-content|read|ler|leia)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex FileWriteIntentRegex = new(
+        @"\b(?:escrev\w+|cri(?:e|a|ar)|grava\w+|grav\w+|salv\w+|write\w*|creat\w+|save\w*|gera\w*)\b.{0,40}\b(?:arquivo|file|script|c[oó]digo|conte[úu]do|nota|documento|texto)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex ScriptContentRegex = new(

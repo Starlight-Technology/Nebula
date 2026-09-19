@@ -16,8 +16,8 @@ public static class WebResearchServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var options = WebResearchOptions.FromConfiguration(configuration);
-        services.AddSingleton(options);
+        var webResearchOptions = WebResearchOptions.FromConfiguration(configuration);
+        services.AddSingleton(webResearchOptions);
         services.Configure<SearXngSearchOptions>(
             configuration.GetSection(SearXngSearchOptions.SectionName));
         services.PostConfigure<SearXngSearchOptions>(
@@ -33,16 +33,8 @@ public static class WebResearchServiceCollectionExtensions
         services.AddHttpClient<SearXngSearchProvider>();
         services.AddHttpClient<CachedPageFetcher>();
         services.AddHttpClient<BraveWebResearchService>();
-        services.AddScoped<IWebSearchOrchestrator>(provider =>
-            new WebSearchOrchestrator(
-                [
-                    provider.GetRequiredService<SearXngSearchProvider>(),
-                    provider.GetRequiredService<BingHtmlSearchProvider>()
-                ],
-                provider.GetService<WebResearchLogSink>()));
-        services.AddTransient<IPageFetcher>(provider =>
-            provider.GetRequiredService<CachedPageFetcher>());
-        services.AddTransient<FreeSearchProvider>();
+        services.AddHttpClient<FreeTextSearchProvider>();
+        services.AddScoped<FreeTextSearchOptions>();
         services.AddScoped<ISearchProvider, ConfigurableSearchProvider>();
         services.AddScoped<FreeWebResearchService>();
         services.AddScoped<IWebResearchService, ConfigurableWebResearchService>();

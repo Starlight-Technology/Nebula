@@ -2,7 +2,7 @@ using Nebula.Agent.Data;
 
 namespace Nebula.Agent.Application;
 
-internal static class ActionRequestValidator
+public static class ActionRequestValidator
 {
     private static readonly string[] ReferentialTerms =
     [

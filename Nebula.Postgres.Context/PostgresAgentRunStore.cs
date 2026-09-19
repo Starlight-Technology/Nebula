@@ -37,30 +37,69 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
         existing.CurrentPlan = entity.CurrentPlan;
         existing.WorkspaceRoot = entity.WorkspaceRoot;
 
-        context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
-        context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
-        context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
-        await context.SaveChangesAsync(cancellationToken);
-
-        foreach (var step in entity.Steps)
+        var isInMemory = context.Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true;
+        if (isInMemory)
         {
-            step.RunId = run.Id;
-            context.AgentStepRecords.Add(step);
+            context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
+            context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
+            context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
+            await context.SaveChangesAsync(cancellationToken);
+
+            foreach (var step in entity.Steps)
+            {
+                step.RunId = run.Id;
+                context.AgentStepRecords.Add(step);
+            }
+
+            foreach (var artifact in entity.Artifacts)
+            {
+                artifact.RunId = run.Id;
+                context.AgentArtifacts.Add(artifact);
+            }
+
+            foreach (var approval in entity.Approvals)
+            {
+                approval.RunId = run.Id;
+                context.AgentApprovals.Add(approval);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            return;
         }
 
-        foreach (var artifact in entity.Artifacts)
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        try
         {
-            artifact.RunId = run.Id;
-            context.AgentArtifacts.Add(artifact);
-        }
+            context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
+            context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
+            context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
 
-        foreach (var approval in entity.Approvals)
+            foreach (var step in entity.Steps)
+            {
+                step.RunId = run.Id;
+                context.AgentStepRecords.Add(step);
+            }
+
+            foreach (var artifact in entity.Artifacts)
+            {
+                artifact.RunId = run.Id;
+                context.AgentArtifacts.Add(artifact);
+            }
+
+            foreach (var approval in entity.Approvals)
+            {
+                approval.RunId = run.Id;
+                context.AgentApprovals.Add(approval);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
         {
-            approval.RunId = run.Id;
-            context.AgentApprovals.Add(approval);
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
         }
-
-        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<AgentRun>> GetRunsAsync(
