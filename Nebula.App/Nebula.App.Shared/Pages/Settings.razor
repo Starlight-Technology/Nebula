@@ -182,6 +182,18 @@
                     </label>
 
                     <label class="nebula-settings-field">
+                        <span>Provider mode</span>
+                        <select @bind="WorkspaceState.QuickSettings.ProviderMode"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            <option value="@ProviderMode.LocalOnly">Local only</option>
+                            <option value="@ProviderMode.LocalPreferred">Local preferred</option>
+                            <option value="@ProviderMode.RemoteAllowed">Remote allowed</option>
+                            <option value="@ProviderMode.RemoteOnly">Remote only</option>
+                        </select>
+                        <small>Define o preferencial local-first e a permissao de fallback remoto.</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
                         <span>User ID</span>
                         <input @bind="WorkspaceState.QuickSettings.UserId"
                                disabled="@WorkspaceState.IsSavingSettings"

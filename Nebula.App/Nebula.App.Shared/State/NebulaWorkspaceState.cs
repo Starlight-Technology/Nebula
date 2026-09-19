@@ -387,6 +387,7 @@ public sealed class NebulaWorkspaceState(
                 WorkspaceRoot = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty,
                 UserId = QuickSettings.UserId?.Trim() ?? string.Empty,
                 AutonomyProfile = QuickSettings.AutonomyProfile,
+                ProviderMode = QuickSettings.ProviderMode,
                 AutoApproveCommands = QuickSettings.AutoApproveCommands
             };
 
@@ -2118,6 +2119,7 @@ public Task ApproveCommandAsync(CommandExecution command)
         QuickSettings.WorkspaceRoot = RuntimeSettings.WorkspaceRoot;
         QuickSettings.UserId = RuntimeSettings.UserId;
         QuickSettings.AutonomyProfile = RuntimeSettings.AutonomyProfile;
+        QuickSettings.ProviderMode = RuntimeSettings.ProviderMode;
         QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
     }
 
@@ -2251,6 +2253,8 @@ public sealed class QuickSettingsDraft
     public string UserId { get; set; } = string.Empty;
 
     public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
 
     public bool AutoApproveCommands { get; set; }
 }

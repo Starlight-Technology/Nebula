@@ -48,4 +48,14 @@ public sealed class LocalFirstArchitectureTest
         Assert.Equal(ProviderMode.LocalPreferred, NebulaRuntimeSettings.GetDefaultProviderModeForProfile(AutonomyProfile.Autonomous));
         Assert.Equal(ProviderMode.RemoteAllowed, NebulaRuntimeSettings.GetDefaultProviderModeForProfile(AutonomyProfile.Laboratory));
     }
+
+    [Fact]
+    public void runtime_snapshot_should_expose_provider_mode_for_explicit_local_first_control()
+    {
+        var snapshot = new NebulaRuntimeSettingsSnapshot();
+
+        Assert.Equal(ProviderMode.LocalPreferred, snapshot.ProviderMode);
+        snapshot.ProviderMode = ProviderMode.LocalOnly;
+        Assert.Equal(ProviderMode.LocalOnly, snapshot.ProviderMode);
+    }
 }
