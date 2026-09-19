@@ -126,6 +126,19 @@ public static class MauiProgram
                     out var autonomyProfile)
                     ? autonomyProfile
                     : AutonomyProfile.Standard,
+            ProviderMode =
+                Enum.TryParse<ProviderMode>(
+                    Environment.GetEnvironmentVariable("NEBULA_PROVIDER_MODE"),
+                    ignoreCase: true,
+                    out var providerMode)
+                    ? providerMode
+                    : NebulaRuntimeSettings.GetDefaultProviderModeForProfile(
+                        Enum.TryParse<AutonomyProfile>(
+                            Environment.GetEnvironmentVariable("NEBULA_AUTONOMY_PROFILE"),
+                            ignoreCase: true,
+                            out var profile)
+                            ? profile
+                            : AutonomyProfile.Standard),
             SandboxMode =
                 Enum.TryParse<SandboxMode>(
                     Environment.GetEnvironmentVariable("NEBULA_SANDBOX_MODE"),

@@ -117,15 +117,8 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
             : path.Replace('/', '\\');
     }
 
-    private static bool IsUnder(string candidate, string root)
-    {
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith(
-                   $"..{Path.DirectorySeparatorChar}",
-                   StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative);
-    }
+    private static bool IsUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static CommandClassification Result(
         string text,

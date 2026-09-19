@@ -1,4 +1,5 @@
 using Nebula.Core.Projects;
+using Nebula.Core.Safety;
 
 namespace Nebula.Services.Projects;
 
@@ -92,13 +93,6 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
         }
     }
 
-    private static bool IsUnder(string candidate, string root)
-    {
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith(
-                   $"..{Path.DirectorySeparatorChar}",
-                   StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative);
-    }
+    private static bool IsUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 }

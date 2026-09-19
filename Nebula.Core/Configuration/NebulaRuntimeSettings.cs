@@ -10,6 +10,14 @@ public enum AutonomyProfile
     Laboratory = 3
 }
 
+public enum ProviderMode
+{
+    LocalOnly = 0,
+    LocalPreferred = 1,
+    RemoteAllowed = 2,
+    RemoteOnly = 3
+}
+
 public sealed class NebulaRuntimeSettings
 {
     public const string DefaultLanguageCode = "pt-BR";
@@ -38,6 +46,14 @@ public sealed class NebulaRuntimeSettings
     public string UserId { get; set; } = string.Empty;
 
     public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
+
+    public bool AllowsLocal => ProviderMode is not ProviderMode.RemoteOnly;
+
+    public bool AllowsRemote => ProviderMode is ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
+
+    public bool CanUseRemoteFallback => ProviderMode is ProviderMode.LocalPreferred or ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 
@@ -83,6 +99,7 @@ public sealed class NebulaRuntimeSettings
         WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
         UserId = snapshot.UserId?.Trim() ?? string.Empty;
         AutonomyProfile = snapshot.AutonomyProfile;
+        ProviderMode = snapshot.ProviderMode;
         RequireDeterministicVerification = snapshot.RequireDeterministicVerification;
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
@@ -108,6 +125,7 @@ public sealed class NebulaRuntimeSettings
             WorkspaceRoot = WorkspaceRoot,
             UserId = UserId,
             AutonomyProfile = AutonomyProfile,
+            ProviderMode = ProviderMode,
             RequireDeterministicVerification = RequireDeterministicVerification,
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
@@ -155,6 +173,18 @@ public sealed class NebulaRuntimeSettings
     {
         return profile is AutonomyProfile.Laboratory ? SandboxMode.Docker : SandboxMode.Disabled;
     }
+
+    public static ProviderMode GetDefaultProviderModeForProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => ProviderMode.LocalOnly,
+            AutonomyProfile.Standard => ProviderMode.LocalPreferred,
+            AutonomyProfile.Autonomous => ProviderMode.LocalPreferred,
+            AutonomyProfile.Laboratory => ProviderMode.RemoteAllowed,
+            _ => ProviderMode.LocalPreferred
+        };
+    }
 }
 
 public sealed class NebulaRuntimeSettingsSnapshot
@@ -184,6 +214,8 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public string UserId { get; set; } = string.Empty;
 
     public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 

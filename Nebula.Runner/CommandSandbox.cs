@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
+using Nebula.Core.Safety;
 
 namespace Nebula.Runner;
 
@@ -156,18 +157,8 @@ public sealed class DockerCommandSandbox : ICommandSandbox
         }
     }
 
-    private static bool IsPathUnder(string candidate, string root)
-    {
-        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root))
-        {
-            return false;
-        }
-
-        var relative = System.IO.Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith($"..{System.IO.Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-               !System.IO.Path.IsPathRooted(relative);
-    }
+    private static bool IsPathUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static IEnumerable<string> BuildShellInvocation(
         ShellKind shellKind,

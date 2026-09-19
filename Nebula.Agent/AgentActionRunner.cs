@@ -1520,20 +1520,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             "PlannedPatchSafetyClassifier",
             reasons);
 
-    private static bool IsPathUnder(string candidate, string root)
-    {
-        if (string.IsNullOrWhiteSpace(candidate))
-        {
-            return false;
-        }
-
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith(
-                   $"..{Path.DirectorySeparatorChar}",
-                   StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative);
-    }
+    private static bool IsPathUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private async Task<ActionAttemptResult> ExecuteCommandActionAsync(
         AgentActionSession session,

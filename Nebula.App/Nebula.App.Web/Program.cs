@@ -97,6 +97,9 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     AutonomyProfile =
         RuntimeSettingsBinding.ParseAutonomyProfile(
             builder.Configuration["Nebula:AutonomyProfile"]),
+    ProviderMode =
+        RuntimeSettingsBinding.ParseProviderMode(
+            builder.Configuration["Nebula:ProviderMode"]),
     SandboxMode =
         RuntimeSettingsBinding.ParseSandboxMode(
             builder.Configuration["Nebula:Sandbox:Mode"]),
@@ -397,6 +400,13 @@ internal static class RuntimeSettingsBinding
         return Enum.TryParse<AutonomyProfile>(value, ignoreCase: true, out var profile)
             ? profile
             : AutonomyProfile.Standard;
+    }
+
+    public static ProviderMode ParseProviderMode(string? value)
+    {
+        return Enum.TryParse<ProviderMode>(value, ignoreCase: true, out var providerMode)
+            ? providerMode
+            : ProviderMode.LocalPreferred;
     }
 
     public static List<string> ParseCategoryList(string? value)

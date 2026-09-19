@@ -107,6 +107,19 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             out var autonomyProfile)
             ? autonomyProfile
             : AutonomyProfile.Standard,
+    ProviderMode =
+        Enum.TryParse<ProviderMode>(
+            configuration["Nebula:ProviderMode"],
+            ignoreCase: true,
+            out var providerMode)
+            ? providerMode
+            : NebulaRuntimeSettings.GetDefaultProviderModeForProfile(
+                Enum.TryParse<AutonomyProfile>(
+                    configuration["Nebula:AutonomyProfile"],
+                    ignoreCase: true,
+                    out var profile)
+                    ? profile
+                    : AutonomyProfile.Standard),
     SandboxMode =
         Enum.TryParse<SandboxMode>(
             configuration["Nebula:Sandbox:Mode"],

@@ -1,6 +1,6 @@
 # Nebula Autonomous Agent Roadmap
 
-Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de programacao completos, escrever scripts funcionais, operar ferramentas locais com seguranca, aprender com resultados reais e entregar software verificavel de ponta a ponta.
+Objetivo: evoluir o Nebula para um orquestrador local-first de agentes e ferramentas, capaz de realizar tarefas autonomamente com modelos locais, manter execucao segura e verificavel, e usar provedores externos, agentes especializados ou integrações de terceiros apenas como extensoes opcionais quando o usuario ou a situacao exigirem.
 
 ## Principios
 
@@ -10,6 +10,189 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [x] A UI deve refletir o estado real do sistema: plano atual, comandos pendentes, aprovacoes, execucao, falhas, retries e conclusao.
 - [x] O Nebula deve preferir ferramentas deterministicas sempre que possivel: compiladores, testes, linters, parsers, formatadores e scanners antes de julgamento subjetivo da LLM.
 - [x] Memoria e aprendizado devem ser auditaveis, com fonte, confianca, data, experimento e resultado observado.
+- [x] O Nebula deve funcionar como primeiro class e principal localmente, sem depender de API externa, OpenCode, OpenClaw, SearXNG paginavel, ou qualquer provider remoto para operar tarefas basicas do dia a dia.
+- [x] Provedores externos e agentes especializados sao complementos opcionais, nunca requisitos estruturais do nucleo.
+- [x] O sistema deve ser provider-agnostic: modelos locais e remotos devem estar atras de abstrações claras e configuraveis.
+- [x] O sistema deve ser agent-agnostic: codigo, pesquisa, review, terminal e orquestracao devem poder ser executados por agentes especializados ou adaptadores, sem acoplar o nucleo a uma implementacao unica.
+- [x] O usuario deve poder configurar regras explcitas: local only, local preferred, remote allowed, remote only, por tarefa, por ambiente, por workspace ou por perfil de autonomia.
+
+## Visao arquitetural alvo
+
+### 1. Nebula como orquestrador central
+
+O Nebula nao deve tentar ser ao mesmo tempo chatbot, coding agent, browser, busca web, terminal, orchestrator multiagente e gateway de terceiros. Sua funcao central e:
+
+1. receber a intencao do usuario;
+2. classificar a tarefa;
+3. decidir se a tarefa e simples, media ou complexa;
+4. selecionar o agente mais adequado;
+5. selecionar o provider e o modelo mais confiaveis para esse contexto;
+6. selecionar as ferramentas necessarias;
+7. executar a acao com seguranca;
+8. validar o resultado com evidencia;
+9. replanejar, corrigir ou entregar.
+
+A arquitetura alvo e:
+
+```text
+Usuario
+  -> Nebula Orchestrator
+      -> Task Planner
+      -> Agent Registry
+      -> Provider Router
+      -> Tool Policy Engine
+      -> Local Execution Runtime
+      -> External Adapters (opcionais)
+      -> Validation + Memory + Knowledge
+```
+
+### 2. Local-first como requisito arquitetural
+
+O Nebula deve continuar util mesmo sem internet, sem OpenAI, sem Anthropic e sem qualquer dependencia externa.
+
+Fluxo base suportado:
+
+- LLM local via Ollama, llama.cpp, vLLM, LocalAI ou outro runtime compat vel;
+- banco local;
+- arquivo system local;
+- terminal local;
+- codigo local;
+- pesquisa local/indexada;
+- memoria local;
+- agentes locais.
+
+Provedores externos devem entrar somente quando forem explicitamente habilitados pelo usuario ou pelo ambiente.
+
+### 3. Provedores e modelos devem ser abstraidos
+
+A arquitetura deve incluir uma camada de provider e modelo, por exemplo:
+
+- `ILLMProvider`
+- `LocalLlmProvider`
+- `OllamaProvider`
+- `OpenAiCompatibleProvider`
+- `RemoteProvider`
+- `AgentProviderAdapter`
+
+O restante do sistema nao deve conhecer detalhes do backend de inferencia. A escolha deve depender de:
+
+- perfil local/remote;
+- configuracao do usuario;
+- hardware disponivel;
+- disponibilidade do modelo;
+- tarefa em questao;
+- risco e seguranca.
+
+### 4. Agentes especializados sao opcionais e intercambiaveis
+
+A estrutura deve permitir registros de agentes, por exemplo:
+
+- Planning Agent
+- Research Agent
+- Coding Agent
+- Review Agent
+- Terminal Agent
+- Documentation Agent
+- Validation Agent
+
+Esses agentes devem ter:
+
+- identidade e descricao;
+- capacidades;
+- ferramentas permitidas;
+- modelo preferencial;
+- fallback;
+- politicas de seguranca;
+- contexto e memoria;
+- criterios de sucesso.
+
+OpenCode, OpenClaw e outros agentes externos devem ser tratados como adapters/implementacoes opcionais, nunca como dependencia obrigatoria do nucleo do Nebula.
+
+### 5. Integracoes externas devem ficar em uma camada externa
+
+A arquitetura deve impedir que OpenCode, OpenClaw, SearXNG, API remota ou qualquer provider externo se tornem inevitaveis.
+
+A regra deve ser:
+
+- local sempre funciona;
+- externo somente atua quando habilitado;
+- provider remoto e provider local coexistem sem acoplamento no nucleo.
+
+### 6. ReAct continua sendo o motor principal, mas pode ser delegado
+
+O ReAct atual do Nebula deve continuar como mecanismo principal quando a tarefa e simples ou de execucao direta. Em tarefas complexas, o orchestrator pode delegar etapas inteiras para agentes especializados sem quebrar o fluxo geral de `Thought -> Action -> Observation -> Correction`.
+
+Exemplo:
+
+```text
+Planner
+  -> Coding Agent
+      -> Local workspace execution
+  -> Review Agent
+      -> Validation and evidence checks
+  -> Final orchestrator
+      -> Final report
+```
+
+### 7. Seguranca continua sendo base da arquitetura
+
+Quanto mais agentes e ferramentas forem adicionados, mais o sistema precisa isolar:
+
+- terminal;
+- filesystem;
+- git e repositorios;
+- rede;
+- codigo arbitrario;
+- credenciais e segredos;
+- scripts desconhecidos;
+- execucao de providers externos.
+
+A policy engine deve continuar decidindo `Allow`, `AskApproval` ou `Block`, independentemente do que o modelo diga.
+
+### 8. Local survivability
+
+O objetivo do projeto e que, mesmo se todas as APIs externas desaparecerem, o Nebula continue funcionando com:
+
+- LLM local;
+- memoria local;
+- pesquisa local;
+- workspace local;
+- ferramentas locais;
+- agentes locais;
+- validacao local.
+
+### 9. Roadmap de implementacao arquitetural
+
+Fase 0 — Base local-first
+- [ ] formalizar a politica de provider: local only / local preferred / remote allowed / remote only;
+- [ ] separar claramente o nucleo local do adaptador externo;
+- [ ] permitir selecao de modelo por tarefa e por perfil;
+- [ ] manter Ollama como implementacao local inicial, mas nao como unico caminho.
+
+Fase 1 — Abstracao de agentes
+- [ ] criar `IAgent`, `AgentDefinition`, `AgentRegistry` e `AgentExecutionContext`;
+- [ ] registrar agentes locais e externos usando a mesma interface;
+- [ ] permitir que o orchestrator escolha agentes conforme capacidade, risco e contexto.
+
+Fase 2 — Orquestrador central
+- [ ] criar o fluxo de classificacao, planejamento, delegacao, execucao, validacao e finalizacao;
+- [ ] reduzir uso de multi-agent para tarefas simples;
+- [ ] manter complexidade proporcional a demanda.
+
+Fase 3 — Adapters externos opcionais
+- [ ] criar adapter para OpenCode como Coding Agent;
+- [ ] criar adapter para OpenClaw como ambiente/agente externo opcional;
+- [ ] manter ambas as integracoes fora do nucleo principal.
+
+Fase 4 — Offline-first runtime
+- [ ] garantir que tarefas basicas possam rodar sem internet;
+- [ ] permitir funcionamento completo com provider local selecionado;
+- [ ] falhar de forma clara quando o usuario tentar usar remoto em modo local-only.
+
+Fase 5 — Multi-agent e supervisao
+- [ ] permitir colaboracao entre agentes quando necessario;
+- [ ] adicionar supervisor de conclusao, risco e qualidade;
+- [ ] recompor resultados entre agentes e validar evidencia final.
 
 ## Fase 1 - Fundacao de agente confiavel
 
@@ -109,12 +292,12 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Fase 10 - Seguranca e governanca
 
-- [ ] Separar policy de comandos por perfis: conservador, padrao, autonomo e laboratorio.
+- [x] Separar policy de comandos por perfis: conservador, padrao, autonomo e laboratorio (`AutonomyProfile` Conservative/Standard/Autonomous/Laboratory em `Nebula.Core/Configuration/NebulaRuntimeSettings.cs:5`, com `GetDefaultCategoriesForProfile`/`GetDefaultAutoApproveForProfile`/`GetDefaultSandboxForProfile`; lido nos 3 roots via `Nebula:AutonomyProfile`; testes em `AutonomyProfileTest`).
 - [x] Exigir aprovacao para rede, instalacao de pacotes, escrita fora do workspace, processos persistentes e alteracoes globais.
 - [x] Bloquear exfiltracao de credenciais, leitura de segredos e destruicao ampla de dados.
 - [x] Criar logs auditaveis para todas as decisoes de seguranca.
 - [x] Adicionar redacao automatica de segredos em logs exibidos na UI.
-- [ ] Criar simulador de policy para explicar como um comando seria classificado antes de executar.
+- [x] Criar simulador de policy para explicar como um comando seria classificado antes de executar (`IPolicySimulator`/`PolicySimulator` em `Nebula.Agent/Application/PolicySimulator.cs:9`, registrado via DI nos 3 roots, combina categorias do perfil + workspace no override; UI em `Settings.razor` + `NebulaWorkspaceState.RunPolicySimulationAsync`; testes em `PolicySimulatorTest`).
 - [x] Permitir configuracao por workspace das categorias auto-aprovadas (categorias por workspace persistidas em `workspace_memory` via `WorkspaceMemoryKind.AutoApprovedCategory` + `IWorkspaceCategoryPolicyService`, combinadas com as globais no override; escopo Category de aprovacao grava no workspace, nao global).
 - [x] Criar testes de regressao para comandos perigosos conhecidos.
 
