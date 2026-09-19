@@ -61,6 +61,34 @@ public sealed class LocalFirstArchitectureTest
     }
 
     [Fact]
+    public void provider_selector_should_respect_local_first_policy()
+    {
+        var selector = new AgentProviderSelector();
+
+        var localOnly = selector.Select(AgentCapability.Coding, new NebulaRuntimeSettings
+        {
+            ProviderMode = ProviderMode.LocalOnly
+        });
+
+        var preferred = selector.Select(AgentCapability.Coding, new NebulaRuntimeSettings
+        {
+            ProviderMode = ProviderMode.LocalPreferred
+        });
+
+        var remoteOnly = selector.Select(AgentCapability.Coding, new NebulaRuntimeSettings
+        {
+            ProviderMode = ProviderMode.RemoteOnly
+        });
+
+        Assert.NotNull(localOnly);
+        Assert.True(localOnly!.IsLocal);
+        Assert.NotNull(preferred);
+        Assert.True(preferred!.IsLocal);
+        Assert.NotNull(remoteOnly);
+        Assert.False(remoteOnly!.IsLocal);
+    }
+
+    [Fact]
     public void user_message_should_preserve_provider_mode_for_runtime_selection()
     {
         var message = new UserMessage(
