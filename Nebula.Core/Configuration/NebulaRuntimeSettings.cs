@@ -2,6 +2,14 @@ using Nebula.Core.Execution;
 
 namespace Nebula.Core.Configuration;
 
+public enum AutonomyProfile
+{
+    Conservative = 0,
+    Standard = 1,
+    Autonomous = 2,
+    Laboratory = 3
+}
+
 public sealed class NebulaRuntimeSettings
 {
     public const string DefaultLanguageCode = "pt-BR";
@@ -28,6 +36,8 @@ public sealed class NebulaRuntimeSettings
     public string WorkspaceRoot { get; set; } = string.Empty;
 
     public string UserId { get; set; } = string.Empty;
+
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 
@@ -72,6 +82,7 @@ public sealed class NebulaRuntimeSettings
         AutoApproveCategories = snapshot.AutoApproveCategories?.ToList() ?? [];
         WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
         UserId = snapshot.UserId?.Trim() ?? string.Empty;
+        AutonomyProfile = snapshot.AutonomyProfile;
         RequireDeterministicVerification = snapshot.RequireDeterministicVerification;
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
@@ -96,6 +107,7 @@ public sealed class NebulaRuntimeSettings
             AutoApproveCategories = AutoApproveCategories.ToList(),
             WorkspaceRoot = WorkspaceRoot,
             UserId = UserId,
+            AutonomyProfile = AutonomyProfile,
             RequireDeterministicVerification = RequireDeterministicVerification,
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
@@ -120,6 +132,28 @@ public sealed class NebulaRuntimeSettings
         return string.IsNullOrWhiteSpace(value)
             ? defaultValue
             : value.Trim();
+    }
+
+    public static IReadOnlyList<string> GetDefaultCategoriesForProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => [],
+            AutonomyProfile.Standard => ["read-only", "write-local"],
+            AutonomyProfile.Autonomous => ["read-only", "write-local", "execute-local", "network-access"],
+            AutonomyProfile.Laboratory => ["read-only", "write-local", "execute-local", "network-access", "package-install", "privileged-operation"],
+            _ => []
+        };
+    }
+
+    public static bool GetDefaultAutoApproveForProfile(AutonomyProfile profile)
+    {
+        return profile is AutonomyProfile.Autonomous or AutonomyProfile.Laboratory;
+    }
+
+    public static SandboxMode GetDefaultSandboxForProfile(AutonomyProfile profile)
+    {
+        return profile is AutonomyProfile.Laboratory ? SandboxMode.Docker : SandboxMode.Disabled;
     }
 }
 
@@ -148,6 +182,8 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public string WorkspaceRoot { get; set; } = string.Empty;
 
     public string UserId { get; set; } = string.Empty;
+
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 

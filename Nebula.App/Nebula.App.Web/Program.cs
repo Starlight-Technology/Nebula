@@ -91,6 +91,12 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     WorkspaceRoot =
         builder.Configuration["Nebula:WorkspaceRoot"] ??
         string.Empty,
+    UserId =
+        builder.Configuration["Nebula:UserId"] ??
+        string.Empty,
+    AutonomyProfile =
+        RuntimeSettingsBinding.ParseAutonomyProfile(
+            builder.Configuration["Nebula:AutonomyProfile"]),
     SandboxMode =
         RuntimeSettingsBinding.ParseSandboxMode(
             builder.Configuration["Nebula:Sandbox:Mode"]),
@@ -220,7 +226,16 @@ builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
 builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 builder.Services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();
+builder.Services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+    provider.GetRequiredService<ICommandIntentParser>(),
+    provider.GetRequiredService<ICommandResolver>(),
+    provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    provider.GetRequiredService<IOperationKindDetector>(),
+    provider.GetRequiredService<ICommandPolicyEngine>(),
+    provider.GetRequiredService<IOperationPolicyEngine>(),
+    provider.GetRequiredService<ICommandApprovalService>(),
+    provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    provider.GetRequiredService<NebulaRuntimeSettings>()));
 builder.Services.AddScoped<ILearningEngine, LearningEngine>();
 builder.Services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
 builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
@@ -375,6 +390,13 @@ internal static class RuntimeSettingsBinding
         return Enum.TryParse<SandboxMode>(value, ignoreCase: true, out var mode)
             ? mode
             : SandboxMode.Disabled;
+    }
+
+    public static AutonomyProfile ParseAutonomyProfile(string? value)
+    {
+        return Enum.TryParse<AutonomyProfile>(value, ignoreCase: true, out var profile)
+            ? profile
+            : AutonomyProfile.Standard;
     }
 
     public static List<string> ParseCategoryList(string? value)

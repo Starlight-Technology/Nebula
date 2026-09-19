@@ -99,6 +99,14 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
     AutoApproveCategories = ParseCategoryList(
         configuration["Nebula:AutoApproveCategories"]),
     WorkspaceRoot = configuration["Nebula:WorkspaceRoot"] ?? string.Empty,
+    UserId = configuration["Nebula:UserId"] ?? string.Empty,
+    AutonomyProfile =
+        Enum.TryParse<AutonomyProfile>(
+            configuration["Nebula:AutonomyProfile"],
+            ignoreCase: true,
+            out var autonomyProfile)
+            ? autonomyProfile
+            : AutonomyProfile.Standard,
     SandboxMode =
         Enum.TryParse<SandboxMode>(
             configuration["Nebula:Sandbox:Mode"],
@@ -243,7 +251,16 @@ services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
 services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-services.AddScoped<IPolicySimulator, PolicySimulator>();
+services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+    provider.GetRequiredService<ICommandIntentParser>(),
+    provider.GetRequiredService<ICommandResolver>(),
+    provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    provider.GetRequiredService<IOperationKindDetector>(),
+    provider.GetRequiredService<ICommandPolicyEngine>(),
+    provider.GetRequiredService<IOperationPolicyEngine>(),
+    provider.GetRequiredService<ICommandApprovalService>(),
+    provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    provider.GetRequiredService<NebulaRuntimeSettings>()));
 services.AddScoped<IGitDiffService, GitDiffService>();
 services.AddScoped<ICommandApprovalService, CommandApprovalService>();
 

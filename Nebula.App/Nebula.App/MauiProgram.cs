@@ -116,6 +116,16 @@ public static class MauiProgram
             WorkspaceRoot =
                 Environment.GetEnvironmentVariable("NEBULA_WORKSPACE_ROOT") ??
                 string.Empty,
+            UserId =
+                Environment.GetEnvironmentVariable("NEBULA_USER_ID") ??
+                string.Empty,
+            AutonomyProfile =
+                Enum.TryParse<AutonomyProfile>(
+                    Environment.GetEnvironmentVariable("NEBULA_AUTONOMY_PROFILE"),
+                    ignoreCase: true,
+                    out var autonomyProfile)
+                    ? autonomyProfile
+                    : AutonomyProfile.Standard,
             SandboxMode =
                 Enum.TryParse<SandboxMode>(
                     Environment.GetEnvironmentVariable("NEBULA_SANDBOX_MODE"),
@@ -272,7 +282,16 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
         builder.Services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
         builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-        builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();
+        builder.Services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+            provider.GetRequiredService<ICommandIntentParser>(),
+            provider.GetRequiredService<ICommandResolver>(),
+            provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+            provider.GetRequiredService<IOperationKindDetector>(),
+            provider.GetRequiredService<ICommandPolicyEngine>(),
+            provider.GetRequiredService<IOperationPolicyEngine>(),
+            provider.GetRequiredService<ICommandApprovalService>(),
+            provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+            provider.GetRequiredService<NebulaRuntimeSettings>()));
         builder.Services.AddScoped<ICommandApprovalService, CommandApprovalService>();
 
         builder.Services.AddSingleton<IAgentRunEventPublisher, ChannelAgentRunEventPublisher>();

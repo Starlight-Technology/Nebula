@@ -165,6 +165,35 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Autonomy profile</h3>
+                        <p>Define o nível de autonomia do agente. Mantido em Inglês conforme solicitado.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Autonomy profile</span>
+                        <select @bind="WorkspaceState.QuickSettings.AutonomyProfile"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            <option value="@AutonomyProfile.Conservative">Conservative</option>
+                            <option value="@AutonomyProfile.Standard">Standard</option>
+                            <option value="@AutonomyProfile.Autonomous">Autonomous</option>
+                            <option value="@AutonomyProfile.Laboratory">Laboratory</option>
+                        </select>
+                        <small>Conservative = nada auto-aprovado; Laboratory = sandbox + categorias amplas.</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>User ID</span>
+                        <input @bind="WorkspaceState.QuickSettings.UserId"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               placeholder="user id (opcional)" />
+                        <small>Usado para user_memory e workspace_memory.</small>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>Idioma das respostas</h3>
                         <p>Esta preferencia entra no prompt de sistema e nos prompts internos de agente e aprendizado.</p>
                     </div>

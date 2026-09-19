@@ -81,7 +81,7 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [ ] Criar uma tela "Agent Run" dedicada com plano, terminal, arquivos, aprovacoes e evidencias.
 - [ ] Mostrar comandos em tempo real com status: pendente, aguardando aprovacao, executando, passou, falhou ou bloqueado.
 - [x] Permitir aprovar comandos direto do card do passo.
-- [ ] Permitir editar comando antes de aprovar.
+- [x] Permitir editar comando antes de aprovar (`Chat.razor:554` `StartEditingCommand` + `textarea` + `ApproveCommandAsync` com `ConsumeEditedCommand` → `AgentApprovedAction` com comando editado).
 - [x] Mostrar por que a policy pediu aprovacao ou bloqueou.
 - [ ] Criar timeline de eventos do agente com filtros.
 - [ ] Adicionar painel de artefatos criados: arquivos, scripts, logs, screenshots e relatorios.
@@ -143,7 +143,7 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [x] Criar `IAgentRunStore` para persistir execucoes longas.
 - [x] Criar `AgentRun`, `AgentStepRecord`, `AgentArtifactRecord` e `AgentApprovalRecord`.
 - [x] Mover logica de aprovacao para um servico dedicado, por exemplo `ICommandApprovalService`.
-- [ ] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas.
+- [x] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas (`AutonomyProfile` Conservative/Standard/Autonomous/Laboratory em `Nebula.Core/Configuration/NebulaRuntimeSettings.cs:5`, mapeado via `GetDefaultCategoriesForProfile`/`GetDefaultAutoApproveForProfile`/`GetDefaultSandboxForProfile`, lido em `Nebula.App.Web/Program.cs:97`, `MauiProgram.cs:122`, `Nebula.Cli/Program.cs:103`, `NebulaWorkspaceState.QuickSettings` + `Settings.razor` select).
 - [x] Adicionar testes para aprovacao por categoria e por workspace.
 - [ ] Criar componente Blazor reutilizavel para cards de comando.
 - [x] Criar tela `/agent-runs`.

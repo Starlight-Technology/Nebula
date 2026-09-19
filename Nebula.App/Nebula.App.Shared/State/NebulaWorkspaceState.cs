@@ -385,6 +385,8 @@ public sealed class NebulaWorkspaceState(
                 ResponseLanguageCode = language.Code,
                 ResponseLanguageName = language.Name,
                 WorkspaceRoot = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty,
+                UserId = QuickSettings.UserId?.Trim() ?? string.Empty,
+                AutonomyProfile = QuickSettings.AutonomyProfile,
                 AutoApproveCommands = QuickSettings.AutoApproveCommands
             };
 
@@ -2114,6 +2116,8 @@ public Task ApproveCommandAsync(CommandExecution command)
         QuickSettings.AccelerationProfile = RuntimeSettings.AccelerationProfile;
         QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
         QuickSettings.WorkspaceRoot = RuntimeSettings.WorkspaceRoot;
+        QuickSettings.UserId = RuntimeSettings.UserId;
+        QuickSettings.AutonomyProfile = RuntimeSettings.AutonomyProfile;
         QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
     }
 
@@ -2243,6 +2247,10 @@ public sealed class QuickSettingsDraft
         NebulaRuntimeSettings.DefaultLanguageCode;
 
     public string WorkspaceRoot { get; set; } = string.Empty;
+
+    public string UserId { get; set; } = string.Empty;
+
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
 
     public bool AutoApproveCommands { get; set; }
 }
