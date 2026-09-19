@@ -390,6 +390,12 @@ public class Manager : IManager
 
         actionRequest.ProviderMode = request.Message.ProviderMode;
 
+        var selector = new AgentProviderSelector();
+        var selectedAgent = selector.Select(AgentCapability.Coding, actionRequest.ProviderMode);
+        actionRequest.SelectedAgentId = selectedAgent?.Id;
+        actionRequest.SelectedAgentName = selectedAgent?.Name;
+        actionRequest.SelectedAgentDescription = selectedAgent?.Description;
+
         var runId = await orchestrator.RunAsync(actionRequest, cancellationToken);
 
         if (progress != null)
@@ -405,8 +411,12 @@ public class Manager : IManager
             Mode = InteractionMode.Agent,
             Classification = InteractionMode.Agent.ToString(),
             ModelName = llamaClient.SelectedModel,
+            SelectedAgentId = actionRequest.SelectedAgentId ?? string.Empty,
+            SelectedAgentName = actionRequest.SelectedAgentName ?? string.Empty,
             ActionStatus = ActionExecutionStatus.Started,
-            Response = "Agent run started in background..."
+            Response = selectedAgent is null
+                ? "Agent run started in background..."
+                : $"Agent run started in background using '{selectedAgent.Name}' ({selectedAgent.PreferredMode})."
         };
     }
 

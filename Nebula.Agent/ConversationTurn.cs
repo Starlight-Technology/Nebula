@@ -22,6 +22,10 @@ public class ConversationTurn
 
     public string Classification { get; set; } = string.Empty;
 
+    public string SelectedAgentId { get; set; } = string.Empty;
+
+    public string SelectedAgentName { get; set; } = string.Empty;
+
     public string Response { get; set; } = string.Empty;
 
     public string? Reasoning { get; set; }

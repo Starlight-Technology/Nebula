@@ -53,6 +53,16 @@ public sealed class AgentActionRunRequest
     public Nebula.Core.Configuration.ProviderMode ProviderMode { get; set; } =
         Nebula.Core.Configuration.ProviderMode.LocalPreferred;
 
+    /// <summary>
+    /// Agent selected by the provider policy for the current task. This is the
+    /// effective runtime choice used to keep local-first behaviour as default.
+    /// </summary>
+    public string? SelectedAgentId { get; set; }
+
+    public string? SelectedAgentName { get; set; }
+
+    public string? SelectedAgentDescription { get; set; }
+
     [Obsolete("Use MaxRetriesPerStep instead.")]
     public int? MaxRetries { get; set; }
 }
