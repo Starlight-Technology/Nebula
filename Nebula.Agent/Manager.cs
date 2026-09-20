@@ -403,6 +403,14 @@ public class Manager : IManager
             _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
         }
 
+        var reasoning = selectedAgent is null
+            ? "Iniciando a tarefa localmente e validando o objetivo antes de executar qualquer comando."
+            : $"Iniciando a tarefa com o agente '{selectedAgent.Name}' ({selectedAgent.PreferredMode}). Vou validar o objetivo, decompor a ação e executar somente o necessário em ambiente local.";
+
+        var response = selectedAgent is null
+            ? "Agent run started in background..."
+            : $"Agent run started in background using '{selectedAgent.Name}' ({selectedAgent.PreferredMode}).";
+
         return new ConversationTurn
         {
             ConversationId = request.ConversationId,
@@ -414,9 +422,9 @@ public class Manager : IManager
             SelectedAgentId = actionRequest.SelectedAgentId ?? string.Empty,
             SelectedAgentName = actionRequest.SelectedAgentName ?? string.Empty,
             ActionStatus = ActionExecutionStatus.Started,
-            Response = selectedAgent is null
-                ? "Agent run started in background..."
-                : $"Agent run started in background using '{selectedAgent.Name}' ({selectedAgent.PreferredMode})."
+            Response = response,
+            Reasoning = reasoning,
+            CurrentPlan = "#1 [pending] [risk=low] Validar objetivo e iniciar a execução local."
         };
     }
 

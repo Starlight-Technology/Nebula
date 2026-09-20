@@ -66,7 +66,8 @@ public class ManagerTest
 
         var result = await manager.ManageResponse(AgentMessage(prompt));
 
-        Assert.Equal("Agent run started in background...", result);
+        Assert.Contains("Agent run started in background", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Coding Local", result, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(captured);
         Assert.Equal(prompt, captured!.Prompt);
         Assert.Equal(InteractionMode.Agent, captured.Mode);
@@ -159,6 +160,26 @@ public class ManagerTest
         var result = await manager.ManageConversationAsync(AgentMessage("Delete system files"));
         Assert.Equal(ActionExecutionStatus.Started, result.ActionStatus);
         Assert.Contains("started in background", result.Response, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_emit_visible_reasoning_when_agent_starts()
+    {
+        const string prompt = "Create a script that prints hello";
+        var orchestratorMock = new Mock<IAgentRunOrchestrator>();
+        orchestratorMock
+            .Setup(o => o.RunAsync(It.IsAny<AgentActionRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        var manager = create_manager(create_llama_client_mock(), orchestrator: orchestratorMock.Object);
+
+        var result = await manager.ManageConversationAsync(AgentMessage(prompt));
+
+        Assert.Equal(ActionExecutionStatus.Started, result.ActionStatus);
+        Assert.NotNull(result.Reasoning);
+        Assert.Contains("iniciando", result.Reasoning, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Coding Local", result.Reasoning, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Agent run started", result.Response, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
