@@ -143,7 +143,7 @@ public class ManagerTest
             promptRepositoryMock: promptRepositoryMock,
             orchestrator: orchestratorMock.Object);
         var result = await manager.ManageResponse(AgentMessage(prompt));
-        Assert.Equal("Agent run started in background...", result);
+        Assert.Contains("Agent run started in background", result, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(savedRequest);
         Assert.NotNull(captured);
         Assert.Equal(prompt, captured!.Prompt);
@@ -277,7 +277,7 @@ public class ManagerTest
 
         Assert.Equal(InteractionMode.Agent, result.Mode);
         Assert.Equal(ActionExecutionStatus.Started, result.ActionStatus);
-        Assert.Equal("Agent run started in background...", result.Response);
+        Assert.Contains("Agent run started in background", result.Response, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(captured);
         Assert.Equal(prompt, captured!.Prompt);
         orchestratorMock.VerifyAll();

@@ -971,6 +971,12 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         else
         {
             var targetPath = ResolveOperationPath(action.TargetPath, workingDirectory);
+            // Fallback determinístico igual ao ExecuteFileWriteAsync para preview de "crie um txt" sem nome.
+            if (string.IsNullOrWhiteSpace(targetPath) && operationKind is OperationKind.FileWrite or OperationKind.ScriptContent)
+            {
+                targetPath = Path.Combine(session.WorkspaceRoot.Root, "teste.txt");
+            }
+
             execution.TargetPath = targetPath;
             execution.Run = $"{operationKind.ToString().ToLowerInvariant()} \"{targetPath}\"";
 
@@ -1856,6 +1862,22 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         var targetPath = ResolveOperationPath(
             action.TargetPath,
             execution.WorkingDirectory);
+
+        // Fallback determinístico para prompt mínimo "crie um txt": quando o LLM não especifica nome/caminho,
+        // cria teste.txt direto no workspace sem pedir aprovação (extensão .txt dentro do workspace é Allow).
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            targetPath = Path.Combine(session.WorkspaceRoot.Root, "teste.txt");
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(content) && targetPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+        {
+            content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
+        }
+
         execution.TargetPath = targetPath;
         execution.Run = $"write-file \"{targetPath}\"";
         execution.OriginalCommand = action.Command;

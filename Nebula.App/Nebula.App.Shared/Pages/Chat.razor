@@ -160,13 +160,14 @@
 
                                         @if (turn.Result is not null)
                                         {
+                                            var headerVisibleCommands = NebulaWorkspaceState.GetVisibleCommands(turn);
                                             <CoronaBadge Content="@turn.Result.Classification"
                                                          Variant="CoronaBadgeVariant.Outlined"
                                                          Color="CoronaColorSemantic.Neutral" />
 
-                                            @if (turn.Result.Commands.Count > 0)
+                                            if (headerVisibleCommands.Count > 0)
                                             {
-                                                <CoronaBadge Content="@($"{turn.Result.Commands.Count} passo(s)")"
+                                                <CoronaBadge Content="@($"{headerVisibleCommands.Count} passo(s)")"
                                                              Variant="CoronaBadgeVariant.Soft"
                                                              Color="CoronaColorSemantic.Success" />
                                             }
@@ -470,17 +471,20 @@
                                             </section>
                                         }
 
-                                        @if (turn.Result.Commands.Count > 0)
+                                        @{
+                                            var visibleCommands = NebulaWorkspaceState.GetVisibleCommands(turn);
+                                        }
+                                        @if (visibleCommands.Count > 0)
                                         {
                                             <section class="nebula-panel-section">
                                                 <div class="nebula-panel-section__header">
-                                                    <CoronaBadge Content="@($"Passos ({turn.Result.Commands.Count})")"
+                                                    <CoronaBadge Content="@($"Passos ({visibleCommands.Count})")"
                                                                  Variant="CoronaBadgeVariant.Soft"
                                                                  Color="CoronaColorSemantic.Success" />
                                                 </div>
 
 <div class="nebula-steps">
-                                                     @foreach (var command in turn.Result.Commands)
+                                                     @foreach (var command in visibleCommands)
                                                      {
                                                          var isEditing = WorkspaceState.IsEditingCommand(command.Id);
                                                          <div class="nebula-step-card">
@@ -723,7 +727,7 @@
             {
                 var missionStatus = missionTurn.StreamingActionStatus
                     ?? missionTurn.Result?.ActionStatus;
-                var executedCount = missionTurn.StreamingCommands.Count(c => c.Executed);
+                var executedCount = NebulaWorkspaceState.GetVisibleCommands(missionTurn).Count(c => c.Executed);
 
                 <CoronaCard Class="nebula-status-card">
                     <div class="nebula-status-card__header">

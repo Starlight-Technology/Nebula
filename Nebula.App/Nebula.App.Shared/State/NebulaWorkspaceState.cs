@@ -1701,12 +1701,47 @@ public Task ApproveCommandAsync(CommandExecution command)
 
     public static IReadOnlyList<ActionExecutionEvent> GetActionEvents(ConversationEntryViewModel turn)
     {
-        return turn.Result?.ActionEvents ?? turn.StreamingActionEvents;
+        if (turn.Result is null)
+        {
+            return turn.StreamingActionEvents;
+        }
+
+        // While background is still streaming (Result is just Started placeholder), show live streaming events.
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingActionEvents.Count > 0)
+        {
+            if (turn.Result.ActionEvents.Count == 0)
+            {
+                return turn.StreamingActionEvents;
+            }
+
+            var merged = new List<ActionExecutionEvent>(turn.Result.ActionEvents);
+            merged.AddRange(turn.StreamingActionEvents.Where(e => merged.All(m => m.Id != e.Id)));
+            return merged;
+        }
+
+        return turn.Result.ActionEvents;
     }
 
     public static IReadOnlyList<CommandExecution> GetVisibleCommands(ConversationEntryViewModel turn)
     {
-        return turn.Result?.Commands ?? turn.StreamingCommands;
+        if (turn.Result is null)
+        {
+            return turn.StreamingCommands;
+        }
+
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingCommands.Count > 0)
+        {
+            if (turn.Result.Commands.Count == 0)
+            {
+                return turn.StreamingCommands;
+            }
+
+            var merged = new List<CommandExecution>(turn.Result.Commands);
+            merged.AddRange(turn.StreamingCommands.Where(c => merged.All(m => m.Id != c.Id)));
+            return merged;
+        }
+
+        return turn.Result.Commands;
     }
 
     public static CoronaColorSemantic GetActionStatusColor(ActionExecutionStatus status)
@@ -1795,13 +1830,36 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -1813,17 +1871,12 @@ public Task ApproveCommandAsync(CommandExecution command)
                 new UserMessage(
                     normalizedPrompt,
                     turn.Mode,
-                    WorkspaceRoot: RuntimeSettings.WorkspaceRoot,
+                    WorkspaceRoot: ResolvedWorkspace.Root,
                     IsDryRun: isDryRun),
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Keep IsSending true while background run streams progress; terminal status will set it false.
+            // Streaming fields are managed by the progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -1920,12 +1973,34 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                }
 
                 if (!isDisposed)
                 {
@@ -1938,12 +2013,7 @@ public Task ApproveCommandAsync(CommandExecution command)
                 progress,
                 scope,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
+            // Streaming managed by progress handler; terminal status promotes to Result.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -2001,13 +2071,36 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -2019,13 +2112,7 @@ public Task ApproveCommandAsync(CommandExecution command)
                 run,
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Streaming managed by progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
