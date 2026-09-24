@@ -120,6 +120,11 @@ services:
       MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
       POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
       Research__SearXng__BaseUrl: "http://searxng:8080"
+      NEBULA_WORKSPACE_ROOT: "/tmp/nebula-workspace"
+      Nebula__WorkspaceRoot: "/tmp/nebula-workspace"
+    volumes:
+      - /tmp/nebula-workspace:/tmp/nebula-workspace:rw,Z
+      - /tmp/Nebula:/tmp/Nebula:rw,Z
     restart: unless-stopped
 
 volumes:

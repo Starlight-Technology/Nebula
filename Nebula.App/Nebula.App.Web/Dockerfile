@@ -5,6 +5,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS base
 USER root
 WORKDIR /app
 EXPOSE 8081
+RUN mkdir -p /tmp/nebula-workspace /tmp/Nebula && chmod -R 777 /tmp/nebula-workspace /tmp/Nebula
 
 
 # This stage is used to build the service project
