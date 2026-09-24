@@ -5,7 +5,7 @@ namespace Nebula.Services.Safety;
 public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
 {
     private static readonly string[] AllowedExtensions =
-        [".txt", ".md", ".json", ".cs", ".py"];
+        [".txt", ".md", ".json", ".cs", ".py", ".html", ".htm", ".css", ".js"];
 
     private static readonly string[] ApprovalExtensions =
         [".ps1", ".bat", ".cmd"];

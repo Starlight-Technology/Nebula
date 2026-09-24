@@ -970,12 +970,9 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         }
         else
         {
-            var targetPath = ResolveOperationPath(action.TargetPath, workingDirectory);
-            // Fallback determinístico igual ao ExecuteFileWriteAsync para preview de "crie um txt" sem nome.
-            if (string.IsNullOrWhiteSpace(targetPath) && operationKind is OperationKind.FileWrite or OperationKind.ScriptContent)
-            {
-                targetPath = Path.Combine(session.WorkspaceRoot.Root, "teste.txt");
-            }
+            var targetPath = operationKind is OperationKind.FileWrite or OperationKind.ScriptContent
+                ? BuildWorkspaceTargetPath(session, action.TargetPath)
+                : ResolveOperationPath(action.TargetPath, workingDirectory);
 
             execution.TargetPath = targetPath;
             execution.Run = $"{operationKind.ToString().ToLowerInvariant()} \"{targetPath}\"";
@@ -1859,23 +1856,28 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
     {
         var execution = session.CreateExecution(action, step, operationKind);
         var content = action.Content ?? string.Empty;
-        var targetPath = ResolveOperationPath(
-            action.TargetPath,
-            execution.WorkingDirectory);
+        // Sanitiza C:/Users/... e organiza em workspace/<id8>/... para linux e evitar inventar diretórios.
+        var targetPath = BuildWorkspaceTargetPath(session, action.TargetPath);
 
-        // Fallback determinístico para prompt mínimo "crie um txt": quando o LLM não especifica nome/caminho,
-        // cria teste.txt direto no workspace sem pedir aprovação (extensão .txt dentro do workspace é Allow).
-        if (string.IsNullOrWhiteSpace(targetPath))
+        if (string.IsNullOrWhiteSpace(content))
         {
-            targetPath = Path.Combine(session.WorkspaceRoot.Root, "teste.txt");
-            if (string.IsNullOrWhiteSpace(content))
+            if (targetPath.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
+                targetPath.EndsWith(".htm", StringComparison.OrdinalIgnoreCase))
+            {
+                content = $"<!DOCTYPE html>{Environment.NewLine}<html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><title>Pagina</title></head><body><h1>Pagina criada pelo Nebula</h1><p>Prompt: {System.Net.WebUtility.HtmlEncode(session.Request.Prompt)}</p></body></html>";
+            }
+            else if (targetPath.EndsWith(".css", StringComparison.OrdinalIgnoreCase))
+            {
+                content = $"/* Estilo gerado para {session.Request.Prompt} */{Environment.NewLine}body {{ font-family: sans-serif; margin: 2rem; }}";
+            }
+            else if (targetPath.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+            {
+                content = $"// Script gerado para {session.Request.Prompt}{Environment.NewLine}console.log('Nebula');";
+            }
+            else
             {
                 content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
             }
-        }
-        else if (string.IsNullOrWhiteSpace(content) && targetPath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
-        {
-            content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
         }
 
         execution.TargetPath = targetPath;
@@ -3392,6 +3394,47 @@ return (observationMessage, historyEntry);
         return Path.DirectorySeparatorChar == '/'
             ? path.Replace('\\', '/')
             : path.Replace('/', '\\');
+    }
+
+    private static string SanitizeRelativePath(string? rawTarget)
+    {
+        if (string.IsNullOrWhiteSpace(rawTarget))
+        {
+            return "teste.txt";
+        }
+
+        var trimmed = rawTarget.Trim();
+        var hadDrive = trimmed.Length >= 2 && char.IsLetter(trimmed[0]) && trimmed[1] == ':';
+
+        var normalized = rawTarget.Replace('\\', '/').Trim();
+
+        if (hadDrive)
+        {
+            // Windows absolute path: don't invent Users/Name/... just keep file name.
+            normalized = normalized.Substring(2).TrimStart('/', '\\');
+            var fileName = Path.GetFileName(normalized);
+            return string.IsNullOrWhiteSpace(fileName) ? "teste.txt" : fileName;
+        }
+
+        normalized = normalized.TrimStart('/');
+
+        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Where(p => p != "." && p != ".." && !p.Contains(':'))
+            .ToArray();
+
+        if (parts.Length == 0)
+        {
+            return "teste.txt";
+        }
+
+        return Path.Combine(parts);
+    }
+
+    private static string BuildWorkspaceTargetPath(AgentActionSession session, string? rawTarget)
+    {
+        var sanitized = SanitizeRelativePath(rawTarget);
+        var id8 = session.Request.ConversationId.ToString("N")[..8];
+        return Path.Combine(session.WorkspaceRoot.Root, id8, sanitized);
     }
 
     private static string? TryExtractScriptPath(
