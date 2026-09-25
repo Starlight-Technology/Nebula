@@ -35,6 +35,16 @@ public static class WebResearchServiceCollectionExtensions
         services.AddHttpClient<BraveWebResearchService>();
         services.AddHttpClient<FreeTextSearchProvider>();
         services.AddScoped<FreeTextSearchOptions>();
+        services.AddScoped<IWebSearchOrchestrator>(provider =>
+            new WebSearchOrchestrator(
+                [
+                    provider.GetRequiredService<SearXngSearchProvider>(),
+                    provider.GetRequiredService<BingHtmlSearchProvider>()
+                ],
+                provider.GetService<WebResearchLogSink>()));
+        services.AddTransient<IPageFetcher>(provider =>
+            provider.GetRequiredService<CachedPageFetcher>());
+        services.AddTransient<FreeSearchProvider>();
         services.AddScoped<ISearchProvider, ConfigurableSearchProvider>();
         services.AddScoped<FreeWebResearchService>();
         services.AddScoped<IWebResearchService, ConfigurableWebResearchService>();
