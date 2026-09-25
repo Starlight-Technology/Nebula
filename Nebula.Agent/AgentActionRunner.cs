@@ -3416,7 +3416,22 @@ return (observationMessage, historyEntry);
             return string.IsNullOrWhiteSpace(fileName) ? "teste.txt" : fileName;
         }
 
-        normalized = normalized.TrimStart('/');
+        // Se LLM copiou caminho absoluto do host visto em Evidence ("File written: /tmp/nebula-workspace/..."),
+        // remover prefixo até nebula-workspace para não aninhar tmp/nebula-workspace dentro do id.
+        var idx = normalized.IndexOf("nebula-workspace", StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0)
+        {
+            normalized = normalized.Substring(idx + "nebula-workspace".Length).TrimStart('/', '\\');
+            normalized = normalized.TrimStart('/');
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return "teste.txt";
+            }
+        }
+        else
+        {
+            normalized = normalized.TrimStart('/');
+        }
 
         var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Where(p => p != "." && p != ".." && !p.Contains(':'))
@@ -3425,6 +3440,16 @@ return (observationMessage, historyEntry);
         if (parts.Length == 0)
         {
             return "teste.txt";
+        }
+
+        // Remover id curto antigo copiado do histórico (ex: 0862f1aa/arquivo.txt -> arquivo.txt)
+        if (parts.Length > 1 && parts[0].Length == 8 && parts[0].All(c => Uri.IsHexDigit(c)))
+        {
+            parts = parts.Skip(1).ToArray();
+            if (parts.Length == 0)
+            {
+                return "teste.txt";
+            }
         }
 
         return Path.Combine(parts);
