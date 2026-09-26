@@ -395,6 +395,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         var workspaceRoot = ReferenceWorkspace.Resolve(request.WorkspaceRoot);
         var workspaceContext = await BuildWorkspaceContextAsync(
             workspaceRoot.Root,
+            request.ConversationId,
             cancellationToken);
         var templateContext = BuildTemplateContext();
         var strategyContext = await BuildStrategyContextAsync(
@@ -4272,10 +4273,28 @@ return (observationMessage, historyEntry);
 
     private async Task<string> BuildWorkspaceContextAsync(
         string workspaceRoot,
+        Guid conversationId,
         CancellationToken cancellationToken)
     {
         if (workspaceMapService is null && workspaceMemoryService is null)
         {
+            // Still try to inject conversation folder file list even without those services
+            try
+            {
+                var conversationFolderForEmpty = Path.Combine(workspaceRoot, conversationId.ToString("N")[..8]);
+                if (conversationId != Guid.Empty && Directory.Exists(conversationFolderForEmpty))
+                {
+                    var files = Directory.GetFiles(conversationFolderForEmpty, "*", SearchOption.AllDirectories)
+                        .Select(f => Path.GetRelativePath(conversationFolderForEmpty, f))
+                        .Take(30)
+                        .ToList();
+                    if (files.Count > 0)
+                    {
+                        return $"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{string.Join(Environment.NewLine, files.Select(f => $"- {f}"))}{Environment.NewLine}Always modify existing files in this folder with PlannedPatch when the user says 'modificar', 'alterar' ou 'mudar'.";
+                    }
+                }
+            }
+            catch { }
             return string.Empty;
         }
 
@@ -4291,6 +4310,41 @@ return (observationMessage, historyEntry);
                 if (!string.IsNullOrWhiteSpace(summary))
                 {
                     sections.Add(summary);
+                }
+
+                // Injetar lista de arquivos da pasta por conversa para manter contexto entre criações e modificações
+                if (conversationId != Guid.Empty)
+                {
+                    var conversationFolder = Path.Combine(workspaceRoot, conversationId.ToString("N")[..8]);
+                    if (Directory.Exists(conversationFolder))
+                    {
+                        try
+                        {
+                            var convMap = await workspaceMapService.BuildAsync(conversationFolder, cancellationToken);
+                            var convSummary = convMap.BuildSummary();
+                            if (!string.IsNullOrWhiteSpace(convSummary))
+                            {
+                                sections.Add($"Conversation folder ({conversationId.ToString("N")[..8]}):{Environment.NewLine}{convSummary}");
+                            }
+                            else
+                            {
+                                var files = Directory.GetFiles(conversationFolder, "*", SearchOption.AllDirectories)
+                                    .Select(f => Path.GetRelativePath(conversationFolder, f))
+                                    .Take(30)
+                                    .ToList();
+                                if (files.Count > 0)
+                                {
+                                    sections.Add($"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{string.Join(Environment.NewLine, files.Select(f => $"- {f}"))}");
+                                }
+                            }
+                            // Instrução explícita para modificações
+                            sections.Add("When the user says 'modificar', 'altere', 'mude' or asks to change an existing file, use PlannedPatch with targetPath set to the conversation folder (workspace/<id8>/) and keep all files from the same chat in that same folder.");
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.Log($"[AGENT] Conversation folder map failed (non-fatal): {ex.Message}");
+                        }
+                    }
                 }
             }
         }
@@ -4329,6 +4383,9 @@ return (observationMessage, historyEntry);
             Environment.NewLine + Environment.NewLine,
             sections);
     }
+
+    private async Task<string> BuildWorkspaceContextAsync(string workspaceRoot, CancellationToken cancellationToken)
+        => await BuildWorkspaceContextAsync(workspaceRoot, Guid.Empty, cancellationToken);
 
     private string BuildTemplateContext()
     {

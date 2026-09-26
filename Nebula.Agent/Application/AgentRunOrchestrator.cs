@@ -104,10 +104,16 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
 
     public async Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, CancellationToken cancellationToken = default)
     {
+        return await RunApprovedCommandAsync(command, scope, Guid.NewGuid(), null, cancellationToken);
+    }
+
+    public async Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, Guid conversationId, string? workspaceRoot, CancellationToken cancellationToken = default)
+    {
         var runId = Guid.NewGuid();
+        var effectiveConversationId = conversationId == Guid.Empty ? Guid.NewGuid() : conversationId;
         var request = new AgentActionRunRequest
         {
-            ConversationId = Guid.NewGuid(),
+            ConversationId = effectiveConversationId,
             RequestId = Guid.NewGuid(),
             Prompt = $"Executar comando aprovado: {command.Run}",
             Mode = InteractionMode.Agent,
@@ -115,6 +121,7 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
             ModelName = "",
             MaxSteps = 1,
             MaxRetriesPerStep = 0,
+            WorkspaceRoot = workspaceRoot,
             ApprovedAction = new AgentApprovedAction
             {
                 Objective = command.Objective,

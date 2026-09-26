@@ -134,6 +134,7 @@ internal sealed class AgentActionSession
             StepNumber = StepNumber,
             RetryNumber = RetryNumber,
             WorkspaceRoot = WorkspaceRoot.Root,
+            ConversationId = Request.ConversationId,
             DryRun = IsDryRun
         };
     }

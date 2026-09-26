@@ -247,7 +247,11 @@ public class Manager : IManager
         };
         await promptAuditService.SaveAsync(promptRequest, cancellationToken);
 
-        var runId = await orchestrator.RunApprovedCommandAsync(command, scope, cancellationToken);
+        // Manter mesmo ConversationId e workspace base para que o arquivo aprovado caia na mesma pasta <id8> do chat
+        var workspaceRoot = !string.IsNullOrWhiteSpace(command.WorkingDirectory)
+            ? command.WorkingDirectory
+            : command.TargetPath;
+        var runId = await orchestrator.RunApprovedCommandAsync(command, scope, activeConversationId, workspaceRoot, cancellationToken);
 
         if (progress != null)
         {

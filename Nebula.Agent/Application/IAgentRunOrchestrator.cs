@@ -14,6 +14,7 @@ public interface IAgentRunOrchestrator
     Task<Guid> RunDryRunAsync(AgentActionRunRequest request, CancellationToken cancellationToken = default);
     Task<Guid> ResumeAsync(AgentRun run, CancellationToken cancellationToken = default);
     Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, CancellationToken cancellationToken = default);
+    Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, Guid conversationId, string? workspaceRoot, CancellationToken cancellationToken = default);
     Task CancelAsync(Guid runId);
     Task<AgentRunStatus?> GetStatusAsync(Guid runId);
     IAsyncEnumerable<AgentRunEvent> SubscribeAsync(Guid runId, CancellationToken cancellationToken = default);
