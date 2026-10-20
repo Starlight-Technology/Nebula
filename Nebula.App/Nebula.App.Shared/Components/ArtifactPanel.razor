@@ -1,0 +1,231 @@
+@using Nebula.Core.Agent
+
+<div class="nebula-artifact-panel">
+    <div class="nebula-artifact-panel__header">
+        <div>
+            <p class="nebula-kicker">Artefatos (@Artifacts.Count)</p>
+        </div>
+        @if (Artifacts.Count > 0)
+        {
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Icon="@CoronaIcons.Filter"
+                          OnClick="ToggleFilter">
+                @(ShowOnlyCreated ? "Mostrar todos" : "Apenas criados")
+            </CoronaButton>
+        }
+    </div>
+
+    @if (Artifacts.Count == 0)
+    {
+        <div class="nebula-artifact-panel__empty">
+            <CoronaBadge Content="Vazio" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
+            <p>Nenhum artefato registrado nesta execucao.</p>
+        </div>
+    }
+    else
+    {
+        <div class="nebula-artifact-panel__list">
+            @foreach (var artifact in FilteredArtifacts)
+            {
+                <div class="nebula-artifact-item @GetArtifactClass(artifact)">
+                    <div class="nebula-artifact-item__icon">
+                        @GetArtifactIcon(artifact)
+                    </div>
+                    <div class="nebula-artifact-item__info">
+                        <strong>@artifact.Name</strong>
+                        @if (!string.IsNullOrWhiteSpace(artifact.Path))
+                        {
+                            <span class="nebula-artifact-item__path">@artifact.Path</span>
+                        }
+                        <span class="nebula-artifact-item__meta">
+                            @artifact.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm")
+                            @if (!string.IsNullOrWhiteSpace(artifact.ContentHash))
+                            {
+                                <CoronaBadge Content="@artifact.ContentHash[..Math.Min(12, artifact.ContentHash.Length)]"
+                                             Variant="CoronaBadgeVariant.Outlined"
+                                             Color="CoronaColorSemantic.Neutral"
+                                             Size="CoronaComponentSize.Small" />
+                            }
+@if (IsScreenshotDiff(artifact))
+                            {
+                                var diffPercent = GetDiffPercent(artifact).ToString("F1");
+                                <CoronaBadge Content="@($"Diff: {diffPercent}%")"
+                                             Variant="CoronaBadgeVariant.Soft"
+                                             Color="CoronaColorSemantic.Warning"
+                                             Size="CoronaComponentSize.Small" />
+                            }
+                        </span>
+                    </div>
+                    <div class="nebula-artifact-item__actions">
+                        @if (!string.IsNullOrWhiteSpace(artifact.Path))
+                        {
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Icon="@CoronaIcons.Copy"
+                                          OnClick="@(() => CopyPath(artifact.Path))"
+                                          Title="Copiar caminho">
+                            </CoronaButton>
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Icon="@CoronaIcons.ExternalLink"
+                                          OnClick="@(() => OpenFile(artifact.Path))"
+                                          Title="Abrir arquivo">
+                            </CoronaButton>
+                        }
+                        @if (IsScreenshotDiff(artifact))
+                        {
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Icon="@CoronaIcons.Eye"
+                                          OnClick="@(() => ShowScreenshotDiff(artifact))"
+                                          Title="Ver comparacao">
+                            </CoronaButton>
+                        }
+                    </div>
+                </div>
+
+                @if (IsScreenshotDiff(artifact) && ShowDiffForArtifact == artifact.Id)
+                {
+                    <div class="nebula-screenshot-diff">
+                        <div class="nebula-screenshot-diff__header">
+                            <span>Comparacao: @artifact.Name</span>
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Icon="@CoronaIcons.Xmark"
+                                          OnClick="@(() => ShowDiffForArtifact = null)">
+                            </CoronaButton>
+                        </div>
+                        <div class="nebula-screenshot-diff__comparison">
+                            <div class="nebula-screenshot-diff__side">
+                                <span class="nebula-screenshot-diff__label">Baseline</span>
+                                <img src="@GetBaselineImageUrl(artifact)" alt="Baseline" />
+                            </div>
+                            <div class="nebula-screenshot-diff__side">
+                                <span class="nebula-screenshot-diff__label">Atual</span>
+                                <img src="@GetCurrentImageUrl(artifact)" alt="Current" />
+                            </div>
+                            <div class="nebula-screenshot-diff__side">
+                                <span class="nebula-screenshot-diff__label">Diff (@GetDiffPercent(artifact).ToString("F1")%)</span>
+                                <img src="@GetDiffImageUrl(artifact)" alt="Diff" />
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<AgentArtifactRecord> Artifacts { get; set; } = [];
+    [Parameter] public EventCallback<string> OnOpenFile { get; set; }
+    [Parameter] public EventCallback<string> OnCopyPath { get; set; }
+
+    private bool ShowOnlyCreated { get; set; } = true;
+    private Guid? ShowDiffForArtifact { get; set; }
+
+    private IEnumerable<AgentArtifactRecord> FilteredArtifacts =>
+        ShowOnlyCreated
+            ? Artifacts.Where(a => !string.IsNullOrWhiteSpace(a.Path))
+            : Artifacts;
+
+    private string GetArtifactClass(AgentArtifactRecord artifact)
+    {
+        var classes = new List<string>();
+        if (string.IsNullOrWhiteSpace(artifact.Path))
+            classes.Add("nebula-artifact-item--virtual");
+        if (IsScreenshotDiff(artifact))
+            classes.Add("nebula-artifact-item--screenshot-diff");
+        return string.Join(" ", classes);
+    }
+
+    private string GetArtifactIcon(AgentArtifactRecord artifact)
+    {
+        if (string.IsNullOrWhiteSpace(artifact.Path))
+            return "📄";
+
+        var ext = Path.GetExtension(artifact.Path).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" or ".vb" => "📄",
+            ".js" or ".ts" or ".jsx" or ".tsx" => "📄",
+            ".py" => "🐍",
+            ".json" => "📋",
+            ".md" => "📝",
+            ".txt" => "📄",
+            ".html" or ".htm" => "🌐",
+            ".css" or ".scss" => "🎨",
+            ".sql" => "🗄️",
+            ".dockerfile" or ".dockerignore" => "🐳",
+            ".yml" or ".yaml" => "⚙️",
+            ".xml" => "📋",
+            ".sh" or ".ps1" or ".bat" or ".cmd" => "⚡",
+            ".sln" or ".csproj" or ".fsproj" or ".vbproj" => "📦",
+            ".gitignore" => "🚫",
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" => "🖼️",
+            _ => "📄"
+        };
+    }
+
+    private bool IsScreenshotDiff(AgentArtifactRecord artifact)
+    {
+        return artifact.Name.Contains("screenshot", StringComparison.OrdinalIgnoreCase) ||
+               artifact.Name.Contains("diff", StringComparison.OrdinalIgnoreCase) ||
+               artifact.Path?.Contains("screenshot", StringComparison.OrdinalIgnoreCase) == true ||
+               artifact.Path?.Contains("diff", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private double GetDiffPercent(AgentArtifactRecord artifact)
+    {
+        // Try to extract diff percentage from artifact name or path
+        var text = artifact.Name + " " + (artifact.Path ?? "");
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"(\d+(?:\.\d+)?)\s*%");
+        if (match.Success && double.TryParse(match.Groups[1].Value, out var percent))
+        {
+            return percent;
+        }
+        // Default to 0 if not found
+        return 0.0;
+    }
+
+    private void ShowScreenshotDiff(AgentArtifactRecord artifact)
+    {
+        ShowDiffForArtifact = ShowDiffForArtifact == artifact.Id ? null : artifact.Id;
+    }
+
+    private string GetBaselineImageUrl(AgentArtifactRecord artifact)
+    {
+        return $"/api/screenshots/baseline/{artifact.Id}";
+    }
+
+    private string GetCurrentImageUrl(AgentArtifactRecord artifact)
+    {
+        return $"/api/screenshots/current/{artifact.Id}";
+    }
+
+    private string GetDiffImageUrl(AgentArtifactRecord artifact)
+    {
+        return $"/api/screenshots/diff/{artifact.Id}";
+    }
+
+    private async Task CopyPath(string path)
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", path);
+        if (OnCopyPath.HasDelegate)
+            await OnCopyPath.InvokeAsync(path);
+    }
+
+    private async Task OpenFile(string path)
+    {
+        if (OnOpenFile.HasDelegate)
+            await OnOpenFile.InvokeAsync(path);
+    }
+
+    private void ToggleFilter()
+    {
+        ShowOnlyCreated = !ShowOnlyCreated;
+    }
+
+    [Inject] public IJSRuntime JSRuntime { get; set; } = default!;
+}

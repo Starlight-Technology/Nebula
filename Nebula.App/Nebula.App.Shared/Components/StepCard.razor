@@ -1,0 +1,129 @@
+@using Nebula.Agent
+@using Nebula.App.Shared.State
+
+<div class="nebula-step-card @GetStepClass()">
+    <div class="nebula-step-card__header">
+        <div class="nebula-step-card__marker">
+            @GetMarker()
+        </div>
+        <div class="nebula-step-card__content">
+            <div class="nebula-step-card__description">@Description</div>
+            <div class="nebula-step-card__meta">
+                <span>#@Id</span>
+                @if (IsCheckpoint)
+                {
+                    <CoronaBadge Content="Checkpoint" 
+                                 Variant="CoronaBadgeVariant.Soft" 
+                                 Color="CoronaColorSemantic.Primary" />
+                }
+                <CoronaBadge Content="@(Risk.ToLowerInvariant())" 
+                             Variant="CoronaBadgeVariant.Soft" 
+                             Color="@GetRiskColor()" />
+                @if (DependsOn.Count > 0)
+                {
+                    <span class="nebula-step-card__depends">
+                        depende de: @string.Join(", ", DependsOn.Select(d => $"#{d}"))
+                    </span>
+                }
+            </div>
+        </div>
+        <div class="nebula-step-card__status">
+            <CoronaBadge Content="@Status" 
+                         Variant="CoronaBadgeVariant.Soft" 
+                         Color="@GetStatusColor()" />
+        </div>
+    </div>
+
+    @if (IsExpanded && (CurrentCommand != null || !string.IsNullOrWhiteSpace(Output)))
+    {
+        <div class="nebula-step-card__details">
+            @if (CurrentCommand != null)
+            {
+                <CommandCard Objective="@CurrentCommand.Objective"
+                             Command="@CurrentCommand.Run"
+                             OperationKind="@CurrentCommand.OperationKind"
+                             Step="@CurrentCommand.Id"
+                             Attempt="@CurrentCommand.Attempt"
+                             Id="@CurrentCommand.Id"
+                             Output="@CurrentCommand.StandardOutput"
+                             Error="@CurrentCommand.StandardError"
+                             Notes="@CurrentCommand.Notes"
+                             IsCorrect="@CurrentCommand.IsCorrect"
+                             IsSafe="@CurrentCommand.IsSafe"
+                             PassedLocalSafety="@CurrentCommand.PassedLocalSafety"
+                             SafetyDecision="@CurrentCommand.SafetyDecision"
+                             ApprovedByUser="@CurrentCommand.ApprovedByUser"
+                             AutoApproved="@CurrentCommand.AutoApproved"
+                             Executed="@CurrentCommand.Executed"
+                             Skipped="@CurrentCommand.Skipped"
+                             IsDryRun="@CurrentCommand.IsDryRun"
+                             CanApprove="false"
+                             ShowApprovalControls="false" />
+            }
+            @if (!string.IsNullOrWhiteSpace(Output) && CurrentCommand == null)
+            {
+                <pre class="nebula-step-card__output">@Output</pre>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [Parameter] public string Description { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<int> DependsOn { get; set; } = [];
+    [Parameter] public string Status { get; set; } = "pending";
+    [Parameter] public string Risk { get; set; } = "low";
+    [Parameter] public bool IsCheckpoint { get; set; }
+    [Parameter] public CommandExecution? CurrentCommand { get; set; }
+    [Parameter] public string? Output { get; set; }
+    [Parameter] public bool IsExpanded { get; set; } = true;
+
+    private string GetStepClass()
+    {
+        var classes = new List<string>();
+        if (Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
+            classes.Add("nebula-step-card--done");
+        else if (Status.Equals("inprogress", StringComparison.OrdinalIgnoreCase) || 
+                 Status.Equals("executing", StringComparison.OrdinalIgnoreCase))
+            classes.Add("nebula-step-card--active");
+        return string.Join(" ", classes);
+    }
+
+    private string GetMarker()
+    {
+        if (Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
+            return "✓";
+        if (Status.Equals("inprogress", StringComparison.OrdinalIgnoreCase) || 
+            Status.Equals("executing", StringComparison.OrdinalIgnoreCase))
+            return "▶";
+        if (IsCheckpoint)
+            return "◆";
+        return "•";
+    }
+
+    private CoronaColorSemantic GetStatusColor()
+    {
+        return Status.ToLowerInvariant() switch
+        {
+            "completed" => CoronaColorSemantic.Success,
+            "inprogress" => CoronaColorSemantic.Primary,
+            "executing" => CoronaColorSemantic.Primary,
+            "pending" => CoronaColorSemantic.Neutral,
+            "failed" => CoronaColorSemantic.Danger,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+
+    private CoronaColorSemantic GetRiskColor()
+    {
+        return Risk.ToLowerInvariant() switch
+        {
+            "low" => CoronaColorSemantic.Success,
+            "medium" => CoronaColorSemantic.Warning,
+            "high" => CoronaColorSemantic.Danger,
+            "critical" => CoronaColorSemantic.Danger,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+}

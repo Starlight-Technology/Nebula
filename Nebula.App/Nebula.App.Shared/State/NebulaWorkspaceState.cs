@@ -14,6 +14,7 @@ using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
+using Nebula.Runner;
 
 using System.Text.Json;
 
@@ -33,7 +34,9 @@ public sealed class NebulaWorkspaceState(
     ICommandAllowlistService? commandAllowlistService = null,
     IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
     IPolicySimulator? policySimulator = null,
-    IUserMemoryService? userMemoryService = null) : IDisposable, IAsyncDisposable
+    IUserMemoryService? userMemoryService = null,
+    Core.Agent.IGitService? gitService = null,
+    Nebula.Runner.IShellExecutor? shellExecutor = null) : IDisposable, IAsyncDisposable
 {
     private const string QuickSettingsStorageKey = "nebula.quick-settings.v1";
 
@@ -48,7 +51,13 @@ public sealed class NebulaWorkspaceState(
     private bool settingsLoaded;
     private bool isDisposed;
 
+    private readonly Core.Agent.IGitService? _gitService = gitService;
+    private readonly Nebula.Runner.IShellExecutor? _shellExecutor = shellExecutor;
+
     public event Action? Changed;
+
+    public Core.Agent.IGitService? GitService => _gitService;
+    public Nebula.Runner.IShellExecutor? ShellExecutor => _shellExecutor;
 
     public IReadOnlyList<string> StarterPrompts { get; } =
     [
@@ -2109,6 +2118,57 @@ public Task ApproveCommandAsync(CommandExecution command)
         QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
         QuickSettings.WorkspaceRoot = RuntimeSettings.WorkspaceRoot;
         QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
+        QuickSettings.CompactMode = RuntimeSettings.CompactMode;
+        QuickSettings.AutonomyProfile = RuntimeSettings.AutonomyProfile.ToString().ToLowerInvariant();
+        QuickSettings.ScreenshotEnabled = RuntimeSettings.ScreenshotEnabled;
+        QuickSettings.ScreenshotDiffThresholdPercent = RuntimeSettings.ScreenshotDiffThresholdPercent;
+        QuickSettings.ScreenshotViewportsText = RuntimeSettings.ScreenshotViewportsText;
+        QuickSettings.ScreenshotCaptureDelayMs = RuntimeSettings.ScreenshotCaptureDelayMs;
+    }
+
+    public bool IsGitRepository { get; private set; }
+
+    public IAgentRunStore? AgentRunStore => agentRunStore;
+
+    public IAgentRunOrchestrator? Orchestrator { get; set; }
+
+    public IReadOnlyList<AutonomyProfileOption> AutonomyProfiles { get; } =
+    [
+        new("conservative", "Conservador", "Pouca autonomia, pede aprovacao frequente."),
+        new("normal", "Normal", "Equilibrado entre autonomia e controle."),
+        new("autonomous", "Autonomo", "Alta autonomia, auto-aprova acoes de baixo risco."),
+        new("yolo", "YOLO", "Autonomia maxima, executa sem perguntar (use com cuidado).")
+    ];
+
+    public void ApplyAutonomyProfileDefaults()
+    {
+        QuickSettings.AutonomyProfile = QuickSettings.AutonomyProfile;
+        NotifyChanged();
+    }
+
+    public async Task RefreshGitStatusAsync()
+    {
+        try
+        {
+            var status = await GitService.GetStatusAsync(ResolvedWorkspace.Root);
+            IsGitRepository = status.IsRepository;
+        }
+        catch
+        {
+            IsGitRepository = false;
+        }
+        NotifyChanged();
+    }
+
+    public T? GetService<T>() where T : class
+    {
+        return this switch
+        {
+            _ when typeof(T) == typeof(Nebula.Runner.IShellExecutor) => (T?)(object?)ShellExecutor,
+            _ when typeof(T) == typeof(IAgentRunOrchestrator) => (T?)(object?)Orchestrator,
+            _ when typeof(T) == typeof(Core.Agent.IGitService) => (T?)(object?)GitService,
+            _ => null
+        };
     }
 
     private void NotifyChanged()
@@ -2217,6 +2277,8 @@ public sealed class ConversationEntryViewModel
         StreamingActionEvents.Count > 0;
 
     public bool ShowReasoning { get; set; } = true;
+
+    public bool IsDryRun { get; set; }
 }
 
 public sealed record SuggestedModelOption(string Name, string Description);
@@ -2239,6 +2301,18 @@ public sealed class QuickSettingsDraft
     public string WorkspaceRoot { get; set; } = string.Empty;
 
     public bool AutoApproveCommands { get; set; }
+
+    public bool CompactMode { get; set; }
+
+    public string AutonomyProfile { get; set; } = "normal";
+
+    public bool ScreenshotEnabled { get; set; }
+
+    public double ScreenshotDiffThresholdPercent { get; set; } = 1.0;
+
+    public string ScreenshotViewportsText { get; set; } = "1280x720,1920x1080";
+
+    public int ScreenshotCaptureDelayMs { get; set; } = 500;
 }
 
 public sealed record ResponseLanguageOption(string Code, string Name);
@@ -2255,3 +2329,8 @@ public sealed record AccelerationProfileOption(
     string Command,
     string Badge,
     CoronaColorSemantic Color);
+
+public sealed record AutonomyProfileOption(
+    string Key,
+    string Name,
+    string Description);

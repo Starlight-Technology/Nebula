@@ -19,6 +19,7 @@ public class LlamaClient : ILlamaClient
     private readonly HttpClient httpClient;
     private IReadOnlyList<LlamaModelInfo> cachedModels = [];
     private string selectedModel;
+    private bool modelNotFoundFallbackAttempted;
 
     public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null)
     {
@@ -112,6 +113,22 @@ public class LlamaClient : ILlamaClient
         {
             return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think: false, format, progress, cancellationToken);
         }
+        catch (InvalidOperationException ex) when (string.IsNullOrWhiteSpace(modelName) && IsModelNotFoundError(ex.Message))
+        {
+            if (modelNotFoundFallbackAttempted)
+            {
+                throw;
+            }
+
+            modelNotFoundFallbackAttempted = true;
+
+            if (await EnsureInstalledModelSelectedAsync(cancellationToken))
+            {
+                return await SendGenerateRequestCoreAsync(prompt, modelName, systemPrompt, think, format, progress, cancellationToken);
+            }
+
+            throw;
+        }
     }
 
     private async Task<string> SendGenerateRequestCoreAsync(
@@ -132,9 +149,7 @@ public class LlamaClient : ILlamaClient
         {
             Content = JsonContent.Create(new LlamaGenerateRequest
             {
-                Model = string.IsNullOrWhiteSpace(modelName)
-                    ? SelectedModel
-                    : modelName.Trim(),
+                Model = string.IsNullOrWhiteSpace(modelName) ? SelectedModel : modelName.Trim(),
                 Prompt = prompt,
                 Stream = true,
                 Think = think,
@@ -292,6 +307,30 @@ public class LlamaClient : ILlamaClient
 
         selectedModel = selected.Name;
         return true;
+    }
+
+    public async Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var installedModels = await GetInstalledModelsAsync(true, cancellationToken);
+            if (installedModels.Count == 0)
+            {
+                return false;
+            }
+
+            if (installedModels.Any(model => ModelNamesMatch(model.Name, SelectedModel)))
+            {
+                return true;
+            }
+
+            selectedModel = installedModels[0].Name;
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
+        {
+            return false;
+        }
     }
 
     public async Task<LlamaPullResult> PullModelAsync(
@@ -454,6 +493,12 @@ public class LlamaClient : ILlamaClient
     private static bool IsThinkingUnsupportedError(string message)
     {
         return message.Contains("does not support thinking", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsModelNotFoundError(string message)
+    {
+        return message.Contains("model not found", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("model '", StringComparison.OrdinalIgnoreCase) && message.Contains("not found", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class LlamaGenerateRequest

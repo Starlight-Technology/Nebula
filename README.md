@@ -224,3 +224,35 @@ Exemplo de pedido que funciona sem internet:
 ```text
 Aprenda boas praticas de seguranca para executar comandos shell.
 ```
+
+## Interface do Agente (Phase 7)
+
+A UI web (`Nebula.App.Web`) inclui agora uma tela dedicada para execucoes do agente em tempo real:
+
+### Tela `/agent-run/{RunId}` - Agent Run Live
+- **Layout de 3 painéis**: Plano (esquerda), Terminal (centro), Artefatos (direita)
+- **Streaming em tempo real** via `IAgentRunOrchestrator.SubscribeAsync` - eventos tipados
+- **Plano estruturado** com checkpoints (◆), riscos (baixo/médio/alto/crítico), dependências
+- **Terminal com cores ANSI**, modo compacto (últimas 50 linhas), auto-scroll, copiar/limpar
+- **Artefatos** com ícones por tipo de arquivo, copiar caminho, abrir
+
+### Componentes reutilizáveis (`Nebula.App.Shared/Components/`)
+- `CommandCard` - Comando unificado com status, aprovação inline, edição prévia
+- `StepCard` - Passo do plano com checkpoint/risk/dependências, expansível
+- `AgentRunTimeline` - Timeline de eventos com filtros (busca, tipo, status, só erros)
+- `TimelineEventItem` - Evento individual com badge colorido
+- `ArtifactPanel` - Painel de artefatos com ícones e ações
+- `PlanView` - Visualização do plano + comparação de arquitetura
+- `TerminalOutput` / `TerminalLine` - Terminal com parsing ANSI
+
+### Keyboard Shortcuts (Chat)
+- `Ctrl+Enter` - Enviar mensagem
+- `Escape` - Cancelar turno ativo
+- `Ctrl+Shift+P` - Prever (dry run)
+- `Ctrl+Shift+C` - Alternar modo compacto (modo Agente)
+- `Ctrl+N` - Nova conversa
+
+### Acessibilidade
+- Focus-visible outlines em todos componentes interativos
+- Suporte a `prefers-contrast: high` (bordas mais grossas)
+- Suporte a `prefers-reduced-motion: reduce` (desativa animações)

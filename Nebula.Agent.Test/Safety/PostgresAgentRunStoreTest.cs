@@ -103,7 +103,8 @@ public sealed class PostgresAgentRunStoreTest
                     "hello.py",
                     "C:\\work\\hello.py",
                     "abc123",
-                    DateTimeOffset.UtcNow)
+                    DateTimeOffset.UtcNow,
+                    0.0)
             ],
             Approvals =
             [

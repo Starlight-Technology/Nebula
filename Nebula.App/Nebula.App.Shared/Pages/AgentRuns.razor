@@ -216,10 +216,12 @@
         <div class="nebula-runs-list">
             @foreach (var run in WorkspaceState.AgentRuns)
             {
+                var isActive = IsRunActive(run.Status);
+                var cardClass = isActive ? "nebula-runs-card nebula-runs-card--active" : "nebula-runs-card";
                 <div class="nebula-runs-card-clickable"
                      role="button"
                      @onclick="() => OpenRun(run.Id)">
-                    <CoronaCard Class="nebula-runs-card">
+                    <CoronaCard Class="@cardClass">
                         <div class="nebula-runs-card__top">
                             <div>
                                 <h3>@run.Prompt</h3>
@@ -235,6 +237,20 @@
                             <span>@run.StartedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>
                             <span>Run @run.Id.ToString()[..8]</span>
                         </div>
+
+                        @if (isActive)
+                        {
+                            <div class="nebula-runs-card__live-actions">
+                                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                              Size="CoronaComponentSize.Small"
+                                              Color="CoronaColorSemantic.Primary"
+                                              Icon="@CoronaIcons.Play"
+                                              OnClick="@(() => OpenLiveRun(run.Id))"
+                                              StopPropagation="true">
+                                    Abrir ao vivo
+                                </CoronaButton>
+                            </div>
+                        }
                     </CoronaCard>
                 </div>
             }
@@ -263,6 +279,11 @@
         await WorkspaceState.OpenAgentRunAsync(runId);
     }
 
+    private void OpenLiveRun(Guid runId)
+    {
+        NavigationManager.NavigateTo($"/agent-run/{runId}");
+    }
+
     private async Task ResumeRun(AgentRun run)
     {
         await WorkspaceState.ResumeTaskAsync(run);
@@ -277,6 +298,12 @@
     private void HandleWorkspaceChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static bool IsRunActive(string status)
+    {
+        return status.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+               status.Equals("AwaitingApproval", StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()

@@ -1,0 +1,262 @@
+@using Nebula.Core.Agent
+@using Nebula.Core.Interactions
+@using Nebula.Core.Operations
+@using Nebula.Core.Safety
+@using Nebula.App.Shared.State
+
+<div class="nebula-command-card @GetCardClass()">
+    <div class="nebula-command-card__header">
+        <div class="nebula-command-card__meta">
+            @if (!string.IsNullOrWhiteSpace(Objective))
+            {
+                <strong class="nebula-command-card__objective">@Objective</strong>
+            }
+            <span class="nebula-command-card__attempt">
+                @GetAttemptText()
+            </span>
+        </div>
+
+        <CoronaBadge Content="@GetStatusText()" 
+                     Variant="CoronaBadgeVariant.Soft" 
+                     Color="@GetStatusColor()" />
+    </div>
+
+    @if (IsEditing)
+    {
+        <textarea class="nebula-command-editor"
+                  value="@EditedCommand"
+                  @oninput="@(e => OnCommandEdit(e.Value?.ToString() ?? string.Empty))"
+                  rows="3"
+                  placeholder="Edite o comando antes de aprovar..."></textarea>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(Command))
+        {
+            <div class="nebula-command-card__command">
+                <code>@Command</code>
+                @if (CanCopy)
+                {
+                    <CoronaButton Variant="CoronaButtonVariant.Text"
+                                  Size="CoronaComponentSize.Small"
+                                  Icon="@CoronaIcons.Copy"
+                                  Class="nebula-copy-btn"
+                                  OnClick="CopyCommand">
+                        Copiar
+                    </CoronaButton>
+                }
+            </div>
+        }
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Notes))
+    {
+        <p class="nebula-command-card__notes">@Notes</p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Output))
+    {
+        <pre class="nebula-command-card__output">@Output</pre>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <p class="nebula-command-card__error">@Error</p>
+    }
+
+    <div class="nebula-command-card__checks">
+        <span>Corretude: @FormatBoolean(IsCorrect)</span>
+        <span>Seguranca modelo: @FormatBoolean(IsSafe)</span>
+        <span>Seguranca local: @FormatBoolean(PassedLocalSafety)</span>
+        @if (SafetyDecision.HasValue)
+        {
+            <span>Policy: @SafetyDecision.Value.ToString()</span>
+        }
+
+        @if (AutoApproved)
+        {
+            <span class="nebula-approval-badge auto">Aprovacao: automatica</span>
+        }
+        else if (ApprovedByUser)
+        {
+            <span class="nebula-approval-badge manual">Aprovacao: manual</span>
+        }
+    }
+
+    @if (ShowApprovalControls && CanApprove)
+    {
+        <div class="nebula-command-card__approval">
+            @if (IsEditing)
+            {
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Primary"
+                              Icon="@CoronaIcons.Check"
+                              OnClick="ApproveCommand">
+                    Aprovar e executar
+                </CoronaButton>
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Icon="@CoronaIcons.Xmark"
+                              OnClick="CancelEdit">
+                    Cancelar
+                </CoronaButton>
+            }
+            else
+            {
+                <select class="nebula-approval-scope"
+                        value="@SelectedScope"
+                        @onchange="@((ChangeEventArgs args) => SelectedScope = ParseApprovalScope(args.Value?.ToString()))"
+                        title="Escopo da aprovacao">
+                    <option value="@ApprovalScope.Once">Aprovar uma vez</option>
+                    <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
+                    <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
+                    <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
+                </select>
+
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Warning"
+                              Icon="@CoronaIcons.Check"
+                              OnClick="ApproveCommand">
+                    Executar aprovado
+                </CoronaButton>
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Icon="@CoronaIcons.Pen"
+                              OnClick="StartEdit">
+                    Editar
+                </CoronaButton>
+            }
+        </div>
+    }
+</div>
+</div>
+
+@code {
+    [Parameter] public string? Objective { get; set; }
+    [Parameter] public string? Command { get; set; }
+    [Parameter] public OperationKind OperationKind { get; set; } = OperationKind.TerminalCommand;
+    [Parameter] public int Step { get; set; } = 1;
+    [Parameter] public int Attempt { get; set; } = 1;
+    [Parameter] public int? Id { get; set; }
+    [Parameter] public string? Output { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public string? Notes { get; set; }
+    [Parameter] public bool IsCorrect { get; set; }
+    [Parameter] public bool IsSafe { get; set; }
+    [Parameter] public bool PassedLocalSafety { get; set; }
+    [Parameter] public CommandSafetyDecisionType? SafetyDecision { get; set; }
+    [Parameter] public bool ApprovedByUser { get; set; }
+    [Parameter] public bool AutoApproved { get; set; }
+    [Parameter] public bool Executed { get; set; }
+    [Parameter] public bool Skipped { get; set; }
+    [Parameter] public bool IsDryRun { get; set; }
+    [Parameter] public bool CanApprove { get; set; }
+    [Parameter] public bool CanCopy { get; set; } = true;
+    [Parameter] public bool ShowApprovalControls { get; set; } = true;
+    [Parameter] public ApprovalScope SelectedScope { get; set; } = ApprovalScope.Once;
+    [Parameter] public EventCallback<ApprovalScope> SelectedScopeChanged { get; set; }
+    [Parameter] public EventCallback<string> OnApprove { get; set; }
+    [Parameter] public EventCallback<string> OnEdit { get; set; }
+    [Parameter] public EventCallback OnCancelEdit { get; set; }
+
+    private bool IsEditing { get; set; }
+    private string EditedCommand { get; set; } = string.Empty;
+
+    private string GetCardClass()
+    {
+        var classes = new List<string>();
+        if (IsDryRun) classes.Add("nebula-command-card--dryrun");
+        if (Executed && !IsDryRun) classes.Add("nebula-command-card--executed");
+        if (Skipped) classes.Add("nebula-command-card--skipped");
+        if (CanApprove && !Executed && !AutoApproved && !ApprovedByUser && !IsDryRun)
+            classes.Add("nebula-command-card--awaiting-approval");
+        return string.Join(" ", classes);
+    }
+
+    private string GetAttemptText()
+    {
+        var parts = new List<string>();
+        if (Id.HasValue) parts.Add($"passo {Id.Value}");
+        parts.Add($"tentativa {Attempt}");
+        if (OperationKind != OperationKind.Unknown) parts.Add(OperationKind.ToString());
+        return string.Join(" · ", parts);
+    }
+
+    private string GetStatusText()
+    {
+        if (IsDryRun) return "Previa";
+        if (Skipped) return "Ignorado";
+        if (Executed) return "Executado";
+        if (CanApprove && !AutoApproved && !ApprovedByUser) return "Aguardando aprovacao";
+        if (SafetyDecision == CommandSafetyDecisionType.Block) return "Bloqueado";
+        return "Pendente";
+    }
+
+    private CoronaColorSemantic GetStatusColor()
+    {
+        if (IsDryRun) return CoronaColorSemantic.Neutral;
+        if (Executed) return CoronaColorSemantic.Success;
+        if (Skipped) return CoronaColorSemantic.Neutral;
+        if (CanApprove && !AutoApproved && !ApprovedByUser) return CoronaColorSemantic.Warning;
+        if (SafetyDecision == CommandSafetyDecisionType.Block) return CoronaColorSemantic.Danger;
+        return CoronaColorSemantic.Neutral;
+    }
+
+    private void StartEdit()
+    {
+        IsEditing = true;
+        EditedCommand = Command ?? string.Empty;
+        OnCancelEdit.InvokeAsync();
+    }
+
+    private void CancelEdit()
+    {
+        IsEditing = false;
+        EditedCommand = string.Empty;
+        OnCancelEdit.InvokeAsync();
+    }
+
+    private void OnCommandEdit(string value)
+    {
+        EditedCommand = value;
+        OnEdit.InvokeAsync(value);
+    }
+
+    private async Task ApproveCommand()
+    {
+        if (IsEditing)
+        {
+            await OnApprove.InvokeAsync(EditedCommand);
+        }
+        else
+        {
+            await OnApprove.InvokeAsync(Command ?? string.Empty);
+        }
+        IsEditing = false;
+        EditedCommand = string.Empty;
+    }
+
+    private async Task CopyCommand()
+    {
+        if (!string.IsNullOrWhiteSpace(Command))
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Command);
+        }
+    }
+
+    private ApprovalScope ParseApprovalScope(string? value)
+    {
+        return Enum.TryParse<ApprovalScope>(value, out var scope) ? scope : ApprovalScope.Once;
+    }
+
+    private static string FormatBoolean(bool? value) => value switch
+    {
+        true => "sim",
+        false => "nao",
+        _ => "n/a"
+    };
+
+    [Inject] public IJSRuntime JSRuntime { get; set; } = default!;
+}

@@ -1,0 +1,206 @@
+@inject Core.Agent.IGitService GitService
+@using Nebula.Core.Agent
+
+<div class="nebula-test-runner-card">
+    <div class="nebula-test-runner-card__header">
+        <p class="nebula-kicker">Testes Direcionados</p>
+        <CoronaBadge Content="@GetFrameworkBadge()" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Primary" Size="CoronaComponentSize.Small" />
+    </div>
+
+    @if (!IsRepository)
+    {
+        <div class="nebula-test-runner-card__empty">
+            <CoronaBadge Content="Nao e repositorio Git" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+            <p>Testes direcionados requerem um repositorio Git com mudancas rastreadas.</p>
+        </div>
+    }
+    else if (IsRunning)
+    {
+        <div class="nebula-test-runner-card__running">
+            <div class="nebula-test-runner-card__spinner"></div>
+            <p>Executando testes para @ChangedFiles.Count arquivo(s)...</p>
+        </div>
+    }
+    else if (LastResult is not null)
+    {
+        <div class="nebula-test-runner-card__result @(LastResult.Success ? "success" : "failed")">
+            <div class="nebula-test-runner-card__summary">
+                <CoronaBadge Content="@(LastResult.Success ? "PASSOU" : "FALHOU")" Variant="CoronaBadgeVariant.Soft" Color="@(LastResult.Success ? CoronaColorSemantic.Success : CoronaColorSemantic.Danger)" />
+                <span>@LastResult.DurationSeconds.ToString("F1")s</span>
+            </div>
+
+            <div class="nebula-test-runner-card__counts">
+                <div class="nebula-test-count pass">
+                    <span class="nebula-test-count__value">@LastResult.Passed</span>
+                    <span class="nebula-test-count__label">Passou</span>
+                </div>
+                <div class="nebula-test-count fail">
+                    <span class="nebula-test-count__value">@LastResult.Failed</span>
+                    <span class="nebula-test-count__label">Falhou</span>
+                </div>
+                <div class="nebula-test-count skip">
+                    <span class="nebula-test-count__value">@LastResult.Skipped</span>
+                    <span class="nebula-test-count__label">Pulado</span>
+                </div>
+            </div>
+
+            @if (LastResult.Tests.Count > 0)
+            {
+                <details class="nebula-test-runner-card__details">
+                    <summary>Ver @LastResult.Tests.Count teste(s)</summary>
+                    <div class="nebula-test-runner-card__test-list">
+                        @foreach (var test in LastResult.Tests.Take(20))
+                        {
+                            <div class="nebula-test-item @test.Outcome.ToString().ToLowerInvariant()">
+                                <span class="nebula-test-item__status">@GetTestStatusIcon(test.Outcome)</span>
+                                <span class="nebula-test-item__name">@test.Name</span>
+                                <span class="nebula-test-item__duration">@test.DurationSeconds.ToString("F2")s</span>
+                            </div>
+                        }
+                        @if (LastResult.Tests.Count > 20)
+                        {
+                            <div class="nebula-test-item more">... e mais @(LastResult.Tests.Count - 20) teste(s)</div>
+                        }
+                    </div>
+                </details>
+            }
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Size="CoronaComponentSize.Small"
+                          Color="CoronaColorSemantic.Primary"
+                          FullWidth="true"
+                          OnClick="RunTestsAsync"
+                          Disabled="@IsRunning">
+                Executar novamente
+            </CoronaButton>
+        </div>
+    }
+    else
+    {
+        <div class="nebula-test-runner-card__idle">
+            <CoronaBadge Content="Pronto" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Success" />
+            <p>Testes serao executados automaticamente apos mudancas em arquivos de codigo.</p>
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          FullWidth="true"
+                          OnClick="RunTestsAsync"
+                          Disabled="@IsRunning">
+                Executar todos os testes
+            </CoronaButton>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="nebula-test-runner-card__error">
+            <CoronaBadge Content="Erro" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Danger" />
+            <p>@Error</p>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid RunId { get; set; }
+    [Parameter] public string WorkspaceRoot { get; set; } = string.Empty;
+    [Parameter] public Core.Agent.ITestRunnerService? TestRunnerService { get; set; }
+
+    private TestRunResult? LastResult { get; set; }
+    private bool IsRunning { get; set; }
+    private string? Error { get; set; }
+    private bool IsRepository { get; set; } = true;
+    private List<string> ChangedFiles { get; set; } = [];
+
+    private string GetFrameworkBadge()
+    {
+        if (LastResult is null) return "Detectando...";
+        return LastResult.Output?.Contains("dotnet") == true ? ".NET" :
+               LastResult.Output?.Contains("npm") == true || LastResult.Output?.Contains("vitest") == true || LastResult.Output?.Contains("jest") == true ? "Node.js" :
+               LastResult.Output?.Contains("pytest") == true ? "Python" : "Desconhecido";
+    }
+
+    private string GetTestStatusIcon(TestOutcome outcome)
+    {
+        return outcome switch
+        {
+            TestOutcome.Passed => "✓",
+            TestOutcome.Failed => "✗",
+            TestOutcome.Skipped => "○",
+            _ => "?"
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (TestRunnerService is not null && !string.IsNullOrWhiteSpace(WorkspaceRoot))
+        {
+            try
+            {
+                var framework = await TestRunnerService.DetectFrameworkAsync(WorkspaceRoot);
+                IsRepository = framework != TestFramework.Unknown;
+            }
+            catch
+            {
+                IsRepository = false;
+            }
+        }
+    }
+
+    private async Task RunTestsAsync()
+    {
+        if (TestRunnerService is null || GitService is null || IsRunning || string.IsNullOrWhiteSpace(WorkspaceRoot))
+        {
+            return;
+        }
+
+        IsRunning = true;
+        Error = null;
+        StateHasChanged();
+
+        try
+        {
+            var framework = await TestRunnerService.DetectFrameworkAsync(WorkspaceRoot);
+            if (framework == TestFramework.Unknown)
+            {
+                Error = "Framework de teste nao detectado.";
+                return;
+            }
+
+            var status = await GitService.GetStatusAsync(WorkspaceRoot);
+            ChangedFiles = status.StagedFiles.Concat(status.UnstagedFiles).Concat(status.UntrackedFiles).ToList();
+
+            var request = new TestRunRequest(
+                WorkspaceRoot,
+                ChangedFiles.Count > 0 ? ChangedFiles : [],
+                framework,
+                ChangedFiles.Count == 0,
+                300);
+
+            LastResult = await TestRunnerService.RunTargetedTestsAsync(request);
+        }
+        catch (Exception ex)
+        {
+            Error = $"Erro ao executar testes: {ex.Message}";
+            LastResult = null;
+        }
+        finally
+        {
+            IsRunning = false;
+            StateHasChanged();
+        }
+    }
+
+private Core.Agent.IGitService? GetGitService()
+    {
+        try
+        {
+            return TestRunnerService switch
+            {
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}

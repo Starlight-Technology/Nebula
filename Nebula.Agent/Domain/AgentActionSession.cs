@@ -65,6 +65,9 @@ internal sealed class AgentActionSession
     /// </summary>
     public ReferenceWorkspace WorkspaceRoot { get; }
 
+
+    public string WorkingDirectory => WorkspaceRoot.Root;
+
     public DateTimeOffset RunStartedUtc { get; } = DateTimeOffset.UtcNow;
 
     public string? TranslatedObjective { get; set; }
@@ -823,7 +826,8 @@ public void EmitApprovalGranted(CommandExecution execution)
                 Path.GetFileName(artifact.Path) ?? artifact.Path,
                 artifact.Path,
                 artifact.ContentHash,
-                DateTimeOffset.UtcNow))
+                DateTimeOffset.UtcNow,
+                0.0))
             .ToList();
     }
 

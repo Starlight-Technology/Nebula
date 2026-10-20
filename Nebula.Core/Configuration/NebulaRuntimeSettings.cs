@@ -2,6 +2,14 @@ using Nebula.Core.Execution;
 
 namespace Nebula.Core.Configuration;
 
+public enum AutonomyProfile
+{
+    Conservative,
+    Standard,
+    Autonomous,
+    Lab
+}
+
 public sealed class NebulaRuntimeSettings
 {
     public const string DefaultLanguageCode = "pt-BR";
@@ -45,6 +53,23 @@ public sealed class NebulaRuntimeSettings
 
     public double SandboxCpuLimit { get; set; }
 
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public bool CompactMode { get; set; }
+
+    public bool ScreenshotEnabled { get; set; } = true;
+
+    public double ScreenshotDiffThresholdPercent { get; set; } = 0.1;
+
+    public List<string> ScreenshotViewports { get; set; } = new() { "1920x1080", "1366x768", "375x667" };
+
+    public int ScreenshotCaptureDelayMs { get; set; } = 1000;
+
+    public string ScreenshotViewportsText =>
+        ScreenshotViewports != null && ScreenshotViewports.Count > 0
+            ? string.Join("\n", ScreenshotViewports)
+            : "1920x1080\n1366x768\n375x667";
+
     public string EffectiveLearningModel =>
         string.IsNullOrWhiteSpace(LearningModel)
             ? MainModel.Trim()
@@ -80,6 +105,12 @@ public sealed class NebulaRuntimeSettings
         SandboxImage = NormalizeOrDefault(snapshot.SandboxImage, "mcr.microsoft.com/powershell:lts");
         SandboxMemoryLimitMb = Math.Max(0, snapshot.SandboxMemoryLimitMb);
         SandboxCpuLimit = Math.Max(0, snapshot.SandboxCpuLimit);
+        AutonomyProfile = snapshot.AutonomyProfile;
+        CompactMode = snapshot.CompactMode;
+        ScreenshotEnabled = snapshot.ScreenshotEnabled;
+        ScreenshotDiffThresholdPercent = snapshot.ScreenshotDiffThresholdPercent;
+        ScreenshotViewports = snapshot.ScreenshotViewports?.ToList() ?? new() { "1920x1080", "1366x768", "375x667" };
+        ScreenshotCaptureDelayMs = snapshot.ScreenshotCaptureDelayMs;
     }
 
     public NebulaRuntimeSettingsSnapshot CreateSnapshot()
@@ -103,7 +134,14 @@ public sealed class NebulaRuntimeSettings
             SandboxMode = SandboxMode,
             SandboxImage = SandboxImage,
             SandboxMemoryLimitMb = SandboxMemoryLimitMb,
-            SandboxCpuLimit = SandboxCpuLimit
+            SandboxCpuLimit = SandboxCpuLimit,
+            AutonomyProfile = AutonomyProfile,
+            CompactMode = CompactMode,
+            ScreenshotEnabled = ScreenshotEnabled,
+            ScreenshotDiffThresholdPercent = ScreenshotDiffThresholdPercent,
+            ScreenshotViewports = ScreenshotViewports.ToList(),
+            ScreenshotCaptureDelayMs = ScreenshotCaptureDelayMs,
+            ScreenshotViewportsText = ScreenshotViewportsText
         };
     }
 
@@ -164,4 +202,18 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public long SandboxMemoryLimitMb { get; set; }
 
     public double SandboxCpuLimit { get; set; }
+
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public bool CompactMode { get; set; }
+
+    public bool ScreenshotEnabled { get; set; } = true;
+
+    public double ScreenshotDiffThresholdPercent { get; set; } = 0.1;
+
+    public List<string> ScreenshotViewports { get; set; } = new() { "1920x1080", "1366x768", "375x667" };
+
+    public int ScreenshotCaptureDelayMs { get; set; } = 1000;
+
+    public string ScreenshotViewportsText { get; set; } = "1920x1080\n1366x768\n375x667";
 }

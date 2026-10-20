@@ -1,0 +1,730 @@
+@page "/git"
+@implements IDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+@inject Core.Agent.IGitService GitService
+@inject Nebula.Runner.IShellExecutor ShellExecutor
+@using Nebula.Core.Agent
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
+    <section class="nebula-screen-header">
+        <div>
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                <CoronaBadge Content="Git" Variant="CoronaBadgeVariant.Soft" />
+                <CoronaBadge Content="@WorkspaceState.ResolvedWorkspace.Root" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
+            </CoronaStack>
+            <h2>Controle de versao Git</h2>
+            <p>Status, branches, commits, diff e operacoes de repositorio.</p>
+        </div>
+
+        <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".75rem">
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.ArrowLeft"
+                          OnClick="NavigateToChat">
+                Conversa
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Primary"
+                          Icon="@CoronaIcons.ArrowClockwise"
+                          Disabled="@IsLoading"
+                          Loading="@IsLoading"
+                          OnClick="RefreshAsync">
+                Atualizar
+            </CoronaButton>
+        </CoronaStack>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Feedback))
+    {
+        <div class="nebula-info-panel">
+            <p class="nebula-info-panel__title">@(IsError ? "Erro" : "Info")</p>
+            <p>@Feedback</p>
+        </div>
+    }
+
+    @if (!IsRepository)
+    {
+        <CoronaCard Class="nebula-git-not-repo">
+            <div class="nebula-git-not-repo__content">
+                <CoronaBadge Content="Nao e um repositorio Git" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+                <p>O workspace atual nao e um repositorio Git ou nao foi inicializado.</p>
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Color="CoronaColorSemantic.Primary"
+                              Icon="@CoronaIcons.Plus"
+                              OnClick="InitRepositoryAsync">
+                    Inicializar repositorio (git init)
+                </CoronaButton>
+            </div>
+        </CoronaCard>
+    }
+    else
+    {
+        <div class="nebula-git-layout">
+            <main class="nebula-git-main">
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <div>
+                            <p class="nebula-kicker">Status do repositorio</p>
+                            <h3>Branch: <strong>@Status?.CurrentBranch</strong></h3>
+                        </div>
+                        <CoronaBadge Content="@(IsProtected ? "PROTEGIDA" : "Livre")"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="@(IsProtected ? CoronaColorSemantic.Danger : CoronaColorSemantic.Success)" />
+                    </div>
+
+                    <div class="nebula-git-status-grid">
+                        <div class="nebula-git-status-item @(!Status.HasUncommittedChanges ? "clean" : "")">
+                            <CoronaBadge Content="@(Status.HasUncommittedChanges ? "Com mudancas" : "Limpo")"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="@(Status.HasUncommittedChanges ? CoronaColorSemantic.Warning : CoronaColorSemantic.Success)" />
+                            <p>Arquivos com mudancas</p>
+                        </div>
+
+                        <div class="nebula-git-status-item">
+                            <CoronaBadge Content="@(Status?.StagedFiles.Count.ToString() ?? "0")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Primary" />
+                            <p>Staged (prontos para commit)</p>
+                        </div>
+
+                        <div class="nebula-git-status-item">
+                            <CoronaBadge Content="@(Status?.UnstagedFiles.Count.ToString() ?? "0")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
+                            <p>Nao staged</p>
+                        </div>
+
+                        <div class="nebula-git-status-item">
+                            <CoronaBadge Content="@(Status?.UntrackedFiles.Count.ToString() ?? "0")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
+                            <p>Nao rastreados</p>
+                        </div>
+                    </div>
+
+                    @if (Status?.StagedFiles.Count > 0)
+                    {
+                        <div class="nebula-git-file-list">
+                            <p class="nebula-kicker">Staged (@(Status.StagedFiles.Count))</p>
+                            @foreach (var file in Status.StagedFiles)
+                            {
+                                <div class="nebula-git-file nebula-git-file--staged">
+                                    <span class="nebula-git-file__icon">📄</span>
+                                    <span>@file</span>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (Status?.UnstagedFiles.Count > 0)
+                    {
+                        <div class="nebula-git-file-list">
+                            <p class="nebula-kicker">Nao staged (@(Status.UnstagedFiles.Count))</p>
+                            @foreach (var file in Status.UnstagedFiles)
+                            {
+                                <div class="nebula-git-file nebula-git-file--unstaged">
+                                    <span class="nebula-git-file__icon">📝</span>
+                                    <span>@file</span>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (Status?.UntrackedFiles.Count > 0)
+                    {
+                        <div class="nebula-git-file-list">
+                            <p class="nebula-kicker">Nao rastreados (@(Status.UntrackedFiles.Count))</p>
+                            @foreach (var file in Status.UntrackedFiles)
+                            {
+                                <div class="nebula-git-file nebula-git-file--untracked">
+                                    <span class="nebula-git-file__icon">❓</span>
+                                    <span>@file</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <p class="nebula-kicker">Commit</p>
+                        @if (Status?.HasUncommittedChanges == true)
+                        {
+                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                          Size="CoronaComponentSize.Small"
+                                          Color="CoronaColorSemantic.Primary"
+                                          Icon="@CoronaIcons.Sparkles"
+                                          OnClick="GenerateCommitMessageAsync"
+                                          Disabled="@IsGeneratingMessage">
+                                @(IsGeneratingMessage ? "Gerando..." : "Gerar mensagem (IA)")
+                            </CoronaButton>
+                        }
+                    </div>
+
+                    <label class="nebula-git-commit-input">
+                        <textarea @bind="CommitMessage"
+                                  @bind:event="oninput"
+                                  rows="3"
+                                  placeholder="Mensagem do commit (formato convencional: type(scope): subject)"
+                                  disabled="@IsCommitting"></textarea>
+                        <small>Ex.: feat(auth): adicionar login com OAuth</small>
+                    </label>
+
+                    <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Primary"
+                                      Icon="@CoronaIcons.Check"
+                                      OnClick="CommitAsync"
+                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || !Status.HasUncommittedChanges)">
+                            Commit (apenas staged)
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Primary"
+                                      Icon="@CoronaIcons.Check"
+                                      OnClick="CommitAllAsync"
+                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || !Status.HasUncommittedChanges)">
+                            Commit All (git add -A + commit)
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Text"
+                                      Color="CoronaColorSemantic.Neutral"
+                                      OnClick="() => CommitMessage = string.Empty">
+                            Limpar
+                        </CoronaButton>
+                    </CoronaStack>
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <p class="nebula-kicker">Diff</p>
+                        <CoronaStack Direction="CoronaStackDirection.Row" Spacing=".5rem">
+                            <label class="nebula-git-diff-toggle">
+                                <input type="checkbox" @bind="ShowStagedDiff" />
+                                <span>Mostrar staged (--cached)</span>
+                            </label>
+                        </CoronaStack>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(Diff))
+                    {
+                        <pre class="nebula-git-diff">@Diff</pre>
+                    }
+                    else
+                    {
+                        <p class="nebula-git-diff__empty">Nenhuma diferenca encontrada.</p>
+                    }
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <p class="nebula-kicker">Historico (ultimos @LogCount)</p>
+                    </div>
+
+                    @if (Log?.Entries.Count > 0)
+                    {
+                        <div class="nebula-git-log">
+                            @foreach (var entry in Log.Entries)
+                            {
+                                <div class="nebula-git-log-entry">
+                                    <div class="nebula-git-log-entry__hash">
+                                        <code>@entry.Hash[..Math.Min(8, entry.Hash.Length)]</code>
+                                    </div>
+                                    <div class="nebula-git-log-entry__info">
+                                        <strong>@entry.Message</strong>
+                                        <span>@entry.Author · @entry.Date</span>
+                                    </div>
+                                    <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                  Size="CoronaComponentSize.Small"
+                                                  Color="CoronaColorSemantic.Warning"
+                                                  OnClick="@(() => RevertAsync(entry.Hash))"
+                                                  Disabled="@IsReverting"
+                                                  Title="Reverter este commit">
+                                        Reverter
+                                    </CoronaButton>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="nebula-git-log__empty">Nenhum commit no historico.</p>
+                    }
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <p class="nebula-kicker">Branches</p>
+                    </div>
+
+                    @if (Branches?.AllBranches.Count > 0)
+                    {
+                        <div class="nebula-git-branches">
+                            @foreach (var branch in Branches.AllBranches)
+                            {
+                                var isCurrent = branch == Branches.CurrentBranch;
+                                var isProtectedBranch = GitProtectedBranches.IsProtected(branch);
+                                <div class="nebula-git-branch @(isCurrent ? "current" : "") @(isProtectedBranch ? "protected" : "")">
+                                    <span class="@(isCurrent ? "nebula-git-branch__current" : "")">@(isCurrent ? "★ " : "")@branch</span>
+                                    @if (isProtectedBranch)
+                                    {
+                                        <CoronaBadge Content="Protegida" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Danger" Size="CoronaComponentSize.Small" />
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-card">
+                    <div class="nebula-git-card__header">
+                        <p class="nebula-kicker">Remotes</p>
+                    </div>
+
+                    @if (Remotes?.Remotes.Count > 0)
+                    {
+                        <div class="nebula-git-remotes">
+                            @foreach (var remote in Remotes.Remotes)
+                            {
+                                <div class="nebula-git-remote">
+                                    <strong>@remote.Name</strong>
+                                    <code>@remote.Url</code>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="nebula-git-remotes__empty">Nenhum remote configurado.</p>
+                    }
+                </CoronaCard>
+            </main>
+
+            <aside class="nebula-git-sidebar">
+                <CoronaCard Class="nebula-git-sidebar-card">
+                    <p class="nebula-kicker">Acoes rapidas</p>
+
+                    <div class="nebula-git-actions">
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Primary"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.ArrowClockwise"
+                                      OnClick="RefreshAsync"
+                                      Disabled="@IsLoading">
+                            Atualizar tudo
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Neutral"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.Branch"
+                                      OnClick="CreateBranchAsync"
+                                      Disabled="@IsLoading">
+                            Nova branch
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Neutral"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.Download"
+                                      OnClick="FetchAsync"
+                                      Disabled="@IsLoading">
+                            Fetch
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Neutral"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.Upload"
+                                      OnClick="PushAsync"
+                                      Disabled="@PushDisabled">
+                            Push (bloqueado em main/master)
+                        </CoronaButton>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Neutral"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.Download"
+                                      OnClick="PullAsync"
+                                      Disabled="@PullDisabled">
+                            Pull
+                        </CoronaButton>
+                    </div>
+
+                    <div class="nebula-git-protection-notice">
+                        @if (IsProtected)
+                        {
+                            <CoronaBadge Content="Branch protegida" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Danger" />
+                            <p>Commits, push e revert sao bloqueados nas branches: main, master, develop, release, production.</p>
+                            <p>Crie uma feature branch para trabalhar:</p>
+                            <code>git checkout -b feature/minha-feature</code>
+                        }
+                    </div>
+                </CoronaCard>
+
+                <CoronaCard Class="nebula-git-sidebar-card">
+                    <p class="nebula-kicker">Conventional Commits</p>
+                    <div class="nebula-git-conventional">
+                        <p><strong>Tipos:</strong> feat, fix, docs, style, refactor, test, chore, perf, build, ci, revert</p>
+                        <p><strong>Formato:</strong> <code>type(scope): subject</code></p>
+                        <p><strong>Exemplos:</strong></p>
+                        <ul>
+                            <li><code>feat(auth): add OAuth login</code></li>
+                            <li><code>fix(api): handle null response</code></li>
+                            <li><code>docs(readme): update setup</code></li>
+                            <li><code>refactor(core): simplify logic</code></li>
+                            <li><code>test(unit): add coverage</code></li>
+                        </ul>
+                    </div>
+                </CoronaCard>
+            </aside>
+        </div>
+    }
+</CoronaContainer>
+
+@code {
+    private GitStatusResult? Status;
+    private GitBranchResult? Branches;
+    private GitLogResult? Log;
+    private GitRemoteResult? Remotes;
+    private string? Diff;
+    private string CommitMessage = string.Empty;
+    private string Feedback = string.Empty;
+    private bool IsError;
+    private bool IsLoading;
+    private bool IsCommitting;
+    private bool IsReverting;
+    private bool IsGeneratingMessage;
+    private bool ShowStagedDiff = false;
+    private int LogCount = 10;
+
+    private bool IsRepository => Status?.IsRepository == true;
+    private bool IsProtected => Branches?.CurrentBranch != null && GitProtectedBranches.IsProtected(Branches.CurrentBranch);
+    private bool PullDisabled => IsLoading || IsProtected;
+    private bool PushDisabled => IsLoading || IsProtected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        IsLoading = true;
+        Feedback = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+
+            Status = await GitService.GetStatusAsync(workspace);
+            if (!Status.IsRepository)
+            {
+                Feedback = Status.Error ?? "Nao e um repositorio Git.";
+                IsError = true;
+                return;
+            }
+
+            Branches = await GitService.GetBranchesAsync(workspace);
+            Log = await GitService.GetLogAsync(workspace, LogCount);
+            Remotes = await GitService.GetRemotesAsync(workspace);
+            Diff = await GetDiffAsync();
+
+            if (Status.HasUncommittedChanges && string.IsNullOrWhiteSpace(CommitMessage))
+            {
+                await GenerateCommitMessageAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro ao carregar: {ex.Message}";
+            IsError = true;
+        }
+finally
+            {
+                IsLoading = false;
+                await RefreshAsync();
+                await WorkspaceState.RefreshGitStatusAsync();
+            }
+    }
+
+    private async Task<string> GetDiffAsync()
+    {
+        var workspace = WorkspaceState.ResolvedWorkspace.Root;
+        var result = await GitService.GetDiffAsync(workspace, ShowStagedDiff);
+        return result.IsRepository ? result.DiffStat : string.Empty;
+    }
+
+    private async Task GenerateCommitMessageAsync()
+    {
+        if (!Status?.HasUncommittedChanges == true) return;
+
+        IsGeneratingMessage = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            CommitMessage = await GitService.GenerateCommitMessageAsync(workspace);
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro ao gerar mensagem: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsGeneratingMessage = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CommitAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CommitMessage) || !Status?.HasUncommittedChanges == true) return;
+
+        IsCommitting = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var result = await GitService.CommitAsync(workspace, CommitMessage);
+
+            if (result.Success)
+            {
+                Feedback = $"Commit realizado: {result.CommitHash?[..7]}";
+                IsError = false;
+                CommitMessage = string.Empty;
+                await RefreshAsync();
+            }
+            else
+            {
+                Feedback = result.Error ?? "Falha no commit";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no commit: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsCommitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CommitAllAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CommitMessage) || !Status?.HasUncommittedChanges == true) return;
+
+        IsCommitting = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var result = await GitService.CommitAllAsync(workspace, CommitMessage);
+
+            if (result.Success)
+            {
+                Feedback = $"Commit realizado: {result.CommitHash?[..7]}";
+                IsError = false;
+                CommitMessage = string.Empty;
+                await RefreshAsync();
+            }
+            else
+            {
+                Feedback = result.Error ?? "Falha no commit";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no commit: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsCommitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RevertAsync(string commitHash)
+    {
+        var protectionCheck = await GitService.IsProtectedBranchAsync(WorkspaceState.ResolvedWorkspace.Root);
+        if (protectionCheck)
+        {
+            Feedback = "Branch protegida: revert bloqueado em main/master/develop/release.";
+            IsError = true;
+            StateHasChanged();
+            return;
+        }
+
+        IsReverting = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var result = await GitService.RevertAsync(workspace, commitHash);
+
+            if (result.Success)
+            {
+                Feedback = $"Revertido: {result.RevertedCommitHash?[..7]}";
+                IsError = false;
+                await RefreshAsync();
+            }
+            else
+            {
+                Feedback = result.Error ?? "Falha no revert";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no revert: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsReverting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InitRepositoryAsync()
+    {
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            await ShellExecutor.RunCommandAsync("git init", CancellationToken.None);
+            await ShellExecutor.RunCommandAsync("git add -A", CancellationToken.None);
+            await ShellExecutor.RunCommandAsync("git commit -m \"chore: initial commit\"", CancellationToken.None);
+            Feedback = "Repositorio inicializado com commit inicial.";
+            IsError = false;
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro ao inicializar: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsLoading = false;
+            await RefreshAsync();
+        }
+    }
+
+    private async Task CreateBranchAsync()
+    {
+        // Could add a dialog for branch name
+        Feedback = "Use o terminal ou: git checkout -b feature/nova-feature";
+        IsError = false;
+        StateHasChanged();
+    }
+
+    private async Task FetchAsync()
+    {
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var result = await ShellExecutor.RunCommandAsync("git fetch --all", CancellationToken.None);
+            Feedback = "Fetch concluido.";
+            IsError = false;
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no fetch: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsLoading = false;
+            await RefreshAsync();
+        }
+    }
+
+    private async Task PushAsync()
+    {
+        if (IsProtected)
+        {
+            Feedback = "Push bloqueado: branch protegida (main/master/develop/release).";
+            IsError = true;
+            StateHasChanged();
+            return;
+        }
+
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var branch = Branches?.CurrentBranch;
+            var result = await ShellExecutor.RunCommandAsync($"git push origin {branch}", CancellationToken.None);
+            Feedback = "Push concluido.";
+            IsError = false;
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no push: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsLoading = false;
+            await RefreshAsync();
+        }
+    }
+
+    private async Task PullAsync()
+    {
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var executor = WorkspaceState.GetService<Nebula.Runner.IShellExecutor>();
+            if (executor != null)
+            {
+                var result = await executor.RunCommandAsync("git pull", CancellationToken.None);
+                Feedback = "Pull concluido.";
+                IsError = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro no pull: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsLoading = false;
+            await RefreshAsync();
+        }
+    }
+
+    private void NavigateToChat()
+    {
+        NavigationManager.NavigateTo("/chat");
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+    }
+}

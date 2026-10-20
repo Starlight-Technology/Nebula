@@ -41,7 +41,7 @@ public sealed class PolicySimulator(
                 WorkingDirectory = workingDirectoryResolved
             };
             var operationKind = operationKindDetector.Detect(step);
-            if (operationKind != OperationKind.TerminalCommand)
+            if (operationKind is not (OperationKind.TerminalCommand or OperationKind.Unknown))
             {
                 return new PolicySimulationResult(
                     text,
@@ -63,10 +63,15 @@ public sealed class PolicySimulator(
                     null);
             }
 
+            operationKind = OperationKind.TerminalCommand;
+            var effectiveRawCommand = string.IsNullOrWhiteSpace(rawCommand)
+                ? text
+                : rawCommand;
+
             var environment = environmentDetector.Detect(workingDirectoryResolved);
             var commandRequest = intentParser.Parse(
                 text,
-                rawCommand,
+                effectiveRawCommand,
                 workingDirectoryResolved);
             var resolvedCommand = resolver.Resolve(commandRequest, environment);
             var commandText = resolvedCommand.DisplayCommand;

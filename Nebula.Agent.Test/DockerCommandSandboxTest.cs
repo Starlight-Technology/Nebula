@@ -66,17 +66,18 @@ public sealed class DockerCommandSandboxTest
                 SandboxCpuLimit = 1
             },
             executorMock.Object);
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
         var command = new ResolvedCommand(
             "powershell.exe",
             "-NoProfile -ExecutionPolicy Bypass -Command \"echo oi\"",
             "echo oi",
-            "C:\\workspace",
+            workspace,
             []);
 
         var result = await sandbox.RunSandboxedAsync(
             ShellKind.PowerShell,
             command,
-            "C:\\workspace",
+            workspace,
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
@@ -89,7 +90,7 @@ public sealed class DockerCommandSandboxTest
         Assert.Contains("--security-opt no-new-privileges", captured.Arguments);
         Assert.Contains("--memory 512m", captured.Arguments);
         Assert.Contains("--cpus 1", captured.Arguments);
-        Assert.Contains("\"C:\\workspace:/workspace:rw\"", captured.Arguments);
+        Assert.Contains($"\"{workspace}:/workspace:rw\"", captured.Arguments);
         Assert.Contains("-w /workspace", captured.Arguments);
         Assert.Contains("mcr.microsoft.com/powershell:lts", captured.Arguments);
         Assert.Contains("pwsh -NoProfile -NonInteractive -Command", captured.Arguments);
@@ -258,23 +259,34 @@ public sealed class DockerCommandSandboxTest
                 SandboxMode = SandboxMode.Docker
             },
             executorMock.Object);
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            "opencode",
+            "nebula-manual");
+        var targetFile = Path.Combine(
+            workspace,
+            "web-project",
+            "index.html");
+        var targetFileForward = targetFile.Replace('\\', '/');
         var command = new ResolvedCommand(
             "powershell.exe",
-            "-NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType File -Path 'C:/Users/rodri/AppData/Local/Temp/opencode/nebula-manual/web-project/index.html'\"",
-            "New-Item -ItemType File -Path 'C:/Users/rodri/AppData/Local/Temp/opencode/nebula-manual/web-project/index.html'",
-            "C:\\Users\\rodri\\AppData\\Local\\Temp\\opencode\\nebula-manual",
+            $"-NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType File -Path '{targetFileForward}'\"",
+            $"New-Item -ItemType File -Path '{targetFileForward}'",
+            workspace,
             []);
 
         await sandbox.RunSandboxedAsync(
             ShellKind.PowerShell,
             command,
-            "C:\\Users\\rodri\\AppData\\Local\\Temp\\opencode\\nebula-manual",
+            workspace,
             CancellationToken.None);
 
         Assert.NotNull(captured);
-        Assert.DoesNotContain("C:/Users/rodri", captured.Arguments);
-        Assert.Contains("web-project/index.html", captured.Arguments);
         Assert.Contains("/workspace/web-project/index.html", captured.Arguments);
+        Assert.DoesNotContain(
+            targetFileForward,
+            captured.Arguments,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

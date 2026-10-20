@@ -1,5 +1,6 @@
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Core.Agent;
 
@@ -18,7 +19,16 @@ public sealed record AgentRun(
     string? CurrentPlan = null,
     IReadOnlyList<AgentArtifactRecord> Artifacts = null!,
     IReadOnlyList<AgentApprovalRecord> Approvals = null!,
-    string? WorkspaceRoot = null);
+    string? WorkspaceRoot = null,
+    InteractionMode Mode = InteractionMode.Agent,
+    IReadOnlyList<ArchitectureComparisonOption> ArchitectureOptions = null!);
+
+public sealed record ArchitectureComparisonOption(
+    string Name,
+    string[] Pros,
+    string[] Cons,
+    string Recommendation,
+    string Risk);
 
 public sealed record AgentStepRecord(
     Guid Id,
@@ -46,7 +56,8 @@ public sealed record AgentArtifactRecord(
     string Name,
     string? Path,
     string? ContentHash,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    double DiffPercent = 0.0);
 
 public sealed record AgentApprovalRecord(
     Guid Id,

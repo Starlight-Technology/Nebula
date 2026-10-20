@@ -1,0 +1,218 @@
+@using Microsoft.JSInterop
+
+<div class="nebula-terminal @GetTerminalClass()"
+     @ref="terminalElement"
+     @onwheel="HandleWheel">
+    <div class="nebula-terminal__toolbar">
+        <div class="nebula-terminal__toolbar-left">
+            <CoronaBadge Content="@Title" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Primary" />
+            @if (IsRunning)
+            {
+                <CoronaBadge Content="Executando..." Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+            }
+            @if (CompactMode)
+            {
+                <CoronaBadge Content="Compacto" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" Size="CoronaComponentSize.Small" />
+            }
+        </div>
+        <div class="nebula-terminal__toolbar-right">
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Icon="@CoronaIcons.Copy"
+                          OnClick="CopyAll"
+                          Title="Copiar tudo">
+            </CoronaButton>
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Icon="@CoronaIcons.Trash"
+                          OnClick="Clear"
+                          Title="Limpar terminal">
+            </CoronaButton>
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Icon="@(AutoScroll ? CoronaIcons.Lock : CoronaIcons.Unlock)"
+                          OnClick="ToggleAutoScroll"
+                          Title="@(AutoScroll ? "Desativar auto-scroll" : "Ativar auto-scroll")">
+            </CoronaButton>
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Icon="@(CompactMode ? CoronaIcons.Expand : CoronaIcons.Collapse)"
+                          OnClick="ToggleCompact"
+                          Title="@(CompactMode ? "Expandir" : "Compactar")">
+            </CoronaButton>
+        </div>
+    </div>
+
+    <div class="nebula-terminal__content" @ref="contentElement">
+        @if (Lines.Count == 0)
+        {
+            <div class="nebula-terminal__empty">
+                <span class="nebula-terminal__prompt">$ </span>
+                <span class="nebula-terminal__empty-text">Terminal pronto. Aguardando saida...</span>
+            </div>
+        }
+        else
+        {
+            @foreach (var line in VisibleLines)
+            {
+                <TerminalLine Line="line" />
+            }
+        }
+
+        @if (AutoScroll && !IsUserScrolled)
+        {
+        }
+    </div>
+
+    @if (ShowInput && OnCommandSubmit.HasDelegate)
+    {
+        <div class="nebula-terminal__input-row">
+            <span class="nebula-terminal__prompt">$ </span>
+            <input class="nebula-terminal__input"
+                   @bind="InputCommand"
+                   @bind:event="oninput"
+                   @onkeydown="HandleKeyDown"
+                   placeholder="Digite um comando..." />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Terminal";
+    [Parameter] public bool IsRunning { get; set; }
+    [Parameter] public bool CompactMode { get; set; }
+    [Parameter] public bool ShowInput { get; set; }
+    [Parameter] public int MaxLines { get; set; } = 1000;
+    [Parameter] public EventCallback<string> OnCommandSubmit { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+
+    private ElementReference terminalElement;
+    private ElementReference contentElement;
+
+    private List<TerminalLineData> Lines { get; set; } = [];
+    private string InputCommand { get; set; } = string.Empty;
+    private bool AutoScroll { get; set; } = true;
+    private bool IsUserScrolled { get; set; }
+
+    private IEnumerable<TerminalLineData> VisibleLines =>
+        CompactMode ? Lines.TakeLast(50) : Lines;
+
+    private string GetTerminalClass()
+    {
+        var classes = new List<string>();
+        if (CompactMode) classes.Add("nebula-terminal--compact");
+        return string.Join(" ", classes);
+    }
+
+    public void AddLine(string text, bool isError = false, bool isCommand = false, string? commandId = null)
+    {
+        var line = new TerminalLineData
+        {
+            Text = text,
+            IsError = isError,
+            IsCommand = isCommand,
+            CommandId = commandId,
+            Timestamp = DateTimeOffset.Now
+        };
+
+        Lines.Add(line);
+
+        if (Lines.Count > MaxLines)
+        {
+            Lines.RemoveAt(0);
+        }
+
+        if (AutoScroll && !IsUserScrolled)
+        {
+            _ = ScrollToBottom();
+        }
+    }
+
+    public void AddCommandOutput(string text, bool isError = false, string? commandId = null)
+    {
+        AddLine(text, isError, false, commandId);
+    }
+
+    public void AddCommand(string command, string? commandId = null)
+    {
+        AddLine(command, false, true, commandId);
+    }
+
+    public async Task Clear()
+    {
+        Lines.Clear();
+        await OnClear.InvokeAsync();
+    }
+
+    public async Task CopyAll()
+    {
+        var allText = string.Join("\n", Lines.Select(l => l.Text));
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", allText);
+    }
+
+    private async Task ScrollToBottom()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval", "document.querySelector('.nebula-terminal__content')?.scrollTop = document.querySelector('.nebula-terminal__content')?.scrollHeight");
+        }
+        catch
+        {
+            // Ignore scroll errors
+        }
+    }
+
+    private void HandleWheel(WheelEventArgs e)
+    {
+        IsUserScrolled = true;
+    }
+
+    private void ToggleAutoScroll()
+    {
+        AutoScroll = !AutoScroll;
+        if (AutoScroll)
+        {
+            IsUserScrolled = false;
+            _ = ScrollToBottom();
+        }
+    }
+
+    private void ToggleCompact()
+    {
+        CompactMode = !CompactMode;
+    }
+
+    [Inject] public IJSRuntime JSRuntime { get; set; } = default!;
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(InputCommand))
+        {
+            var cmd = InputCommand.Trim();
+            InputCommand = string.Empty;
+            AddCommand(cmd);
+            await OnCommandSubmit.InvokeAsync(cmd);
+        }
+        else if (e.Key == "Escape")
+        {
+            InputCommand = string.Empty;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (AutoScroll && !IsUserScrolled)
+        {
+            await ScrollToBottom();
+        }
+    }
+
+    public class TerminalLineData
+    {
+        public string Text { get; set; } = string.Empty;
+        public bool IsError { get; set; }
+        public bool IsCommand { get; set; }
+        public string? CommandId { get; set; }
+        public DateTimeOffset Timestamp { get; set; }
+    }
+}

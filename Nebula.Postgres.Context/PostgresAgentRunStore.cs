@@ -233,7 +233,8 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
                     artifact.Name,
                     artifact.Path,
                     artifact.ContentHash,
-                    artifact.CreatedAt))
+                    artifact.CreatedAt,
+                    0.0))
                 .ToList(),
             entity.Approvals
                 .Select(approval => new AgentApprovalRecord(

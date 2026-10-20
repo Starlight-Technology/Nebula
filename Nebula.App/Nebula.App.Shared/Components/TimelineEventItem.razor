@@ -1,0 +1,95 @@
+@using Nebula.Agent.Domain
+@using Nebula.Core.Agent
+@using Nebula.Core.Safety
+
+<div class="nebula-timeline-event @GetEventClass(@Event)">
+    <div class="nebula-timeline-event__header">
+        <div>
+            <strong>@Event.Title</strong>
+            <span>Passo @Event.Step, tentativa @Event.Attempt</span>
+        </div>
+        <CoronaBadge Content="@GetEventLabel(@Event)"
+                     Variant="CoronaBadgeVariant.Soft"
+                     Color="@GetStatusColor(@Event.Status)" />
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Event.Message))
+    {
+        <p>@Event.Message</p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Event.Command))
+    {
+        <code>@Event.Command</code>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Event.ToolResponse))
+    {
+        <pre>@Event.ToolResponse</pre>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Event.Error))
+    {
+        <p class="nebula-timeline-event__error">@Event.Error</p>
+    }
+
+    @if (ShowTimestamp)
+    {
+        <span class="nebula-timeline-event__time">@Event.CreatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+    }
+</div>
+
+@code {
+    [Parameter] public ActionExecutionEvent Event { get; set; } = default!;
+    [Parameter] public bool ShowTimestamp { get; set; } = true;
+
+    private string GetEventClass(ActionExecutionEvent evt)
+    {
+        var classes = new List<string>();
+        if (evt.IsError) classes.Add("nebula-timeline-event--error");
+        return string.Join(" ", classes);
+    }
+
+    private string GetEventLabel(ActionExecutionEvent evt)
+    {
+        return evt.Kind switch
+        {
+            ActionExecutionEventKind.ActionStarted => "Acao iniciada",
+            ActionExecutionEventKind.ActionCompleted => "Acao concluida",
+            ActionExecutionEventKind.Observation => "Observacao",
+            ActionExecutionEventKind.ErrorReflection => "Reflexao de erro",
+            ActionExecutionEventKind.PlanRevised => "Plano revisado",
+            ActionExecutionEventKind.DeduplicationBlocked => "Deduplicado",
+            ActionExecutionEventKind.RetryScheduled => "Retry agendado",
+            ActionExecutionEventKind.ApprovalGranted => "Aprovacao concedida",
+            ActionExecutionEventKind.Completed => "Concluido",
+            ActionExecutionEventKind.Failed => "Falhou",
+            ActionExecutionEventKind.Unsafe => "Inseguro",
+            ActionExecutionEventKind.ApprovalRequired => "Aprovacao necessaria",
+            ActionExecutionEventKind.Cancelled => "Cancelado",
+            ActionExecutionEventKind.StreamOutput => "Saida",
+            ActionExecutionEventKind.ArchitectureComparison => "Comparacao arch",
+            ActionExecutionEventKind.ReasoningSummary => "Resumo raciocinio",
+            _ => evt.Kind.ToString()
+        };
+    }
+
+    private CoronaColorSemantic GetStatusColor(ActionExecutionStatus status)
+    {
+        return status switch
+        {
+            ActionExecutionStatus.Completed => CoronaColorSemantic.Success,
+            ActionExecutionStatus.Executing => CoronaColorSemantic.Primary,
+            ActionExecutionStatus.Observing => CoronaColorSemantic.Primary,
+            ActionExecutionStatus.Planning => CoronaColorSemantic.Primary,
+            ActionExecutionStatus.Retrying => CoronaColorSemantic.Warning,
+            ActionExecutionStatus.AwaitingApproval => CoronaColorSemantic.Warning,
+            ActionExecutionStatus.Failed => CoronaColorSemantic.Danger,
+            ActionExecutionStatus.Unsafe => CoronaColorSemantic.Danger,
+            ActionExecutionStatus.Blocked => CoronaColorSemantic.Danger,
+            ActionExecutionStatus.Cancelled => CoronaColorSemantic.Neutral,
+            ActionExecutionStatus.Correcting => CoronaColorSemantic.Warning,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+}

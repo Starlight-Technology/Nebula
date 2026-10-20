@@ -136,6 +136,51 @@ public sealed class OperationSafetyTest
                 StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void file_write_classifier_with_custom_workspace_must_allow_paths_inside_it()
+    {
+        using var workspace = new TempTestWorkspace();
+        var classifier = new FileWriteSafetyClassifier(
+            workspaceRoot: workspace.Path);
+
+        var classification = classifier.Classify(
+            Path.Combine(workspace.Path, "src", "hello.txt"));
+
+        Assert.Equal(CommandIntent.SafeWriteLocal, classification.Intent);
+    }
+
+    [Fact]
+    public void file_write_classifier_with_custom_workspace_must_require_approval_outside_it()
+    {
+        using var workspace = new TempTestWorkspace();
+        var classifier = new FileWriteSafetyClassifier(
+            workspaceRoot: workspace.Path);
+
+        var classification = classifier.Classify(
+            Path.Combine(
+                Path.GetTempPath(),
+                "outside-workspace",
+                "hello.txt"));
+
+        Assert.Equal(CommandIntent.NeedsApproval, classification.Intent);
+    }
+
+    [Fact]
+    public void deterministic_classifier_with_custom_workspace_must_allow_local_writes_inside_it()
+    {
+        using var workspace = new TempTestWorkspace();
+        const string fileName = "nota.txt";
+        var classifier = new DeterministicCommandClassifier(
+            workspaceRoot: workspace.Path);
+
+        var classification = classifier.ClassifyAsync(
+            $"echo 'nota' > {Path.Combine(workspace.Path, fileName)}")
+            .GetAwaiter()
+            .GetResult();
+
+        Assert.Equal(CommandIntent.SafeWriteLocal, classification.Intent);
+    }
+
     private static string ControlledTempPath(string fileName) =>
         Path.Combine(
             Path.GetTempPath(),

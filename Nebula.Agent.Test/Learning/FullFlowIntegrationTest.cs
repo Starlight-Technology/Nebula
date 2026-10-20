@@ -102,17 +102,24 @@ public sealed class FullFlowIntegrationTest : IDisposable
     [Fact]
     public async Task list_directory_with_correct_drive()
     {
+        var isWindows = OperatingSystem.IsWindows();
+        var prompt = isWindows
+            ? "listar arquivos na raiz do D"
+            : "listar os arquivos do diretório de teste";
+        var listCommand = isWindows
+            ? "powershell.exe -Command \"Get-ChildItem -Path D:\\\""
+            : "ls -la";
         var decisions = new Queue<string>();
 
         decisions.Enqueue(StructuredActionDecision(
-            "Vou listar os arquivos na raiz do D",
-            "Listar diretorio raiz do drive D",
+            "Vou listar os arquivos",
+            "Listar diretorio",
             OperationKind.TerminalCommand,
-            command: "powershell.exe -Command \"Get-ChildItem -Path D:\\\""));
+            command: listCommand));
 
         decisions.Enqueue(CompleteDecision(
             "Listagem concluida",
-            "Diretorio D: listado com sucesso."));
+            "Diretorio listado com sucesso."));
 
         var llamaMock = CreateLlamaMock(decisions);
         var runner = CreateRunner(llamaMock);
@@ -121,7 +128,7 @@ public sealed class FullFlowIntegrationTest : IDisposable
         {
             ConversationId = Guid.NewGuid(),
             RequestId = Guid.NewGuid(),
-            Prompt = "listar arquivos na raiz do D",
+            Prompt = prompt,
             Mode = InteractionMode.Agent,
             MaxSteps = 3,
             MaxRetriesPerStep = 2
@@ -144,6 +151,12 @@ public sealed class FullFlowIntegrationTest : IDisposable
     public async Task create_folder_and_verify()
     {
         var testSubDir = Path.Combine(_testDir, "minha_pasta");
+        var createCommand = OperatingSystem.IsWindows()
+            ? $"powershell.exe -Command \"New-Item -ItemType Directory -Path '{testSubDir}' -Force\""
+            : $"mkdir -p '{testSubDir}'";
+        var verifyCommand = OperatingSystem.IsWindows()
+            ? $"powershell.exe -Command \"Test-Path -LiteralPath '{testSubDir}'\""
+            : $"ls -la '{testSubDir}'";
         var decisions = new Queue<string>();
 
         // Decision 1: Create the folder
@@ -151,14 +164,14 @@ public sealed class FullFlowIntegrationTest : IDisposable
             "Vou criar a pasta minha_pasta",
             "Criar diretorio minha_pasta",
             OperationKind.TerminalCommand,
-            command: $"powershell.exe -Command \"New-Item -ItemType Directory -Path '{testSubDir}' -Force\""));
+            command: createCommand));
 
         // Decision 2: Verify it exists
         decisions.Enqueue(StructuredActionDecision(
             "Vou verificar se a pasta foi criada",
             "Verificar existencia da pasta",
             OperationKind.TerminalCommand,
-            command: $"powershell.exe -Command \"Test-Path -LiteralPath '{testSubDir}'\""));
+            command: verifyCommand));
 
         // Decision 3: Complete
         decisions.Enqueue(CompleteDecision(

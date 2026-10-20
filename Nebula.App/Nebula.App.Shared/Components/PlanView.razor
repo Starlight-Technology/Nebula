@@ -1,0 +1,143 @@
+@using Nebula.Agent
+
+<div class="nebula-plan-view">
+    <div class="nebula-plan-view__header">
+        <p class="nebula-kicker">Plano de execucao</p>
+        @if (Plan.Count > 0)
+        {
+            <CoronaStack Direction="CoronaStackDirection.Row" Spacing=".5rem" Wrap="CoronaStackWrap.Wrap">
+                <CoronaBadge Content="@($"Total: {Plan.Count}")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Neutral" />
+                <CoronaBadge Content="@($"Concluidos: {Plan.Count(p => p.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))}")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Success" />
+                <CoronaBadge Content="@($"Checkpoints: {Plan.Count(p => p.IsCheckpoint)}")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Primary" />
+                <CoronaBadge Content="@($"Risco alto/critico: {Plan.Count(p => IsHighRisk(p.Risk))}")" Variant="CoronaBadgeVariant.Outlined" Color="CoronaColorSemantic.Danger" />
+            </CoronaStack>
+        }
+    </div>
+
+    @if (Plan.Count == 0)
+    {
+        <div class="nebula-plan-view__empty">
+            <CoronaBadge Content="Sem plano" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Neutral" />
+            <p>O agente ainda nao gerou um plano estruturado.</p>
+        </div>
+    }
+    else
+    {
+        <div class="nebula-plan-view__steps">
+            @foreach (var step in Plan.OrderBy(p => p.Id))
+            {
+                <StepCard Id="@step.Id"
+                          Description="@step.Description"
+                          DependsOn="@step.DependsOn"
+                          Status="@step.Status"
+                          Risk="@step.Risk"
+                          IsCheckpoint="@step.IsCheckpoint"
+                          IsExpanded="@IsStepExpanded(step.Id)" />
+            }
+        </div>
+    }
+
+    @if (ArchitectureComparison?.Count > 0)
+    {
+        <div class="nebula-plan-view__architecture">
+            <p class="nebula-kicker">Comparacao de arquitetura</p>
+            @foreach (var option in ArchitectureComparison)
+            {
+                var name = GetOptionName(option);
+                var risk = GetOptionRisk(option);
+                var pros = GetOptionPros(option);
+                var cons = GetOptionCons(option);
+                var recommendation = GetOptionRecommendation(option);
+                <div class="nebula-architecture-option @GetRiskClass(risk)">
+                    <div class="nebula-architecture-option__header">
+                        <strong>@name</strong>
+                        <CoronaBadge Content="@risk" Variant="CoronaBadgeVariant.Soft" Color="@GetRiskColor(risk)" />
+                    </div>
+                    <div class="nebula-architecture-option__pros">
+                        <strong>Pros:</strong> @pros
+                    </div>
+                    <div class="nebula-architecture-option__cons">
+                        <strong>Contras:</strong> @cons
+                    </div>
+                    <div class="nebula-architecture-option__rec">
+                        <strong>Recomendacao:</strong> @recommendation
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<AgentPlanStep> Plan { get; set; } = [];
+    [Parameter] public IReadOnlyList<object>? ArchitectureComparison { get; set; }
+    [Parameter] public HashSet<int> ExpandedSteps { get; set; } = [];
+
+    private bool IsStepExpanded(int stepId) => ExpandedSteps.Contains(stepId);
+
+    private bool IsHighRisk(string risk) =>
+        risk.Equals("high", StringComparison.OrdinalIgnoreCase) ||
+        risk.Equals("critical", StringComparison.OrdinalIgnoreCase);
+
+    private string GetRiskClass(string risk)
+    {
+        return risk.ToLowerInvariant() switch
+        {
+            "high" => "nebula-architecture-option--high",
+            "critical" => "nebula-architecture-option--critical",
+            _ => ""
+        };
+    }
+
+    private CoronaColorSemantic GetRiskColor(string risk)
+    {
+        return risk.ToLowerInvariant() switch
+        {
+            "low" => CoronaColorSemantic.Success,
+            "medium" => CoronaColorSemantic.Warning,
+            "high" => CoronaColorSemantic.Danger,
+            "critical" => CoronaColorSemantic.Danger,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+
+    private static string GetOptionName(object option) =>
+        option switch
+        {
+            Nebula.Agent.ArchitectureOption a => a.Name,
+            Nebula.Core.Agent.ArchitectureComparisonOption a => a.Name,
+            _ => string.Empty
+        };
+
+    private static string GetOptionRisk(object option) =>
+        option switch
+        {
+            Nebula.Agent.ArchitectureOption a => a.Risk,
+            Nebula.Core.Agent.ArchitectureComparisonOption a => a.Risk,
+            _ => "medium"
+        };
+
+    private static string GetOptionPros(object option) =>
+        option switch
+        {
+            Nebula.Agent.ArchitectureOption a => a.Pros,
+            Nebula.Core.Agent.ArchitectureComparisonOption a => string.Join(", ", a.Pros),
+            _ => string.Empty
+        };
+
+    private static string GetOptionCons(object option) =>
+        option switch
+        {
+            Nebula.Agent.ArchitectureOption a => a.Cons,
+            Nebula.Core.Agent.ArchitectureComparisonOption a => string.Join(", ", a.Cons),
+            _ => string.Empty
+        };
+
+    private static string GetOptionRecommendation(object option) =>
+        option switch
+        {
+            Nebula.Agent.ArchitectureOption a => a.Recommendation,
+            Nebula.Core.Agent.ArchitectureComparisonOption a => a.Recommendation,
+            _ => string.Empty
+        };
+}

@@ -7,7 +7,10 @@ using MongoDB.Driver;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Agent.Data;
 using Nebula.App.Shared.State;
 using Nebula.App.Web.Components;
@@ -222,10 +225,86 @@ builder.Services.AddScoped<IProjectScaffolder, ProjectScaffolder>();
 builder.Services.AddScoped<IProjectStackValidator, ProjectStackValidator>();
 builder.Services.AddScoped<IPlannedPatchApplier, PlannedPatchApplier>();
 builder.Services.AddScoped<IGitDiffService, GitDiffService>();
+builder.Services.AddScoped<IGitService, GitService>();
+builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
+builder.Services.AddScoped<ISmokeTestService, SmokeTestService>();
+builder.Services.AddScoped<IPortDetectionService, PortDetectionService>();
+builder.Services.AddScoped<IPullRequestService, PullRequestService>();
+builder.Services.AddScoped<IMigrationService, MigrationService>();
+builder.Services.AddScoped<IScreenshotService, ScreenshotService>();
+builder.Services.AddHttpClient();
 builder.Services.AddScoped<ICommandApprovalService, CommandApprovalService>();
 builder.Services.AddScoped<IConversationContextService, ConversationContextService>();
-builder.Services.AddScoped<IAgentActionRunner, AgentActionRunner>();
-builder.Services.AddScoped<IManager, Manager>();
+
+builder.Services.AddAgentRunProcessing();
+
+builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner(
+    provider.GetRequiredService<ILlamaClient>(),
+    provider.GetRequiredService<IShellExecutor>(),
+    provider.GetRequiredService<IJsonExtractor>(),
+    provider.GetRequiredService<Nebula.Agent.ILogger>(),
+    commandRepository: provider.GetRequiredService<ICommandRepository>(),
+    maxRetries:
+        int.TryParse(builder.Configuration["NEBULA_MAX_ACTION_RETRIES"], out var runnerMaxRetries)
+            ? runnerMaxRetries
+            : 6,
+    maxSteps:
+        int.TryParse(builder.Configuration["NEBULA_MAX_ACTION_STEPS"], out var runnerMaxSteps)
+            ? runnerMaxSteps
+            : 15,
+    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+    runtimeSettings: provider.GetRequiredService<NebulaRuntimeSettings>(),
+    agentRunStore: provider.GetRequiredService<IAgentRunStore>(),
+    commandIntentParser: provider.GetRequiredService<ICommandIntentParser>(),
+    commandResolver: provider.GetRequiredService<ICommandResolver>(),
+    environmentDetector: provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    operationKindDetector: provider.GetRequiredService<IOperationKindDetector>(),
+    scriptContentClassifier: provider.GetRequiredService<IScriptContentSafetyClassifier>(),
+    fileWriteSafetyClassifier: provider.GetRequiredService<IFileWriteSafetyClassifier>(),
+    operationPolicyEngine: provider.GetRequiredService<IOperationPolicyEngine>(),
+    evidenceCollector: provider.GetRequiredService<IExecutionEvidenceCollector>(),
+    learningEngine: provider.GetRequiredService<ILearningEngine>(),
+    knowledgeQueryService: provider.GetRequiredService<IKnowledgeQueryService>(),
+    learningFromExecution: provider.GetRequiredService<ILearningFromExecutionService>(),
+    postTaskLearning: provider.GetRequiredService<IPostTaskLearningService>(),
+    outputVerificationService: provider.GetRequiredService<IOutputVerificationService>(),
+    translationService: provider.GetRequiredService<ITranslationService>(),
+    deterministicVerificationService: provider.GetRequiredService<IDeterministicVerificationService>(),
+    projectTemplateCatalog: provider.GetRequiredService<IProjectTemplateCatalog>(),
+    projectScaffolder: provider.GetRequiredService<IProjectScaffolder>(),
+    projectStackValidator: provider.GetRequiredService<IProjectStackValidator>(),
+    workspaceMapService: provider.GetRequiredService<IWorkspaceMapService>(),
+    plannedPatchApplier: provider.GetRequiredService<IPlannedPatchApplier>(),
+    gitDiffService: provider.GetRequiredService<IGitDiffService>(),
+    commandSandbox: provider.GetRequiredService<ICommandSandbox>(),
+    approvalService: provider.GetRequiredService<ICommandApprovalService>(),
+    workspaceMemoryService: provider.GetRequiredService<WorkspaceMemoryService>(),
+    commandAllowlistService: provider.GetRequiredService<ICommandAllowlistService>(),
+    workspaceCategoryPolicyService: provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
+    projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
+    userMemoryService: provider.GetRequiredService<IUserMemoryService>()));
+builder.Services.AddScoped<IManager>(provider => new Manager(
+    provider.GetRequiredService<ILlamaClient>(),
+    provider.GetRequiredService<IShellExecutor>(),
+    provider.GetRequiredService<IJsonExtractor>(),
+    provider.GetRequiredService<Nebula.Agent.ILogger>(),
+    commandRepository: provider.GetRequiredService<ICommandRepository>(),
+    promptRepository: provider.GetRequiredService<IPromptRequestRepository>(),
+    conversationMemoryRepository: provider.GetRequiredService<IConversationMemoryRepository>(),
+    contextBuilder: provider.GetRequiredService<NebulaContextBuilder>(),
+    maxActionRetries:
+        int.TryParse(builder.Configuration["NEBULA_MAX_ACTION_RETRIES"], out var maxActionRetries)
+            ? maxActionRetries
+            : 6,
+    maxActionSteps:
+        int.TryParse(builder.Configuration["NEBULA_MAX_ACTION_STEPS"], out var maxActionSteps)
+            ? maxActionSteps
+            : 15,
+    actionRunner: provider.GetRequiredService<IAgentActionRunner>(),
+    conversationContextService: provider.GetRequiredService<IConversationContextService>(),
+    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+    orchestrator: provider.GetRequiredService<IAgentRunOrchestrator>()));
 builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
 var app = builder.Build();
@@ -235,6 +314,12 @@ await using (var migrationScope = app.Services.CreateAsyncScope())
     var postgresContext =
         migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
     await PostgresDatabaseInitializer.InitializeAsync(postgresContext);
+}
+
+using (var startupScope = app.Services.CreateScope())
+{
+    var llamaClient = startupScope.ServiceProvider.GetRequiredService<ILlamaClient>();
+    await llamaClient.EnsureInstalledModelSelectedAsync();
 }
 
 if (app.Environment.IsDevelopment())

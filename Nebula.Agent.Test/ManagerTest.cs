@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Moq;
 using Nebula.Agent;
+using Nebula.Agent.Application;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
@@ -51,6 +53,9 @@ public class ManagerTest
     public async Task manage_response_must_return_response_when_action()
     {
         const string prompt = "list files on c:";
+        var listDirectoryFragment = OperatingSystem.IsWindows()
+            ? "Get-ChildItem"
+            : "ls -la";
         var actionDecision = create_action_decision("I need to list the files.", "List files", "dir");
         var completeDecision = create_complete_decision(
             "The directory listing was returned.",
@@ -73,7 +78,7 @@ public class ManagerTest
         var executorMock = create_executor_mock();
         executorMock
             .Setup(executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("Directory listing");
 
@@ -119,7 +124,7 @@ public class ManagerTest
         Assert.Equal("Directory listing", result);
         executorMock.Verify(
             executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         commandRepositoryMock.Verify(repository => repository.SaveAsync(It.IsAny<StoredCommand>(), It.IsAny<CancellationToken>()), Times.Once);
@@ -505,14 +510,16 @@ public class ManagerTest
     [InlineData(
         "Execute dir na unidade D",
         "dir D:",
-        "Get-ChildItem",
+        null,
         "Directory listing")]
     public async Task agent_mode_must_execute_and_report_observed_evidence(
         string prompt,
         string proposedCommand,
-        string resolvedCommandFragment,
+        string? resolvedCommandFragment,
         string toolOutput)
     {
+        var expectedCommandFragment = resolvedCommandFragment
+            ?? (OperatingSystem.IsWindows() ? "Get-ChildItem" : "ls -la");
         var decisions = new Queue<string>(
         [
             create_action_decision(
@@ -542,7 +549,7 @@ public class ManagerTest
         executorMock
             .Setup(executor => executor.RunCommandAsync(
                 It.Is<string>(command =>
-                    command.Contains(resolvedCommandFragment, StringComparison.Ordinal)),
+                    command.Contains(expectedCommandFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(toolOutput);
 
@@ -558,12 +565,12 @@ public class ManagerTest
         Assert.Contains(result.Commands, command =>
             command.Executed &&
             command.StandardOutput == toolOutput &&
-            command.Run.Contains(resolvedCommandFragment, StringComparison.Ordinal));
+            command.Run.Contains(expectedCommandFragment, StringComparison.Ordinal));
         Assert.Contains(toolOutput, result.Reasoning, StringComparison.Ordinal);
         executorMock.Verify(
             executor => executor.RunCommandAsync(
                 It.Is<string>(command =>
-                    command.Contains(resolvedCommandFragment, StringComparison.Ordinal)),
+                    command.Contains(expectedCommandFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -1004,6 +1011,9 @@ public class ManagerTest
     public async Task manage_conversation_async_must_stream_action_events_and_log_tool_responses()
     {
         const string prompt = "List files in the current directory.";
+        var listDirectoryFragment = OperatingSystem.IsWindows()
+            ? "Get-ChildItem"
+            : "ls -la";
         var decisions = new Queue<string>(
         [
             create_action_decision("I need to inspect the directory.", "List files", "dir"),
@@ -1027,7 +1037,7 @@ public class ManagerTest
         var executorMock = create_executor_mock();
         executorMock
             .Setup(executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("Directory listing");
 
@@ -1051,11 +1061,56 @@ public class ManagerTest
         Assert.Contains(ActionExecutionStatus.Completed, streamedStatuses);
         Assert.Contains(result.ActionEvents, actionEvent =>
             actionEvent.Kind == ActionExecutionEventKind.ActionStarted &&
-            actionEvent.Command!.Contains("Get-ChildItem", StringComparison.Ordinal));
+            actionEvent.Command!.Contains(listDirectoryFragment, StringComparison.Ordinal));
         Assert.Contains(result.ActionEvents, actionEvent =>
             actionEvent.Kind == ActionExecutionEventKind.Observation &&
             actionEvent.ToolResponse == "Directory listing");
         Assert.Contains("Directory listing", result.Reasoning);
+    }
+
+    [Fact]
+    public async Task manage_conversation_async_must_await_orchestrated_final_turn()
+    {
+        const string prompt = "Read the project status.";
+        var runId = Guid.NewGuid();
+        var completedTurn = new ConversationTurn
+        {
+            ConversationId = Guid.NewGuid(),
+            RequestId = Guid.NewGuid(),
+            Prompt = prompt,
+            Mode = InteractionMode.Agent,
+            ModelName = "qwen3:8b",
+            Response = "Project status read.",
+            ActionStatus = ActionExecutionStatus.Completed,
+            CurrentPlan = "#1 [completed] [risk=low] Read status"
+        };
+        var orchestratorMock = new Mock<IAgentRunOrchestrator>();
+        orchestratorMock
+            .Setup(orchestrator => orchestrator.RunAsync(
+                It.IsAny<AgentActionRunRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(runId);
+        orchestratorMock
+            .Setup(orchestrator => orchestrator.SubscribeAsync(
+                runId,
+                It.IsAny<CancellationToken>()))
+            .Returns((Guid _, CancellationToken _) => SingleRunEvent(
+                new AgentRunCompletedEvent(runId, DateTimeOffset.UtcNow, completedTurn)));
+
+        var progressUpdates = new List<ConversationTurn>();
+        var manager = create_manager(
+            create_llama_client_mock(),
+            orchestrator: orchestratorMock.Object);
+
+        var result = await manager.ManageConversationAsync(
+            AgentMessage(prompt),
+            new InlineProgress<ConversationTurn>(progressUpdates.Add),
+            CancellationToken.None);
+
+        Assert.Same(completedTurn, result);
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Contains(progressUpdates, update =>
+            update.ActionStatus == ActionExecutionStatus.Completed);
     }
 
     [Fact]
@@ -1090,7 +1145,8 @@ public class ManagerTest
             executorMock,
             jsonExtractorMock,
             loggerMock,
-            maxActionRetries: 0);
+            maxActionRetries: 0,
+            commandPolicyEngine: create_low_confidence_policy_engine());
 
         var result = await manager.ManageConversationAsync(AgentMessage(prompt));
 
@@ -1265,7 +1321,9 @@ public class ManagerTest
         Mock<IPromptRequestRepository>? promptRepositoryMock = null,
         IConversationMemoryRepository? conversationMemoryRepository = null,
         int maxActionRetries = 5,
-        IAgentActionRunner? actionRunner = null)
+        IAgentActionRunner? actionRunner = null,
+        IAgentRunOrchestrator? orchestrator = null,
+        ICommandPolicyEngine? commandPolicyEngine = null)
     {
         return new Manager(
             llamaClientMock.Object,
@@ -1277,8 +1335,15 @@ public class ManagerTest
             conversationMemoryRepository,
             maxActionRetries: maxActionRetries,
             actionRunner: actionRunner,
-            commandPolicyEngine: create_test_policy_engine());
+                commandPolicyEngine: commandPolicyEngine ?? create_test_policy_engine(),
+                orchestrator: orchestrator);
     }
+
+            private static async IAsyncEnumerable<AgentRunEvent> SingleRunEvent(AgentRunEvent evt)
+            {
+            await Task.Yield();
+            yield return evt;
+            }
 
     private static ICommandPolicyEngine create_test_policy_engine()
     {
@@ -1298,6 +1363,20 @@ public class ManagerTest
                         CommandIntent.SafeExecuteLocal,
                         1,
                         ["Allowed by test policy."]));
+        return mock.Object;
+    }
+
+    private static ICommandPolicyEngine create_low_confidence_policy_engine()
+    {
+        var mock = new Mock<ICommandPolicyEngine>();
+        mock.Setup(engine => engine.EvaluateAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandSafetyDecision(
+                CommandSafetyDecisionType.Allow,
+                CommandIntent.SafeExecuteLocal,
+                0.5,
+                ["Allowed with low confidence by test policy."]));
         return mock.Object;
     }
 

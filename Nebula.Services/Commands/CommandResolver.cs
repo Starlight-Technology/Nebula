@@ -21,12 +21,7 @@ public sealed partial class CommandResolver : ICommandResolver
                 "Destructive commands are preserved for policy review and are never translated automatically.");
         }
 
-        if (IsCurrentDirectoryIntent(intentText))
-        {
-            return ResolveCurrentDirectory(environment);
-        }
-
-        if (IsListDirectoryIntent(intentText))
+        if (IsListDirectoryIntent(intentText) && HasExplicitListingTarget(intentText))
         {
             var path = ResolveTargetPath(request, environment);
             return ResolveListDirectory(path, environment);
@@ -36,6 +31,17 @@ public sealed partial class CommandResolver : ICommandResolver
         {
             var path = ResolveTargetPath(request, environment);
             return ResolveCreateDirectory(path, environment);
+        }
+
+        if (IsCurrentDirectoryIntent(intentText))
+        {
+            return ResolveCurrentDirectory(environment);
+        }
+
+        if (IsListDirectoryIntent(intentText))
+        {
+            var path = ResolveTargetPath(request, environment);
+            return ResolveListDirectory(path, environment);
         }
 
         if (environment.OS == OperatingSystemKind.Windows &&
@@ -284,6 +290,9 @@ public sealed partial class CommandResolver : ICommandResolver
     private static bool IsCurrentDirectoryIntent(string text) =>
         CurrentDirectoryRegex().IsMatch(text);
 
+    private static bool HasExplicitListingTarget(string text) =>
+        ExplicitListingRegex().IsMatch(text);
+
     private static bool IsCreateDirectoryIntent(string text) =>
         CreateDirectoryRegex().IsMatch(text);
 
@@ -358,6 +367,11 @@ public sealed partial class CommandResolver : ICommandResolver
         @"(?:^|\s)(?:pwd|get-location)(?:\s|$)|\b(?:diret[oó]rio|pasta|directory)\s+(?:atual|corrente|current)\b",
         RegexOptions.IgnoreCase)]
     private static partial Regex CurrentDirectoryRegex();
+
+    [GeneratedRegex(
+        @"\b(?:arquivos|files|conte[úu]do|contents|unidade|drive)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ExplicitListingRegex();
 
     [GeneratedRegex(
         @"(?:^|\s)(?:mkdir|md)(?:\s|$)|\b(?:criar|crie|create)\b.{0,20}\b(?:pasta|diret[oó]rio|folder|directory)\b",

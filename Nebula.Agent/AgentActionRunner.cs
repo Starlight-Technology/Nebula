@@ -625,7 +625,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             var translatedReasoning = await TranslateToResponseLanguageAsync(
                 decision.ReasoningSummary, cancellationToken);
             session.EmitReasoning(translatedReasoning);
-            session.ApplyPlan(decision.Plan);
+            ApplyDecisionPlan(session, decision);
             session.ApplyArchitectureComparison(decision.ArchitectureComparison);
 
             if (decision.IsComplete)
@@ -854,7 +854,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             var decision = await GenerateNextStepAsync(
                 session.CreateDecisionRequest(),
                 cancellationToken);
-            if (decision.IsComplete && !session.IsDryRun && session.Evidence.Count == 0)
+            if (decision.IsComplete && !session.IsDryRun &&
+                !session.Evidence.Any(evidence => evidence.Success))
             {
                 var failure = "You claimed the task is complete, but no actions were executed. " +
                               "You must execute at least one action and collect evidence before completing.";
@@ -869,6 +870,36 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             session.RecordDecisionFailure(failure, ex.Message);
             return DecisionAttempt.Failed(failure);
         }
+    }
+
+    private static void ApplyDecisionPlan(
+        AgentActionSession session,
+        AgentActionDecision decision)
+    {
+        session.ApplyPlan(decision.Plan);
+        if (decision.IsComplete || decision.Action is null ||
+            decision.Plan is { Count: > 0 } ||
+            session.Plan.Any(step =>
+                step.Status != "completed" &&
+                string.Equals(
+                    step.Description,
+                    decision.Action.Objective,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        var nextId = session.Plan.Count == 0
+            ? 1
+            : session.Plan.Max(step => step.Id) + 1;
+        session.ApplyPlan([
+            new AgentPlanStep
+            {
+                Id = nextId,
+                Description = decision.Action.Objective,
+                Status = "pending"
+            }
+        ]);
     }
 
     private async Task<ActionAttemptResult> ExecuteActionAsync(
@@ -1683,10 +1714,21 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
 
         if (!validation.Correct)
         {
-            var observation = execution.Notes
-                ?? "The proposed action does not satisfy the current step.";
-            session.RecordCommandObservation(execution.Run, observation);
-            return ActionAttemptResult.Retry(observation);
+            var deterministicSafe =
+                operationDecision.Decision == CommandSafetyDecisionType.Allow &&
+                operationDecision.Confidence >= 0.9;
+            if (!deterministicSafe)
+            {
+                var observation = execution.Notes
+                    ?? "The proposed action does not satisfy the current step.";
+                session.RecordCommandObservation(execution.Run, observation);
+                return ActionAttemptResult.Retry(observation);
+            }
+
+            logger.Log(
+                "[AGENT] LLM correctness check rejected a command classified as " +
+                $"deterministically safe (intent={operationDecision.Intent}; " +
+                $"confidence={operationDecision.Confidence:F3}); proceeding with execution.");
         }
 
         if (execution.TargetPath is not null &&
@@ -3362,15 +3404,34 @@ return (observationMessage, historyEntry);
             ["The non-sensitive file is outside the workspace but read-only access is allowed."]);
     }
 
+
+    private static bool IsSourceFile(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".cs" or ".vb" or ".fs" or ".js" or ".ts" or ".jsx" or ".tsx" or ".py" or ".java" or ".go" or ".rs" or ".cpp" or ".cc" or ".c" or ".h" or ".hpp";
+    }
+
+    private static bool IsFrontendFile(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".html" or ".htm" or ".razor" or ".cshtml" or ".vue" or ".jsx" or ".tsx" or ".js" or ".ts" or ".css" or ".scss" or ".sass" or ".less";
+    }
+
     private static bool IsOperatingSystemRoot(string path)
     {
-        string[] systemRoots =
-        [
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
-        ];
+        var systemRoots = OperatingSystem.IsWindows()
+            ? new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
+            }
+            : new[]
+            {
+                "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+                "/boot", "/dev", "/proc", "/sys", "/root"
+            };
 
         var fullPath = Path.GetFullPath(path);
         foreach (var systemRoot in systemRoots)
@@ -3910,6 +3971,8 @@ return (observationMessage, historyEntry);
             {userPreferencesContext}
             """;
 
+        var shellGuidance = BuildShellGuidance(environment);
+
         var dryRunSection = request.DryRun
             ? $"""
 
@@ -3922,17 +3985,24 @@ return (observationMessage, historyEntry);
             """
             : string.Empty;
 
+        var exampleFilePath = NormalizePathSlashes(
+            Path.Combine(environment.WorkingDirectory, "hello.py"));
+        var exampleProjectPath = NormalizePathSlashes(
+            Path.Combine(environment.WorkingDirectory, "MyProject"));
+
         return $$"""
             You are a task execution agent on {{environment.OS}} ({{environment.Shell}}).
             Respond ONLY with valid JSON and no markdown.
             Output reasoningSummary and completionMessage in English only.
             - You MUST execute actions to complete the objective. Thinking alone does nothing.
             - Execute ONE action per response using the action field below.
-            - After FileWrite/ScriptContent, run Test-Path or Get-ChildItem to verify.
+            - Always include a plan array before the first action; include every known step and at least one step even for a one-action task. Never omit the plan.
+            - After FileWrite/ScriptContent, verify using a command valid for this runtime.
             - After TerminalCommand, verify the output matches the objective.
-            - Set isComplete=true ONLY after at least one action was executed and verified with real output.
+            - Set isComplete=true ONLY after at least one action succeeded and its result was verified with real output.
             - Never set isComplete=true on the first response - you must execute steps first.
             - Never repeat the exact same failed command.
+            {shellGuidance}
             {{knowledgeSection}}
             {{workspaceSection}}
             {{templatesSection}}
@@ -3942,7 +4012,7 @@ return (observationMessage, historyEntry);
             Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
             For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
             For FileWrite (text/markdown/json): provide content, targetPath with actual .txt/.md/.json path.
-            For FileRead: provide targetPath with the absolute file path (command is optional).
+            For FileRead: provide targetPath with the exact absolute path of the requested file, based on the workspace context or working directory (command is optional). Never invent a path or use a placeholder.
             For TerminalCommand/ScriptExecution: provide the command.
             For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
             For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Prefer PlannedPatch over many separate FileWrite steps.
@@ -3953,21 +4023,16 @@ return (observationMessage, historyEntry);
             targetPath must be a real absolute path.
             Do NOT use variables like $CurrentDirectory or relative paths.
             Your working directory is: {{environment.WorkingDirectory}}
-            Use forward slashes in all paths (C:/Users/Name/file.py not C:\Users\Name\file.py).
-            Use Windows PowerShell commands (Get-ChildItem, Test-Path, New-Item, etc.).
-            Do not use Unix commands (ls, rm, grep, cat, chmod) on Windows.
-
+            Use forward slashes in all paths. Paths must match this operating system and be based on the actual workspace; never use example paths as real targets.
             INSPECTING EXISTING CODE OR BACKUPS (read-only analysis):
             - There is NO special "analyze"/"inspect" tool. Use real commands only.
-            - To list a directory (including outside the workspace, e.g. D:/Dev/Backup): use a TerminalCommand like:
-              Get-ChildItem -LiteralPath "D:/Dev/Backup" -Force | Select-Object Name, Length, Extension
-              or Get-ChildItem -LiteralPath "D:/Dev/Backup" -Recurse -Force -File | Select-Object FullName
+                        - Only use commands that are valid for this runtime.
             - To read a file: prefer operationKind FileRead with targetPath set to the absolute file path (works inside and outside the workspace; sensitive files like .env, keys and credentials remain blocked).
             - Read-only inspection never requires approval unless the target is a sensitive file or an operating system root (Windows, Program Files).
-            - Never invent tool names: if the previous attempt used a command that does not exist, retry with Get-ChildItem/Get-Content or FileRead instead.
+            - Never invent tool names. If a command fails, use FileRead or a shell command listed in the runtime guidance above.
 
             IMPORTANT: In JSON, escape every backslash as double backslash.
-            For example, path C:\Users\Name is written as "C:\\Users\\Name" in JSON.
+            Prefer forward slashes in paths so JSON does not need escaped backslashes.
 
             EXAMPLES - follow these patterns exactly:
 
@@ -3981,7 +4046,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "FileWrite",
                 "command": "",
                 "content": "print('hello world')",
-                "targetPath": "C:/Users/Name/hello.py",
+                "targetPath": "{{exampleFilePath}}",
                 "language": "python",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -3999,7 +4064,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "ProjectScaffold",
                 "command": "",
                 "templateId": "dotnet-console",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{exampleProjectPath}}",
                 "language": "",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4011,7 +4076,7 @@ return (observationMessage, historyEntry);
             {
               "reasoningSummary": "hello.py exists and prints hello world.",
               "isComplete": true,
-              "completionMessage": "Created hello.py and verified it with Get-ChildItem.",
+              "completionMessage": "Created hello.py and verified it with the current shell.",
               "action": null
             }
 
@@ -4024,7 +4089,7 @@ return (observationMessage, historyEntry);
                 "objective": "Update the app and its docs",
                 "operationKind": "PlannedPatch",
                 "command": "",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{exampleProjectPath}}",
                 "plannedFiles": [
                   {
                     "path": "src/App.cs",
@@ -4070,12 +4135,37 @@ return (observationMessage, historyEntry);
             {{request.CurrentPlan}}
             Previous result:
             {{request.PreviousActionResult ?? "none"}}
+            Failed actions are recorded in the observations and history below; do not repeat them.
             Observations:
             {{AgentActionSession.BuildObservationContext(request.Observations)}}
             History:
             {{ExecutionHistory.BuildContext(request.ExecutionHistory)}}
             Step {{request.StepNumber}} Retry {{request.RetryNumber}}
             """;
+    }
+
+    private static string BuildShellGuidance(RuntimeCommandEnvironment environment)
+    {
+        if (environment.OS == OperatingSystemKind.Windows ||
+            environment.Shell == ShellKind.PowerShell ||
+            environment.Shell == ShellKind.Cmd)
+        {
+            return """
+            Use Windows PowerShell commands for this runtime (Get-ChildItem, Test-Path, New-Item, etc.).
+            Do not invent Linux-specific commands on Windows.
+            Example directory listing: Get-ChildItem -LiteralPath \"D:/Dev/Backup\" -Force | Select-Object Name, Length, Extension
+            Example file read: Get-Content -LiteralPath \"D:/Dev/Backup/config.json\"
+            Example creation: New-Item -ItemType Directory -Force -Path \"D:/Dev/Backup/NewFolder\"
+            """;
+        }
+
+        return """
+        Use Linux shell commands for this runtime (ls, pwd, test, mkdir, find, grep, cat, python, bash, etc.).
+        Do not invent Windows-specific commands like Get-ChildItem, Test-Path or New-Item on Linux.
+        Example directory listing: ls -la
+        Example path check: test -f \"/tmp/example.txt\" || test -d \"/tmp/example.txt\"
+        Example creation: mkdir -p \"/tmp/example-dir\"
+        """;
     }
 
     private async Task<string> BuildWorkspaceContextAsync(

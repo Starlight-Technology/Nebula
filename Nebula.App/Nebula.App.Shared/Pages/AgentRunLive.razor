@@ -1,0 +1,655 @@
+@page "/agent-run/{RunId:guid}"
+@implements IDisposable
+@implements IAsyncDisposable
+@inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
+@inject Core.Agent.ITestRunnerService TestRunnerService
+@using Nebula.Core.Agent
+@using Nebula.Core.Interactions
+@using Nebula.Agent.Application.Events
+@using Nebula.Agent.Domain
+@using Nebula.App.Shared.Components
+
+<CoronaContainer MaxWidth="CoronaContainerMaxWidth.Fluid" Class="nebula-page-shell nebula-agent-run-page">
+    @if (IsLoading)
+    {
+        <CoronaCard Class="nebula-loading-card">
+            <div class="nebula-pending-panel">
+                <div class="nebula-pending-panel__pulse"></div>
+                <div>
+                    <p class="nebula-pending-panel__title">Carregando execucao do agente...</p>
+                    <p>Aguardando eventos em tempo real.</p>
+                </div>
+            </div>
+        </CoronaCard>
+    }
+    else if (Run == null)
+    {
+        <CoronaCard Class="nebula-error-card">
+            <div class="nebula-error-panel">
+                <p class="nebula-error-panel__title">Execucao nao encontrada</p>
+                <p>O run @RunId.ToString()[..8] nao foi encontrado.</p>
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Color="CoronaColorSemantic.Primary"
+                              Icon="@CoronaIcons.ArrowLeft"
+                              OnClick="NavigateToAgentRuns">
+                    Voltar para historico
+                </CoronaButton>
+            </div>
+        </CoronaCard>
+    }
+    else
+    {
+        <header class="nebula-agent-run__header">
+            <div class="nebula-agent-run__header-left">
+                <div class="nebula-agent-run__badges">
+                    <CoronaBadge Content="AO VIVO" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
+                    <CoronaBadge Content="@Run.Status" Variant="CoronaBadgeVariant.Outlined" Color="@GetStatusColor(Run.Status)" />
+                    <CoronaBadge Content="@Run.Mode.ToString()" Variant="CoronaBadgeVariant.Outlined" Color="@(Run.Mode == InteractionMode.Agent ? CoronaColorSemantic.Warning : CoronaColorSemantic.Primary)" />
+                    <CoronaBadge Content="@(WorkspaceState.IsGitRepository ? "Git: ✓" : "Git: ✗")"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@(WorkspaceState.IsGitRepository ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)"
+                                 Title="@(WorkspaceState.IsGitRepository ? "Repositorio Git ativo" : "Nao e um repositorio Git - funcionalidades de PR indisponiveis")"
+                                 @onclick="NavigateToGit"
+                                 style="cursor: pointer;" />
+                </div>
+                <h2>@Run.Prompt</h2>
+                <p class="nebula-agent-run__meta">
+                    Run @Run.Id.ToString()[..8] · Modelo @Run.ModelName · 
+                    @GetDurationText()
+                </p>
+            </div>
+
+            <div class="nebula-agent-run__header-right">
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Icon="@CoronaIcons.Copy"
+                              OnClick="CopyRunId"
+                              Title="Copiar Run ID">
+                </CoronaButton>
+                @if (IsResumable)
+                {
+                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Primary"
+                                  Icon="@CoronaIcons.ArrowRight"
+                                  Disabled="@IsResuming"
+                                  OnClick="ResumeRun">
+                        Retomar
+                    </CoronaButton>
+                }
+                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.ArrowLeft"
+                              OnClick="NavigateToAgentRuns">
+                    Historico
+                </CoronaButton>
+            </div>
+        </header>
+
+        <div class="nebula-agent-run__layout">
+            <aside class="nebula-agent-run__sidebar nebula-agent-run__plan" aria-label="Plano de execucao">
+                <PlanView Plan="@CurrentPlan" 
+                          ArchitectureComparison="@ArchitectureComparison"
+                          ExpandedSteps="@ExpandedStepIds" />
+
+<TestRunnerCard RunId="@RunId" 
+                                 WorkspaceRoot="@WorkspaceRoot"
+                                 TestRunnerService="@TestRunnerService" />
+            </aside>
+
+            <main class="nebula-agent-run__main" role="main">
+                <TerminalOutput @ref="TerminalRef"
+                                Title="Terminal do Agente"
+                                IsRunning="@IsRunning"
+                                CompactMode="@CompactMode"
+                                MaxLines="2000"
+                                ShowInput="false" />
+            </main>
+
+            <aside class="nebula-agent-run__sidebar nebula-agent-run__artifacts" aria-label="Artefatos">
+                <ArtifactPanel Artifacts="@Artifacts" 
+                               OnOpenFile="OpenArtifact"
+                               OnCopyPath="CopyArtifactPath" />
+            </aside>
+        </div>
+
+        <footer class="nebula-agent-run__footer">
+            <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem" Align="CoronaStackAlign.Center">
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@(CompactMode ? CoronaIcons.Expand : CoronaIcons.Collapse)"
+                              OnClick="ToggleCompact">
+                    @(CompactMode ? "Expandir" : "Compactar")
+                </CoronaButton>
+
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.Trash"
+                              OnClick="ClearTerminal">
+                    Limpar terminal
+                </CoronaButton>
+
+                <CoronaButton Variant="CoronaButtonVariant.Text"
+                              Size="CoronaComponentSize.Small"
+                              Color="CoronaColorSemantic.Neutral"
+                              Icon="@CoronaIcons.Copy"
+                              OnClick="CopyTerminalOutput">
+                    Copiar tudo
+                </CoronaButton>
+
+                <div class="nebula-agent-run__footer-spacer" />
+
+                @if (IsRunning && !IsCancelling)
+                {
+                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                  Size="CoronaComponentSize.Small"
+                                  Color="CoronaColorSemantic.Danger"
+                                  Icon="@CoronaIcons.Xmark"
+                                  OnClick="CancelRun">
+                        Cancelar execucao
+                    </CoronaButton>
+                }
+            </CoronaStack>
+        </footer>
+    }
+</CoronaContainer>
+
+@code {
+    [Parameter] public Guid RunId { get; set; }
+    [Parameter] public bool IsDryRun { get; set; }
+
+    private AgentRun? Run { get; set; }
+    private bool IsLoading { get; set; } = true;
+    private bool IsRunning { get; set; }
+    private bool IsResumable { get; set; }
+    private bool IsResuming { get; set; }
+    private bool IsCancelling { get; set; }
+    private bool CompactMode { get; set; } = false;
+    private bool IsDisposed { get; set; }
+    private CancellationTokenSource? EventStreamCts { get; set; }
+
+    private List<AgentPlanStep> CurrentPlan { get; set; } = [];
+    private List<ArchitectureComparisonOption> ArchitectureComparison { get; set; } = [];
+    private HashSet<int> ExpandedStepIds { get; set; } = [];
+    private List<AgentArtifactRecord> Artifacts { get; set; } = [];
+
+    private string WorkspaceRoot => Run?.WorkspaceRoot ?? WorkspaceState.ResolvedWorkspace.Root;
+
+    private TerminalOutput? TerminalRef { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.Changed += HandleWorkspaceChanged;
+        await LoadRunAsync();
+        await WorkspaceState.RefreshGitStatusAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Run != null && IsRunning)
+        {
+            await StartEventStreamAsync();
+        }
+    }
+
+    private async Task LoadRunAsync()
+    {
+        IsLoading = true;
+        try
+        {
+            if (WorkspaceState.AgentRunStore != null)
+            {
+                Run = await WorkspaceState.AgentRunStore.GetRunAsync(RunId);
+            }
+
+            if (Run == null)
+            {
+                Run = WorkspaceState.AgentRuns.FirstOrDefault(r => r.Id == RunId);
+            }
+
+            if (Run != null)
+            {
+                IsRunning = IsRunActive(Run.Status);
+                IsResumable = NebulaWorkspaceState.IsResumableRun(Run);
+                CurrentPlan = ParsePlan(Run.CurrentPlan);
+                ArchitectureComparison = Run.ArchitectureOptions?.ToList() ?? [];
+                Artifacts = Run.Artifacts?.ToList() ?? [];
+
+                // Expand active/failed steps by default
+                foreach (var step in CurrentPlan.Where(s => 
+                    s.Status.Equals("inprogress", StringComparison.OrdinalIgnoreCase) ||
+                    s.Status.Equals("executing", StringComparison.OrdinalIgnoreCase) ||
+                    s.Status.Equals("failed", StringComparison.OrdinalIgnoreCase)))
+                {
+                    ExpandedStepIds.Add(step.Id);
+                }
+
+                // Add historical output to terminal
+                if (TerminalRef != null && Run.Steps != null)
+                {
+                    foreach (var step in Run.Steps.OrderBy(s => s.Step).ThenBy(s => s.Attempt))
+                    {
+                        if (!string.IsNullOrWhiteSpace(step.Command))
+                        {
+                            TerminalRef.AddCommand(step.Command);
+                        }
+                        if (!string.IsNullOrWhiteSpace(step.StandardOutput))
+                        {
+                            TerminalRef.AddCommandOutput(step.StandardOutput);
+                        }
+                        if (!string.IsNullOrWhiteSpace(step.StandardError))
+                        {
+                            TerminalRef.AddCommandOutput(step.StandardError, true);
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            IsLoading = false;
+            if (!IsDisposed)
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task StartEventStreamAsync()
+    {
+        if (EventStreamCts != null) return;
+
+        EventStreamCts = new CancellationTokenSource();
+        try
+        {
+            await foreach (var evt in WorkspaceState.Orchestrator.SubscribeAsync(RunId, EventStreamCts.Token))
+            {
+                if (IsDisposed) break;
+                ProcessEvent(evt);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancelling
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Event stream error: {ex.Message}");
+        }
+    }
+
+    private void ProcessEvent(AgentRunEvent evt)
+    {
+        switch (evt)
+        {
+            case AgentRunStartedEvent started:
+                IsRunning = true;
+                Run = Run with { Status = "Running" };
+                break;
+
+            case AgentRunStepStartedEvent stepStarted:
+                TerminalRef?.AddCommand(stepStarted.Command ?? $"[Step {stepStarted.Step}] {stepStarted.Objective}");
+                UpdatePlanStep(stepStarted.Step, "inprogress");
+                break;
+
+            case AgentRunCommandExecutingEvent cmdExecuting:
+                TerminalRef?.AddCommand(cmdExecuting.Command?.Run ?? "");
+                break;
+
+            case AgentRunCommandOutputEvent cmdOutput:
+                TerminalRef?.AddCommandOutput(cmdOutput.Chunk, cmdOutput.IsError);
+                break;
+
+            case AgentRunCommandCompletedEvent cmdCompleted:
+                UpdatePlanStep(cmdCompleted.Step, cmdCompleted.Success ? "completed" : "failed");
+                IsRunning = true;
+                break;
+
+            case AgentRunStepCompletedEvent stepCompleted:
+                UpdatePlanStep(stepCompleted.Step, stepCompleted.Success ? "completed" : "failed");
+                TerminalRef?.AddCommandOutput($"[Step {stepCompleted.Step} completed: {stepCompleted.Observation}]", !stepCompleted.Success);
+                break;
+
+            case AgentRunStepRetryEvent stepRetry:
+                TerminalRef?.AddCommandOutput($"[Retry {stepRetry.RetryNumber}/{stepRetry.MaxRetries}] {stepRetry.FailureReason}", true);
+                UpdatePlanStep(stepRetry.Step, "pending");
+                break;
+
+            case AgentRunPlanUpdatedEvent planUpdated:
+                CurrentPlan = planUpdated.Plan.ToList();
+                foreach (var step in CurrentPlan.Where(s => 
+                    s.Status.Equals("inprogress", StringComparison.OrdinalIgnoreCase) ||
+                    s.Status.Equals("executing", StringComparison.OrdinalIgnoreCase)))
+                {
+                    ExpandedStepIds.Add(step.Id);
+                }
+                break;
+
+            case AgentRunPlanStepCompletedEvent planStepCompleted:
+                UpdatePlanStep(planStepCompleted.StepId, "completed");
+                break;
+
+            case AgentRunApprovalRequiredEvent approval:
+                TerminalRef?.AddCommandOutput($"[APROVACAO NECESSARIA] {approval.Reason}", true);
+                TerminalRef?.AddCommand(approval.Command?.Run ?? "");
+                IsRunning = true; // Still running, just awaiting approval
+                break;
+
+            case AgentRunApprovalGrantedEvent granted:
+                TerminalRef?.AddCommandOutput($"[Aprovacao concedida - {(granted.AutoApproved ? "automatica" : "manual")}]");
+                break;
+
+            case AgentRunCompletedEvent completed:
+                IsRunning = false;
+                Run = completed.FinalTurn != null ? BuildRunFromTurn(completed.FinalTurn) : Run;
+                TerminalRef?.AddCommandOutput($"[CONCLUIDO] {completed.FinalTurn?.Response ?? "Tarefa finalizada"}");
+                break;
+
+            case AgentRunFailedEvent failed:
+                IsRunning = false;
+                Run = Run with { Status = "Failed" };
+                TerminalRef?.AddCommandOutput($"[FALHOU] {failed.ErrorMessage}", true);
+                break;
+
+            case AgentRunCancelledEvent:
+                IsRunning = false;
+                Run = Run with { Status = "Cancelled" };
+                TerminalRef?.AddCommandOutput("[CANCELADO] Execucao cancelada pelo usuario.", true);
+                break;
+
+            case AgentRunDryRunPreviewEvent dryRun:
+                TerminalRef?.AddCommandOutput("[DRY RUN] Comandos previstos:");
+                foreach (var cmd in dryRun.PreviewCommands)
+                {
+                    TerminalRef?.AddCommand($"[Preview] {cmd.Run}");
+                }
+                break;
+        }
+
+        if (!IsDisposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private void UpdatePlanStep(int stepId, string status)
+    {
+        var step = CurrentPlan.FirstOrDefault(s => s.Id == stepId);
+        if (step != null)
+        {
+            step.Status = status;
+            if (status.Equals("completed", StringComparison.OrdinalIgnoreCase) || 
+                status.Equals("failed", StringComparison.OrdinalIgnoreCase))
+            {
+                ExpandedStepIds.Add(stepId);
+            }
+        }
+    }
+
+    private List<AgentPlanStep> ParsePlan(string? planText)
+    {
+        var steps = new List<AgentPlanStep>();
+        if (string.IsNullOrWhiteSpace(planText)) return steps;
+
+        var lines = planText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed) || !trimmed.StartsWith('#'))
+                continue;
+
+            try
+            {
+                var step = ParsePlanLine(trimmed);
+                if (step != null) steps.Add(step);
+            }
+            catch { }
+        }
+        return steps;
+    }
+
+    private static AgentPlanStep? ParsePlanLine(string line)
+    {
+        var idEnd = line.IndexOf(' ');
+        if (idEnd <= 1) return null;
+        if (!int.TryParse(line[1..idEnd], out var id)) return null;
+
+        var rest = line[(idEnd + 1)..].Trim();
+        var status = "pending";
+        var risk = "low";
+        var isCheckpoint = false;
+        var dependsOn = new List<int>();
+
+        var statusStart = rest.IndexOf('[');
+        while (statusStart >= 0)
+        {
+            var statusEnd = rest.IndexOf(']', statusStart);
+            if (statusEnd < 0) break;
+
+            var bracketContent = rest[(statusStart + 1)..statusEnd];
+
+            if (bracketContent.StartsWith("risk=", StringComparison.OrdinalIgnoreCase))
+            {
+                risk = bracketContent[5..].Trim().ToLowerInvariant();
+            }
+            else if (bracketContent.Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
+            {
+                isCheckpoint = true;
+            }
+            else if (bracketContent.StartsWith("depends on", StringComparison.OrdinalIgnoreCase))
+            {
+                var depStr = bracketContent[10..].Trim();
+                dependsOn = depStr.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => int.TryParse(s.Trim(), out var d) ? d : 0)
+                    .Where(d => d > 0)
+                    .ToList();
+            }
+            else if (bracketContent is "pending" or "inProgress" or "inprogress" or "completed" or "failed")
+            {
+                status = bracketContent;
+            }
+
+            rest = rest[(statusEnd + 1)..].Trim();
+            statusStart = rest.IndexOf('[');
+        }
+
+        return new AgentPlanStep
+        {
+            Id = id,
+            Description = rest,
+            Status = status,
+            Risk = risk,
+            IsCheckpoint = isCheckpoint,
+            DependsOn = dependsOn
+        };
+    }
+
+    private AgentRun BuildRunFromTurn(ConversationTurn turn)
+    {
+        return new AgentRun(
+            Id: RunId,
+            ConversationId: turn.ConversationId,
+            RequestId: turn.RequestId,
+            Prompt: turn.Prompt,
+            ModelName: turn.ModelName,
+            Status: turn.ActionStatus?.ToString() ?? "Completed",
+            StartedAt: DateTimeOffset.UtcNow,
+            FinishedAt: DateTimeOffset.UtcNow,
+            Response: turn.Response,
+            IsCancelled: turn.IsCancelled,
+            Steps: turn.Commands.Select((c, i) => new AgentStepRecord(
+                Id: Guid.NewGuid(),
+                RunId: RunId,
+                Step: c.Id,
+                Attempt: c.Attempt,
+                OperationKind: c.OperationKind,
+                Objective: c.Objective,
+                Command: c.Run,
+                WorkingDirectory: c.WorkingDirectory,
+                TargetPath: c.TargetPath,
+                ExitCode: c.ExitCode,
+                Success: c.Executed && c.ExitCode == 0,
+                CreatedAt: c.ExecutedAt ?? DateTimeOffset.UtcNow,
+                StandardOutput: c.StandardOutput,
+                StandardError: c.StandardError,
+                Shell: c.Shell.ToString(),
+                SafetyDecision: c.SafetyDecision,
+                ApprovedByUser: c.ApprovedByUser,
+                AutoApproved: c.AutoApproved)).ToList(),
+            CurrentPlan: turn.CurrentPlan,
+            Artifacts: turn.Artifacts?.Select(a => new AgentArtifactRecord(
+                Id: Guid.NewGuid(),
+                RunId: RunId,
+                Name: a.Name ?? "",
+                Path: a.Path,
+                ContentHash: a.ContentHash,
+                CreatedAt: DateTimeOffset.UtcNow,
+                DiffPercent: 0.0)).ToList() ?? [],
+            Approvals: turn.Approvals?.Select(a => new AgentApprovalRecord(
+                Id: Guid.NewGuid(),
+                RunId: RunId,
+                StepId: Guid.NewGuid(),
+                Objective: a.Objective,
+                Command: a.Command,
+                Decision: a.Decision,
+                ApprovedByUser: a.ApprovedByUser,
+                AutoApproved: a.AutoApproved,
+                CreatedAt: DateTimeOffset.UtcNow)).ToList() ?? [],
+            WorkspaceRoot: WorkspaceState.RuntimeSettings.WorkspaceRoot
+        );
+    }
+
+    private async Task ResumeRun()
+    {
+        if (Run == null || IsResuming) return;
+        IsResuming = true;
+        try
+        {
+            await WorkspaceState.ResumeTaskAsync(Run!);
+            NavigationManager.NavigateTo("/chat");
+        }
+        finally
+        {
+            IsResuming = false;
+        }
+    }
+
+    private async Task CancelRun()
+    {
+        if (Run == null || IsCancelling) return;
+        IsCancelling = true;
+        try
+        {
+            await WorkspaceState.Orchestrator.CancelAsync(RunId);
+            EventStreamCts?.Cancel();
+            IsRunning = false;
+            Run = Run with { Status = "Cancelled" };
+        }
+        finally
+        {
+            IsCancelling = false;
+        }
+    }
+
+    private void ToggleCompact()
+    {
+        CompactMode = !CompactMode;
+        StateHasChanged();
+    }
+
+    private async Task ClearTerminal()
+    {
+        if (TerminalRef != null)
+        {
+            await TerminalRef.Clear();
+        }
+    }
+
+    private async Task CopyTerminalOutput()
+    {
+        if (TerminalRef != null)
+        {
+            await TerminalRef.CopyAll();
+        }
+    }
+
+    private async Task CopyRunId()
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", RunId.ToString());
+    }
+
+    private async Task OpenArtifact(string path)
+    {
+        // Could open in new tab or show content modal
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", path);
+    }
+
+    private async Task CopyArtifactPath(string path)
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", path);
+    }
+
+    private void NavigateToAgentRuns()
+    {
+        NavigationManager.NavigateTo("/agent-runs");
+    }
+
+    private void NavigateToGit()
+    {
+        NavigationManager.NavigateTo("/git");
+    }
+
+    private string GetDurationText()
+    {
+        if (Run == null) return "";
+        var end = Run.FinishedAt ?? DateTimeOffset.UtcNow;
+        var duration = end - Run.StartedAt;
+        return $"Duracao {duration.Hours}h {duration.Minutes}m {duration.Seconds}s";
+    }
+
+    private CoronaColorSemantic GetStatusColor(string status)
+    {
+        return status.ToLowerInvariant() switch
+        {
+            "running" => CoronaColorSemantic.Primary,
+            "completed" => CoronaColorSemantic.Success,
+            "failed" => CoronaColorSemantic.Danger,
+            "cancelled" => CoronaColorSemantic.Neutral,
+            "awaitingapproval" => CoronaColorSemantic.Warning,
+            _ => CoronaColorSemantic.Neutral
+        };
+    }
+
+    private bool IsRunActive(string status)
+    {
+        return status.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+               status.Equals("AwaitingApproval", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (!IsDisposed)
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        IsDisposed = true;
+        WorkspaceState.Changed -= HandleWorkspaceChanged;
+        EventStreamCts?.Cancel();
+        EventStreamCts?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Task.CompletedTask;
+    }
+}

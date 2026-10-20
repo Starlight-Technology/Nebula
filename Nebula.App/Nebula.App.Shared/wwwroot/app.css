@@ -1762,3 +1762,1770 @@ pre {
         text-align: left;
     }
 }
+
+/* ============================================================================
+   Phase 7 - Reusable Components Styles
+   ============================================================================ */
+
+/* CommandCard */
+.nebula-command-card {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.nebula-command-card:hover {
+    border-color: var(--nebula-border-strong);
+    box-shadow: var(--nebula-shadow);
+}
+
+.nebula-command-card--dryrun {
+    border-color: var(--nebula-amber);
+    background: rgba(216, 165, 70, 0.06);
+}
+
+.nebula-command-card--executed {
+    border-color: var(--nebula-green);
+}
+
+.nebula-command-card--skipped {
+    opacity: 0.6;
+}
+
+.nebula-command-card--awaiting-approval {
+    border-color: var(--nebula-amber);
+    background: rgba(216, 165, 70, 0.08);
+}
+
+.nebula-command-card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.nebula-command-card__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.nebula-command-card__objective {
+    font-size: 0.9rem;
+    color: var(--nebula-text);
+    word-break: break-word;
+}
+
+.nebula-command-card__attempt {
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-command-card__command {
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.5rem 0;
+    overflow-x: auto;
+    position: relative;
+}
+
+.nebula-command-card__command code {
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.82rem;
+    color: var(--nebula-teal);
+    word-break: break-all;
+}
+
+.nebula-copy-btn {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.nebula-command-card__command:hover .nebula-copy-btn {
+    opacity: 1;
+}
+
+.nebula-command-editor {
+    width: 100%;
+    min-height: 5rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-teal);
+    background: rgba(7, 8, 9, 0.8);
+    color: var(--nebula-text);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.82rem;
+    padding: 0.5rem 0.75rem;
+    margin: 0.5rem 0;
+    resize: vertical;
+}
+
+.nebula-command-editor:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-command-card__notes {
+    font-size: 0.82rem;
+    color: var(--nebula-amber);
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(216, 165, 70, 0.1);
+    border-radius: 6px;
+    border-left: 3px solid var(--nebula-amber);
+}
+
+.nebula-command-card__output {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    color: var(--nebula-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.nebula-command-card__error {
+    color: var(--nebula-rose);
+    font-size: 0.82rem;
+    margin: 0.5rem 0;
+}
+
+.nebula-command-card__checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--nebula-border);
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-approval-badge {
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.nebula-approval-badge.auto {
+    background: rgba(216, 165, 70, 0.2);
+    color: var(--nebula-amber);
+}
+
+.nebula-approval-badge.manual {
+    background: rgba(117, 189, 109, 0.2);
+    color: var(--nebula-green);
+}
+
+.nebula-command-card__approval {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+}
+
+.nebula-approval-scope {
+    min-height: 2.2rem;
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-border-strong);
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    font-size: 0.82rem;
+    min-width: 180px;
+}
+
+/* StepCard */
+.nebula-step-card {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    transition: all 0.2s;
+}
+
+.nebula-step-card--done {
+    border-color: var(--nebula-green);
+    background: rgba(117, 189, 109, 0.06);
+}
+
+.nebula-step-card--active {
+    border-color: var(--nebula-teal);
+    background: rgba(56, 198, 180, 0.06);
+}
+
+.nebula-step-card__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.nebula-step-card__marker {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--nebula-teal);
+    width: 2rem;
+    text-align: center;
+}
+
+.nebula-step-card--done .nebula-step-card__marker {
+    color: var(--nebula-green);
+}
+
+.nebula-step-card--active .nebula-step-card__marker {
+    color: var(--nebula-teal);
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.nebula-step-card__content {
+    flex: 1;
+    min-width: 0;
+}
+
+.nebula-step-card__description {
+    font-size: 0.9rem;
+    color: var(--nebula-text);
+    margin-bottom: 0.25rem;
+}
+
+.nebula-step-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+}
+
+.nebula-step-card__depends {
+    color: var(--nebula-muted);
+}
+
+.nebula-step-card__status {
+    flex-shrink: 0;
+}
+
+.nebula-step-card__details {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+}
+
+.nebula-step-card__output {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    color: var(--nebula-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* AgentRunTimeline */
+.nebula-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-timeline__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nebula-timeline__filters {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+}
+
+.nebula-timeline-filters__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.nebula-timeline-filters__search {
+    flex: 1;
+    min-width: 150px;
+    min-height: 2.2rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-border-strong);
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    font-size: 0.82rem;
+}
+
+.nebula-timeline-filters__search:focus {
+    outline: none;
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-timeline__events {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-timeline__empty {
+    margin: 0;
+    padding: 1rem;
+    text-align: center;
+    color: var(--nebula-muted);
+}
+
+.nebula-timeline-event {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 0.75rem;
+    transition: border-color 0.2s;
+}
+
+.nebula-timeline-event:hover {
+    border-color: var(--nebula-border-strong);
+}
+
+.nebula-timeline-event--error {
+    border-color: var(--nebula-rose);
+    background: rgba(221, 107, 98, 0.06);
+}
+
+.nebula-timeline-event__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.nebula-timeline-event__header strong {
+    color: var(--nebula-text);
+}
+
+.nebula-timeline-event__header span {
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-timeline-event p {
+    margin: 0.25rem 0;
+    color: var(--nebula-text);
+}
+
+.nebula-timeline-event code {
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.8rem;
+    color: var(--nebula-teal);
+}
+
+.nebula-timeline-event pre {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    color: var(--nebula-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.nebula-timeline-event__error {
+    color: var(--nebula-rose);
+    font-size: 0.82rem;
+}
+
+.nebula-timeline-event__time {
+    font-size: 0.7rem;
+    color: var(--nebula-soft);
+}
+
+/* ArtifactPanel */
+.nebula-artifact-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-artifact-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nebula-artifact-panel__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    color: var(--nebula-muted);
+    border: 1px dashed var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: rgba(7, 8, 9, 0.3);
+}
+
+.nebula-artifact-panel__empty p {
+    margin: 0.5rem 0 0;
+}
+
+.nebula-artifact-panel__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-artifact-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.nebula-artifact-item:hover {
+    border-color: var(--nebula-border-strong);
+    background: rgba(56, 198, 180, 0.04);
+}
+
+.nebula-artifact-item--virtual {
+    opacity: 0.6;
+}
+
+.nebula-artifact-item__icon {
+    font-size: 1.5rem;
+    width: 2.5rem;
+    text-align: center;
+}
+
+.nebula-artifact-item__info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.nebula-artifact-item__info strong {
+    color: var(--nebula-text);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nebula-artifact-item__path {
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.nebula-artifact-item__meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--nebula-soft);
+}
+
+.nebula-artifact-item__actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+/* PlanView */
+.nebula-plan-view {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-plan-view__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-plan-view__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    color: var(--nebula-muted);
+    border: 1px dashed var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: rgba(7, 8, 9, 0.3);
+}
+
+.nebula-plan-view__empty p {
+    margin: 0.5rem 0 0;
+}
+
+.nebula-plan-view__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-plan-view__architecture {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+}
+
+.nebula-architecture-option {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 1rem;
+}
+
+.nebula-architecture-option--high {
+    border-color: var(--nebula-rose);
+}
+
+.nebula-architecture-option--critical {
+    border-color: var(--nebula-rose);
+    border-width: 2px;
+}
+
+.nebula-architecture-option__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.nebula-architecture-option__header strong {
+    color: var(--nebula-text);
+}
+
+.nebula-architecture-option__pros,
+.nebula-architecture-option__cons,
+.nebula-architecture-option__rec {
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    color: var(--nebula-text);
+}
+
+.nebula-architecture-option__pros strong,
+.nebula-architecture-option__cons strong,
+.nebula-architecture-option__rec strong {
+    color: var(--nebula-teal);
+}
+
+/* TerminalOutput */
+.nebula-terminal {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-bg);
+    overflow: hidden;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.nebula-terminal--compact .nebula-terminal__content {
+    max-height: 200px;
+}
+
+.nebula-terminal__toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: rgba(20, 22, 25, 0.92);
+    border-bottom: 1px solid var(--nebula-border);
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-terminal__toolbar-left,
+.nebula-terminal__toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nebula-terminal__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    min-height: 200px;
+    max-height: 600px;
+}
+
+.nebula-terminal--compact .nebula-terminal__content {
+    max-height: 200px;
+}
+
+.nebula-terminal__empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 100px;
+    color: var(--nebula-soft);
+}
+
+.nebula-terminal__prompt {
+    color: var(--nebula-teal);
+    font-weight: 600;
+}
+
+.nebula-terminal__empty-text {
+    margin-left: 0.5rem;
+    opacity: 0.6;
+}
+
+.nebula-terminal-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.nebula-terminal-line--error {
+    color: var(--nebula-rose);
+}
+
+.nebula-terminal-line--command {
+    color: var(--nebula-teal);
+}
+
+.nebula-terminal-line__timestamp {
+    color: var(--nebula-soft);
+    font-size: 0.7rem;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+
+.nebula-terminal-line__prompt {
+    color: var(--nebula-teal);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.nebula-terminal-line__command {
+    color: var(--nebula-teal);
+}
+
+.nebula-terminal-line__output {
+    color: var(--nebula-text);
+}
+
+.nebula-terminal-line__error {
+    color: var(--nebula-rose);
+}
+
+.nebula-terminal-line__copy {
+    opacity: 0;
+    transition: opacity 0.2s;
+    margin-left: auto;
+}
+
+.nebula-terminal-line:hover .nebula-terminal-line__copy {
+    opacity: 1;
+}
+
+.nebula-terminal__input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+    background: rgba(20, 22, 25, 0.92);
+}
+
+.nebula-terminal__input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--nebula-text);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.85rem;
+    outline: none;
+}
+
+.nebula-terminal__input::placeholder {
+    color: var(--nebula-soft);
+}
+
+/* Compact mode adjustments */
+@media (max-width: 768px) {
+    .nebula-command-card__approval {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nebula-approval-scope {
+        width: 100%;
+    }
+
+    .nebula-timeline-filters__row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nebula-timeline-filters__search {
+        width: 100%;
+    }
+
+    .nebula-timeline-filters__select {
+        width: 100%;
+    }
+
+    .nebula-terminal__toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nebula-terminal__toolbar-left,
+    .nebula-terminal__toolbar-right {
+        justify-content: center;
+    }
+}
+
+/* ============================================================================
+   AgentRunLive Page Styles
+   ============================================================================ */
+
+.nebula-agent-run-page {
+    padding-block: 0.5rem 1rem;
+}
+
+.nebula-loading-card,
+.nebula-error-card {
+    padding: 2rem;
+    text-align: center;
+}
+
+.nebula-agent-run__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    margin-bottom: 1rem;
+}
+
+.nebula-agent-run__header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-agent-run__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-agent-run__header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--nebula-text);
+}
+
+.nebula-agent-run__meta {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-agent-run__header-right {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.nebula-agent-run__layout {
+    display: grid;
+    grid-template-columns: 320px 1fr 320px;
+    gap: 1rem;
+    min-height: calc(100vh - 250px);
+}
+
+.nebula-agent-run__sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.nebula-agent-run__plan {
+    overflow-y: auto;
+    max-height: calc(100vh - 300px);
+}
+
+.nebula-agent-run__main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.nebula-agent-run__artifacts {
+    overflow-y: auto;
+    max-height: calc(100vh - 300px);
+}
+
+.nebula-agent-run__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    margin-top: 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-agent-run__footer-spacer {
+    flex: 1;
+}
+
+/* Active run card in list */
+.nebula-runs-card--active {
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 1px var(--nebula-teal), var(--nebula-shadow);
+    animation: nebula-pulse-border 2s infinite;
+}
+
+@keyframes nebula-pulse-border {
+    0%, 100% { border-color: var(--nebula-teal); }
+    50% { border-color: var(--nebula-amber); }
+}
+
+.nebula-runs-card__live-actions {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* PlanView additional styles */
+.nebula-plan-view__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.nebula-plan-view__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    color: var(--nebula-muted);
+    border: 1px dashed var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: rgba(7, 8, 9, 0.3);
+}
+
+.nebula-plan-view__empty p {
+    margin: 0.5rem 0 0;
+}
+
+.nebula-plan-view__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-plan-view__architecture {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--nebula-border);
+}
+
+.nebula-architecture-option {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 1rem;
+}
+
+.nebula-architecture-option--high {
+    border-color: var(--nebula-rose);
+}
+
+.nebula-architecture-option--critical {
+    border-color: var(--nebula-rose);
+    border-width: 2px;
+}
+
+.nebula-architecture-option__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.nebula-architecture-option__header strong {
+    color: var(--nebula-text);
+}
+
+.nebula-architecture-option__pros,
+.nebula-architecture-option__cons,
+.nebula-architecture-option__rec {
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    color: var(--nebula-text);
+}
+
+.nebula-architecture-option__pros strong,
+.nebula-architecture-option__cons strong,
+.nebula-architecture-option__rec strong {
+    color: var(--nebula-teal);
+}
+
+/* Mobile responsive for AgentRunLive */
+@media (max-width: 1200px) {
+    .nebula-agent-run__layout {
+        grid-template-columns: 280px 1fr 280px;
+    }
+}
+
+@media (max-width: 1024px) {
+    .nebula-agent-run__layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+    }
+    
+    .nebula-agent-run__sidebar {
+        max-height: none;
+    }
+    
+    .nebula-agent-run__plan,
+    .nebula-agent-run__artifacts {
+        max-height: 400px;
+    }
+}
+
+/* Compact mode toggle in composer */
+.nebula-composer__footer-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.nebula-composer__compact-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--nebula-muted);
+    cursor: pointer;
+}
+
+.nebula-composer__compact-toggle input {
+    accent-color: var(--nebula-teal);
+}
+
+/* Compact mode for agent turns in chat */
+.nebula-turn[data-compact="true"] .nebula-action-log {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.nebula-turn[data-compact="true"] .nebula-steps {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Keyboard shortcut hints */
+.nebula-composer__shortcuts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    font-size: 0.7rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-composer__shortcuts kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.35rem;
+    background: rgba(10, 12, 14, 0.8);
+    border: 1px solid var(--nebula-border-strong);
+    border-radius: 4px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.65rem;
+    color: var(--nebula-teal);
+    margin-right: 0.25rem;
+}
+
+/* Focus visible for accessibility */
+.nebula-command-card:focus-within,
+.nebula-step-card:focus-within,
+.nebula-timeline-event:focus-within,
+.nebula-artifact-item:focus-within,
+.nebula-terminal:focus-within {
+    outline: 2px solid var(--nebula-teal);
+    outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .nebula-command-card,
+    .nebula-step-card,
+    .nebula-timeline-event,
+    .nebula-artifact-item,
+    .nebula-terminal {
+        border-width: 2px;
+    }
+    
+    .nebula-composer__shortcuts kbd {
+        border-width: 2px;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .nebula-step-card--active .nebula-step-card__marker {
+        animation: none;
+    }
+    
+    .nebula-runs-card--active {
+        animation: none;
+    }
+    
+    .nebula-pending-panel__pulse {
+        animation: none;
+    }
+}
+
+/* ============================================================================
+   Git Page Styles
+   ============================================================================ */
+
+.nebula-git-not-repo {
+    padding: 2rem;
+    text-align: center;
+}
+
+.nebula-git-not-repo__content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.nebula-git-not-repo__content p {
+    margin: 0;
+    color: var(--nebula-muted);
+}
+
+.nebula-git-layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 1rem;
+    min-height: calc(100vh - 250px);
+}
+
+.nebula-git-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.nebula-git-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.nebula-git-card {
+    padding: 1rem;
+}
+
+.nebula-git-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-git-card__header p {
+    margin: 0;
+}
+
+.nebula-git-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.nebula-git-status-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.75rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    text-align: center;
+}
+
+.nebula-git-status-item.clean {
+    border-color: var(--nebula-green);
+}
+
+.nebula-git-status-item p {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-git-file-list {
+    margin-top: 0.75rem;
+}
+
+.nebula-git-file-list p {
+    margin-bottom: 0.5rem;
+}
+
+.nebula-git-file {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    margin-bottom: 0.25rem;
+    font-size: 0.82rem;
+}
+
+.nebula-git-file--staged {
+    border-left: 3px solid var(--nebula-green);
+}
+
+.nebula-git-file--unstaged {
+    border-left: 3px solid var(--nebula-amber);
+}
+
+.nebula-git-file--untracked {
+    border-left: 3px solid var(--nebula-soft);
+    opacity: 0.7;
+}
+
+.nebula-git-file__icon {
+    font-size: 0.9rem;
+}
+
+.nebula-git-commit-input {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.75rem;
+}
+
+.nebula-git-commit-input textarea {
+    width: 100%;
+    min-height: 5rem;
+    border-radius: 6px;
+    border: 1px solid var(--nebula-border-strong);
+    background: rgba(10, 12, 14, 0.86);
+    color: var(--nebula-text);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.82rem;
+    padding: 0.5rem 0.75rem;
+    resize: vertical;
+}
+
+.nebula-git-commit-input textarea:focus {
+    outline: none;
+    border-color: var(--nebula-teal);
+    box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-git-commit-input small {
+    color: var(--nebula-muted);
+    font-size: 0.75rem;
+}
+
+.nebula-git-diff-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--nebula-muted);
+    cursor: pointer;
+}
+
+.nebula-git-diff-toggle input {
+    accent-color: var(--nebula-teal);
+}
+
+.nebula-git-diff {
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    color: var(--nebula-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.nebula-git-diff__empty {
+    text-align: center;
+    color: var(--nebula-muted);
+    padding: 2rem;
+    margin: 0;
+}
+
+.nebula-git-log {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-git-log__empty {
+    text-align: center;
+    color: var(--nebula-muted);
+    padding: 2rem;
+    margin: 0;
+}
+
+.nebula-git-log-entry {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+}
+
+.nebula-git-log-entry__hash {
+    flex-shrink: 0;
+}
+
+.nebula-git-log-entry__hash code {
+    background: rgba(10, 12, 14, 0.8);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+
+.nebula-git-log-entry__info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.nebula-git-log-entry__info strong {
+    color: var(--nebula-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nebula-git-log-entry__info span {
+    font-size: 0.75rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-git-branches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.nebula-git-branch {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: 20px;
+    font-size: 0.82rem;
+}
+
+.nebula-git-branch.current {
+    border-color: var(--nebula-teal);
+    background: rgba(56, 198, 180, 0.1);
+}
+
+.nebula-git-branch.protected {
+    border-color: var(--nebula-rose);
+}
+
+.nebula-git-branch__current {
+    color: var(--nebula-teal);
+    font-weight: 600;
+}
+
+.nebula-git-remotes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.nebula-git-remote {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+}
+
+.nebula-git-remote strong {
+    color: var(--nebula-text);
+}
+
+.nebula-git-remote code {
+    font-size: 0.78rem;
+    color: var(--nebula-muted);
+    word-break: break-all;
+}
+
+.nebula-git-remotes__empty {
+    text-align: center;
+    color: var(--nebula-muted);
+    padding: 2rem;
+    margin: 0;
+}
+
+.nebula-git-sidebar-card {
+    padding: 1rem;
+}
+
+.nebula-git-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.nebula-git-protection-notice {
+    padding: 1rem;
+    background: rgba(221, 107, 98, 0.1);
+    border: 1px solid var(--nebula-rose);
+    border-radius: var(--nebula-radius);
+}
+
+.nebula-git-protection-notice p {
+    margin: 0.5rem 0;
+    font-size: 0.82rem;
+    color: var(--nebula-text);
+}
+
+.nebula-git-protection-notice code {
+    display: block;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.6);
+    border-radius: 6px;
+    font-size: 0.78rem;
+}
+
+.nebula-git-conventional {
+    font-size: 0.82rem;
+    color: var(--nebula-text);
+    line-height: 1.6;
+}
+
+.nebula-git-conventional p {
+    margin: 0.5rem 0;
+}
+
+.nebula-git-conventional code {
+    background: rgba(10, 12, 14, 0.8);
+    padding: 0.15rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--nebula-teal);
+}
+
+.nebula-git-conventional ul {
+    margin: 0.5rem 0 0 1rem;
+    padding: 0;
+}
+
+.nebula-git-conventional li {
+    margin-bottom: 0.25rem;
+}
+
+@media (max-width: 1024px) {
+    .nebula-git-layout {
+        grid-template-columns: 1fr;
+    }
+    
+    .nebula-git-sidebar {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+    
+    .nebula-git-sidebar-card {
+        flex: 1;
+        min-width: 280px;
+    }
+}
+
+/* ============================================================================
+   TestRunnerCard Styles
+   ============================================================================ */
+
+.nebula-test-runner-card {
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-surface);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.nebula-test-runner-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.nebula-test-runner-card__empty,
+.nebula-test-runner-card__idle,
+.nebula-test-runner-card__running {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 1.5rem;
+    color: var(--nebula-muted);
+    gap: 0.75rem;
+}
+
+.nebula-test-runner-card__spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 3px solid var(--nebula-border);
+    border-top-color: var(--nebula-teal);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.nebula-test-runner-card__result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nebula-test-runner-card__result.success {
+    border-left: 3px solid var(--nebula-green);
+}
+
+.nebula-test-runner-card__result.failed {
+    border-left: 3px solid var(--nebula-rose);
+}
+
+.nebula-test-runner-card__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.nebula-test-runner-card__counts {
+    display: flex;
+    gap: 1rem;
+}
+
+.nebula-test-count {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+}
+
+.nebula-test-count.pass {
+    border-color: var(--nebula-green);
+}
+
+.nebula-test-count.fail {
+    border-color: var(--nebula-rose);
+}
+
+.nebula-test-count.skip {
+    border-color: var(--nebula-amber);
+}
+
+.nebula-test-count__value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--nebula-text);
+}
+
+.nebula-test-count__label {
+    font-size: 0.7rem;
+    color: var(--nebula-muted);
+    text-transform: uppercase;
+}
+
+.nebula-test-runner-card__details summary {
+    cursor: pointer;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    color: var(--nebula-teal);
+    font-size: 0.82rem;
+}
+
+.nebula-test-runner-card__test-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(7, 8, 9, 0.3);
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.nebula-test-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: rgba(7, 8, 9, 0.4);
+    border: 1px solid var(--nebula-border);
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+
+.nebula-test-item.passed {
+    border-left: 3px solid var(--nebula-green);
+}
+
+.nebula-test-item.failed {
+    border-left: 3px solid var(--nebula-rose);
+}
+
+.nebula-test-item.skipped {
+    border-left: 3px solid var(--nebula-amber);
+    opacity: 0.7;
+}
+
+.nebula-test-item.more {
+    text-align: center;
+    color: var(--nebula-muted);
+    font-style: italic;
+}
+
+.nebula-test-item__status {
+    font-weight: 600;
+    color: var(--nebula-teal);
+}
+
+.nebula-test-item__name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nebula-test-item__duration {
+    color: var(--nebula-muted);
+    font-size: 0.7rem;
+}
+
+.nebula-test-runner-card__error {
+    margin-top: 0.75rem;
+    padding: 0.5rem;
+    background: rgba(221, 107, 98, 0.1);
+    border: 1px solid var(--nebula-rose);
+    border-radius: 6px;
+    color: var(--nebula-rose);
+    font-size: 0.82rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+/* Git status badge in headers */
+.nebula-git-badge {
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.nebula-git-badge:hover {
+    opacity: 0.8;
+}
+
+/* Screenshot Diff Styles */
+.nebula-artifact-item--screenshot-diff {
+    border-left: 3px solid var(--nebula-amber);
+    background: rgba(216, 165, 70, 0.05);
+}
+
+.nebula-screenshot-diff {
+    margin-top: 0.75rem;
+    padding: 1rem;
+    background: rgba(7, 8, 9, 0.6);
+    border: 1px solid var(--nebula-border);
+    border-radius: var(--nebula-radius);
+    animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.nebula-screenshot-diff__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--nebula-border);
+}
+
+.nebula-screenshot-diff__header span {
+    font-weight: 600;
+    color: var(--nebula-text);
+}
+
+.nebula-screenshot-diff__comparison {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
+.nebula-screenshot-diff__side {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nebula-screenshot-diff__label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--nebula-teal);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.nebula-screenshot-diff__side img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--nebula-border);
+    border-radius: 6px;
+    box-shadow: var(--nebula-shadow);
+    background: var(--nebula-bg);
+}
+
+@media (max-width: 900px) {
+    .nebula-screenshot-diff__comparison {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Screenshot artifact item */
+.nebula-artifact-item--screenshot-diff .nebula-artifact-item__icon {
+    color: var(--nebula-amber);
+}

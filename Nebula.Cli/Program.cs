@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 
 using Nebula.Agent;
@@ -75,7 +76,8 @@ if (args.Contains("--train-command-safety", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
-var services = new ServiceCollection();
+var hostBuilder = Host.CreateApplicationBuilder(args);
+var services = hostBuilder.Services;
 
 services.AddSingleton(_ => new NebulaRuntimeSettings
 {
@@ -210,10 +212,14 @@ services.AddScoped<IConversationMemoryStore, PostgresConversationMemoryRepositor
 services.AddScoped<IConversationMemoryRepository, CompositeConversationMemoryRepository>();
 services.AddScoped<IKnowledgeStore, PostgresKnowledgeStore>();
 services.AddScoped<IKnowledgeRepository, PostgresKnowledgeStore>();
+services.AddScoped<IAgentRunStore, PostgresAgentRunStore>();
 services.AddScoped<IFetchedPageCache, PostgresFetchedPageCache>();
 services.AddScoped<ILearningEngine, LearningEngine>();
 services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
+services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
 services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
+services.AddScoped<IOutputVerificationService, OutputVerificationService>();
+services.AddScoped<ITranslationService, TranslationService>();
 services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
 services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
 services.AddScoped<IProjectTemplateCatalog, ProjectTemplateCatalog>();
@@ -231,9 +237,64 @@ services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
 services.AddScoped<IPolicySimulator, PolicySimulator>();
 services.AddScoped<IGitDiffService, GitDiffService>();
+services.AddScoped<Nebula.Core.Agent.IGitService, Nebula.Agent.Infrastructure.GitService>();
+services.AddScoped<Nebula.Core.Agent.ITestRunnerService, Nebula.Agent.Infrastructure.TestRunnerService>();
+services.AddScoped<Nebula.Core.Agent.ISmokeTestService, Nebula.Agent.Infrastructure.SmokeTestService>();
+services.AddScoped<Nebula.Core.Agent.IPortDetectionService, Nebula.Agent.Infrastructure.PortDetectionService>();
+services.AddScoped<Nebula.Core.Agent.IPullRequestService, Nebula.Agent.Infrastructure.PullRequestService>();
+services.AddScoped<Nebula.Core.Agent.IMigrationService, Nebula.Agent.Infrastructure.MigrationService>();
+services.AddScoped<Nebula.Core.Agent.IScreenshotService, Nebula.Agent.Infrastructure.ScreenshotService>();
+services.AddHttpClient();
 services.AddScoped<ICommandApprovalService, CommandApprovalService>();
+services.AddAgentRunProcessing();
 
-services.AddScoped<IAgentActionRunner, AgentActionRunner>();
+services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner(
+    provider.GetRequiredService<ILlamaClient>(),
+    provider.GetRequiredService<IShellExecutor>(),
+    provider.GetRequiredService<IJsonExtractor>(),
+    provider.GetRequiredService<ILogger>(),
+    commandRepository: provider.GetRequiredService<ICommandRepository>(),
+    maxRetries:
+        int.TryParse(configuration["NEBULA_MAX_ACTION_RETRIES"], out var runnerMaxRetries)
+            ? runnerMaxRetries
+            : 6,
+    maxSteps:
+        int.TryParse(configuration["NEBULA_MAX_ACTION_STEPS"], out var runnerMaxSteps)
+            ? runnerMaxSteps
+            : 15,
+    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+    runtimeSettings: provider.GetRequiredService<NebulaRuntimeSettings>(),
+    agentRunStore: provider.GetRequiredService<IAgentRunStore>(),
+    commandIntentParser: provider.GetRequiredService<ICommandIntentParser>(),
+    commandResolver: provider.GetRequiredService<ICommandResolver>(),
+    environmentDetector: provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    operationKindDetector: provider.GetRequiredService<IOperationKindDetector>(),
+    scriptContentClassifier: provider.GetRequiredService<IScriptContentSafetyClassifier>(),
+    fileWriteSafetyClassifier: provider.GetRequiredService<IFileWriteSafetyClassifier>(),
+    operationPolicyEngine: provider.GetRequiredService<IOperationPolicyEngine>(),
+    evidenceCollector: provider.GetRequiredService<IExecutionEvidenceCollector>(),
+    learningEngine: provider.GetRequiredService<ILearningEngine>(),
+    knowledgeQueryService: provider.GetRequiredService<IKnowledgeQueryService>(),
+    learningFromExecution: provider.GetRequiredService<ILearningFromExecutionService>(),
+    postTaskLearning: provider.GetRequiredService<IPostTaskLearningService>(),
+    outputVerificationService: provider.GetRequiredService<IOutputVerificationService>(),
+    translationService: provider.GetRequiredService<ITranslationService>(),
+    deterministicVerificationService: provider.GetRequiredService<IDeterministicVerificationService>(),
+    projectTemplateCatalog: provider.GetRequiredService<IProjectTemplateCatalog>(),
+    projectScaffolder: provider.GetRequiredService<IProjectScaffolder>(),
+    projectStackValidator: provider.GetRequiredService<IProjectStackValidator>(),
+    workspaceMapService: provider.GetRequiredService<IWorkspaceMapService>(),
+    plannedPatchApplier: provider.GetRequiredService<IPlannedPatchApplier>(),
+    gitDiffService: provider.GetRequiredService<IGitDiffService>(),
+    commandSandbox: provider.GetRequiredService<ICommandSandbox>(),
+    approvalService: provider.GetRequiredService<ICommandApprovalService>(),
+    workspaceMemoryService: provider.GetRequiredService<WorkspaceMemoryService>(),
+    commandAllowlistService: provider.GetRequiredService<ICommandAllowlistService>(),
+    workspaceCategoryPolicyService: provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
+    projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
+    userMemoryService: provider.GetRequiredService<IUserMemoryService>()));
+
 services.AddScoped<IManager>(provider => new Manager(
     provider.GetRequiredService<ILlamaClient>(),
     provider.GetRequiredService<IShellExecutor>(),
@@ -253,13 +314,18 @@ services.AddScoped<IManager>(provider => new Manager(
             : 15,
     actionRunner: provider.GetRequiredService<IAgentActionRunner>(),
     conversationContextService: provider.GetRequiredService<IConversationContextService>(),
-    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>()));
+    commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+    orchestrator: provider.GetRequiredService<IAgentRunOrchestrator>()));
 
-var provider = services.BuildServiceProvider();
-using var scope = provider.CreateScope();
+using var host = hostBuilder.Build();
+await host.StartAsync();
+using var scope = host.Services.CreateScope();
 
 await PostgresDatabaseInitializer.InitializeAsync(
     scope.ServiceProvider.GetRequiredService<PostgresContext>());
+
+var llamaClient = scope.ServiceProvider.GetRequiredService<ILlamaClient>();
+await llamaClient.EnsureInstalledModelSelectedAsync();
 
 var manager = scope.ServiceProvider.GetRequiredService<IManager>();
 var runtimeSettings = scope.ServiceProvider.GetRequiredService<NebulaRuntimeSettings>();
@@ -295,12 +361,37 @@ while (true)
     }
 
     using var cancellationSource = new CancellationTokenSource();
+    var progressLock = new object();
+    var lastDisplayedPlan = string.Empty;
+    var displayedEventCount = 0;
+    var progress = new Progress<ConversationTurn>(update =>
+    {
+        lock (progressLock)
+        {
+            if (!string.IsNullOrWhiteSpace(update.CurrentPlan) &&
+                !string.Equals(lastDisplayedPlan, update.CurrentPlan, StringComparison.Ordinal))
+            {
+                Console.WriteLine("[PLANO]");
+                Console.WriteLine(update.CurrentPlan);
+                lastDisplayedPlan = update.CurrentPlan;
+            }
+
+            foreach (var actionEvent in update.ActionEvents.Skip(displayedEventCount))
+            {
+                Console.WriteLine(
+                    $"[{actionEvent.Kind}] " +
+                    $"{actionEvent.Title}: {TruncateLine(actionEvent.Message)}");
+            }
+
+            displayedEventCount = Math.Max(displayedEventCount, update.ActionEvents.Count);
+        }
+    });
     var turnTask = manager.ManageConversationAsync(
         new UserMessage(prompt, InteractionMode.Agent)
         {
             WorkspaceRoot = runtimeSettings.WorkspaceRoot
         },
-        progress: null,
+        progress,
         cancellationToken: cancellationSource.Token);
 
     while (!turnTask.IsCompleted)
@@ -320,6 +411,17 @@ while (true)
     }
 
     var turn = await turnTask;
+    lock (progressLock)
+    {
+        if (!string.IsNullOrWhiteSpace(turn.CurrentPlan) &&
+            !string.Equals(lastDisplayedPlan, turn.CurrentPlan, StringComparison.Ordinal))
+        {
+            Console.WriteLine("[PLANO]");
+            Console.WriteLine(turn.CurrentPlan);
+        }
+    }
+
+    Console.WriteLine($"[STATUS] {turn.ActionStatus}");
     Console.WriteLine(turn.Response);
 
     foreach (var command in turn.Commands)
@@ -369,6 +471,8 @@ while (true)
 
     Console.WriteLine("[=== turno concluido ===]");
 }
+
+await host.StopAsync();
 
 static string TruncateLine(string value)
 {

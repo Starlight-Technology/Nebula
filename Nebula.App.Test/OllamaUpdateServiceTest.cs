@@ -110,6 +110,11 @@ public sealed class OllamaUpdateServiceTest
             return Task.FromResult(false);
         }
 
+        public Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
         public Task<LlamaPullResult> PullModelAsync(
             string modelName,
             bool activateAfterInstall = false,

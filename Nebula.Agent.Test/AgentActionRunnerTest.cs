@@ -21,6 +21,45 @@ namespace Nebula.Agent.Test;
 public sealed class AgentActionRunnerTest
 {
     [Fact]
+    public async Task generate_next_step_async_must_use_os_specific_shell_guidance_for_linux()
+    {
+        var decision = ActionDecision(
+            "I need to list the workspace directory.",
+            "List files in workspace",
+            "ls -la");
+        string? capturedPrompt = null;
+
+        var llamaClientMock = CreateLlamaClientMock();
+        llamaClientMock
+            .Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, object?, CancellationToken>((prompt, _, _) => capturedPrompt = prompt)
+            .ReturnsAsync(decision);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.GenerateNextStepAsync(new AgentActionDecisionRequest
+        {
+            Objective = "List the files in the current workspace",
+            CurrentPlan = "No actions yet.",
+            StepNumber = 1,
+            RetryNumber = 0
+        });
+
+        Assert.Equal("ls -la", result.Action?.Command);
+        Assert.NotNull(capturedPrompt);
+        Assert.Contains("Linux", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ls", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Always include a plan array", capturedPrompt);
+        Assert.DoesNotContain("C:/Users/Name", capturedPrompt);
+        Assert.DoesNotContain("Get-ChildItem", capturedPrompt);
+        Assert.DoesNotContain("Do not use Unix commands", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Use Windows PowerShell commands", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task generate_next_step_async_must_include_chat_history_and_execution_context()
     {
         var decision = ActionDecision(
@@ -146,6 +185,92 @@ public sealed class AgentActionRunnerTest
         Assert.Contains(scriptPath, result.FinalReport);
         Assert.Matches(@"Comandos executados \(\d+\)", result.FinalReport);
         Assert.Contains("Nenhum risco identificado", result.FinalReport);
+        Assert.Contains("#1 [completed] [risk=low] Create hello.py", result.CurrentPlan);
+        Assert.Contains("#2 [completed] [risk=low] Run hello.py", result.CurrentPlan);
+    }
+
+    [Fact]
+    public async Task allowed_command_executes_even_when_llm_correctness_check_is_negative()
+    {
+        using var workspace = new TempTestWorkspace();
+        var decisions = new Queue<string>(
+        [
+            ActionDecision(
+                "Listing the workspace files.",
+                "List the files in the current directory",
+                "ls"),
+            CompleteDecision(
+                "The directory listing was produced.",
+                "Listed the files in the current directory.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("No");
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(llamaClientMock, executorMock);
+        var result = await runner.RunAsync(
+            CreateRequest("Liste os arquivos do diretorio atual.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(result.Commands);
+        Assert.True(command.Executed);
+        Assert.Contains("ls -la", command.Run);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.Is<string>(run => run.Contains("ls -la")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_not_complete_after_only_failed_evidence()
+    {
+        using var workspace = new TempTestWorkspace();
+        var missingPath = Path.Combine(workspace.Path, "missing.txt");
+        var existingPath = Path.Combine(workspace.Path, "actual.txt");
+        File.WriteAllText(existingPath, "actual content");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will read the requested file.",
+                "Read missing file",
+                OperationKind.FileRead,
+                targetPath: missingPath),
+            CompleteDecision(
+                "I believe the file was read.",
+                "Read the requested file."),
+            StructuredActionDecision(
+                "The first path failed, so I will read the existing file.",
+                "Read actual file",
+                OperationKind.FileRead,
+                targetPath: existingPath),
+            CompleteDecision(
+                "The file contents were read successfully.",
+                "Read actual.txt successfully.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(llamaClientMock).RunAsync(
+            CreateRequest("Read actual.txt.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal("Read actual.txt successfully.", result.Response);
+        Assert.Contains(result.Evidence, evidence =>
+            evidence.FilePath == missingPath && !evidence.Success);
+        Assert.Contains(result.Evidence, evidence =>
+            evidence.FilePath == existingPath && evidence.Success);
+        Assert.Equal(2, result.Commands.Count);
     }
 
     [Fact]
@@ -331,6 +456,9 @@ public sealed class AgentActionRunnerTest
     [Fact]
     public async Task run_async_must_invoke_existing_terminal_tool_and_log_action_and_observation()
     {
+        var listDirectoryFragment = OperatingSystem.IsWindows()
+            ? "Get-ChildItem"
+            : "ls -la";
         var decisions = new Queue<string>(
         [
             ActionDecision("I need to inspect the current directory.", "List files", "dir"),
@@ -344,7 +472,7 @@ public sealed class AgentActionRunnerTest
         var executorMock = CreateExecutorMock();
         executorMock
             .Setup(executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("Directory listing");
 
@@ -355,7 +483,7 @@ public sealed class AgentActionRunnerTest
             result.ActionEvents,
             actionEvent =>
                 actionEvent.Kind == ActionExecutionEventKind.ActionStarted &&
-                actionEvent.Command!.Contains("Get-ChildItem", StringComparison.Ordinal));
+                actionEvent.Command!.Contains(listDirectoryFragment, StringComparison.Ordinal));
         Assert.Contains(
             result.ActionEvents,
             actionEvent =>
@@ -363,7 +491,7 @@ public sealed class AgentActionRunnerTest
                 actionEvent.ToolResponse == "Directory listing");
         executorMock.Verify(
             executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -2790,15 +2918,18 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     [Fact]
     public async Task file_read_under_operating_system_root_must_request_approval()
     {
+        var osRootFile = OperatingSystem.IsWindows()
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "win.ini")
+            : "/etc/hostname";
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to read the system file.",
-                "Read win.ini",
+                "Read system configuration",
                 OperationKind.FileRead,
-                targetPath: Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                    "win.ini"))
+                targetPath: osRootFile)
         ]);
 
         var llamaClientMock = CreateLlamaClientMock();
@@ -2806,7 +2937,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
 
         var runner = CreateRunner(llamaClientMock);
         var result = await runner.RunAsync(
-            CreateRequest("Read C:/Windows/win.ini."),
+            CreateRequest("Read the operating system configuration file."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);

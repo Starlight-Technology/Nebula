@@ -78,14 +78,14 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Fase 7 - UI de agente profissional
 
-- [ ] Criar uma tela "Agent Run" dedicada com plano, terminal, arquivos, aprovacoes e evidencias.
-- [ ] Mostrar comandos em tempo real com status: pendente, aguardando aprovacao, executando, passou, falhou ou bloqueado.
+- [x] Criar uma tela "Agent Run" dedicada com plano, terminal, arquivos, aprovacoes e evidencias.
+- [x] Mostrar comandos em tempo real com status: pendente, aguardando aprovacao, executando, passou, falhou ou bloqueado.
 - [x] Permitir aprovar comandos direto do card do passo.
-- [ ] Permitir editar comando antes de aprovar.
+- [x] Permitir editar comando antes de aprovar.
 - [x] Mostrar por que a policy pediu aprovacao ou bloqueou.
-- [ ] Criar timeline de eventos do agente com filtros.
-- [ ] Adicionar painel de artefatos criados: arquivos, scripts, logs, screenshots e relatorios.
-- [ ] Criar modo compacto para acompanhar execucoes longas sem poluir a conversa.
+- [x] Criar timeline de eventos do agente com filtros.
+- [x] Adicionar painel de artefatos criados: arquivos, scripts, logs, screenshots e relatorios.
+- [x] Criar modo compacto para acompanhar execucoes longas sem poluir a conversa.
 
 ## Fase 8 - Ferramentas de desenvolvimento
 
@@ -145,16 +145,16 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [x] Mover logica de aprovacao para um servico dedicado, por exemplo `ICommandApprovalService`.
 - [ ] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas.
 - [x] Adicionar testes para aprovacao por categoria e por workspace.
-- [ ] Criar componente Blazor reutilizavel para cards de comando.
+- [x] Criar componente Blazor reutilizavel para cards de comando (`CommandCard`, `StepCard`, `TerminalOutput`, `PlanView`, `ArtifactPanel`, `AgentRunTimeline`).
 - [x] Criar tela `/agent-runs`.
 - [x] Criar tela `/audit` para auditoria de aprovacoes.
-- [ ] Criar worker de execucao para nao prender o ciclo de renderizacao da UI.
-- [ ] Criar eventos de progresso fortemente tipados em vez de depender de texto.
+- [x] Criar worker de execucao para nao prender o ciclo de renderizacao da UI (`AgentRunBackgroundService`).
+- [x] Criar eventos de progresso fortemente tipados em vez de depender de texto (`AgentRunEvent` hierarchy).
 - [ ] Criar fixture de projeto temporario para testes end-to-end do agente.
 
 ## Marcos de Entrega
 
-- [ ] Marco 1: UI mostra plano vivo, comandos, aprovacoes e evidencias.
+- [x] Marco 1: UI mostra plano vivo, comandos, aprovacoes e evidencias.
 - [x] Marco 2: Nebula cria scripts simples, executa e corrige falhas automaticamente.
 - [ ] Marco 3: Nebula cria um projeto pequeno completo com testes e README.
 - [ ] Marco 4: Nebula altera um projeto existente seguindo padroes locais e passando testes.

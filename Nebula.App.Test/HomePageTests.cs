@@ -426,8 +426,8 @@ public sealed class HomePageTests : HomePageTestContext
 
         component.Find("input[value='BingHtml']").Change("BingHtml");
         component.Find("input[type='checkbox']").Change(true);
-        component.FindAll(".nebula-settings-field select")[2].Change("nvidia");
-        component.FindAll(".nebula-settings-field select")[3].Change("es-ES");
+        component.Find("select option[value='nvidia']").ParentElement!.Change("nvidia");
+        component.Find("select option[value='es-ES']").ParentElement!.Change("es-ES");
         component.FindAll("button")
             .Single(button => button.TextContent.Contains(
                 "Salvar configuracao",
@@ -550,7 +550,7 @@ private static void AssertReasoningBeforeResponse(
                 Classification = InteractionMode.Agent.ToString(),
                 Response = "Script criado.",
                 ActionStatus = ActionExecutionStatus.Completed,
-                CurrentPlan = "1. Create hello.py - completed.\n2. Verify with Get-ChildItem - completed."
+                CurrentPlan = "#1 [completed] Create hello.py\n#2 [completed] Verify with Get-ChildItem"
             })
         };
 
@@ -566,8 +566,9 @@ private static void AssertReasoningBeforeResponse(
         {
             Assert.Contains("Missao atual", component.Markup);
             Assert.Contains("Concluido", component.Markup);
-            Assert.Contains("1. Create hello.py - completed.", component.Markup);
-            Assert.Contains("2. Verify with Get-ChildItem - completed.", component.Markup);
+            Assert.Contains("Create hello.py", component.Markup);
+            Assert.Contains("Get-ChildItem", component.Markup);
+            Assert.Contains("Concluidos: 2", component.Markup);
         });
     }
 
@@ -832,6 +833,11 @@ private static void AssertReasoningBeforeResponse(
         public Task<bool> SelectModelAsync(string modelName, CancellationToken cancellationToken = default)
         {
             SelectedModel = modelName;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+        {
             return Task.FromResult(true);
         }
 
