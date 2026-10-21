@@ -69,6 +69,30 @@ public sealed class ProjectScaffolderTest
     }
 
     [Fact]
+    public async Task scaffold_async_must_use_workspace_root_from_request()
+    {
+        using var workspace = new TempTestWorkspace();
+        var unrelatedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "Nebula",
+            "tests",
+            Guid.NewGuid().ToString("N"));
+        var scaffolder = new ProjectScaffolder(
+            new ProjectTemplateCatalog(),
+            workspaceRoot: unrelatedRoot,
+            controlledTempRoot: Path.Combine(unrelatedRoot, "temp"));
+
+        var result = await scaffolder.ScaffoldAsync(
+            new Nebula.Core.Projects.ProjectScaffoldRequest(
+                "python-script",
+                workspace.Path,
+                WorkspaceRoot: workspace.Path));
+
+        Assert.True(result.Success);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "main.py")));
+    }
+
+    [Fact]
     public async Task scaffold_async_must_allow_controlled_temp_root()
     {
         var tempRoot = Path.Combine(

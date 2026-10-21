@@ -30,7 +30,10 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
         }
 
         var targetDirectory = NormalizeTarget(request.TargetDirectory);
-        if (!IsUnder(targetDirectory, workspaceRoot) &&
+        var effectiveWorkspaceRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+            ? workspaceRoot
+            : NormalizeTarget(request.WorkspaceRoot);
+        if (!IsUnder(targetDirectory, effectiveWorkspaceRoot) &&
             !IsUnder(targetDirectory, controlledTempRoot))
         {
             return PlannedPatchResult.Failed(

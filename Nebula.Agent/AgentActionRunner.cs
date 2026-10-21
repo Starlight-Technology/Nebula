@@ -1172,7 +1172,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 new ProjectScaffoldRequest(
                     template.Id,
                     targetDirectory,
-                    ProjectName: Path.GetFileName(targetDirectory.TrimEnd('/', '\\'))),
+                    ProjectName: Path.GetFileName(targetDirectory.TrimEnd('/', '\\')),
+                    WorkspaceRoot: session.WorkspaceRoot.Root),
                 cancellationToken);
 
             if (!result.Success)
@@ -1367,7 +1368,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 new PlannedPatchRequest(
                     action.Objective,
                     files,
-                    targetDirectory),
+                    targetDirectory,
+                    session.WorkspaceRoot.Root),
                 cancellationToken);
 
             if (!result.Success)

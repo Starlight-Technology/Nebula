@@ -67,6 +67,32 @@ public sealed class PlannedPatchApplierTest
     }
 
     [Fact]
+    public async Task apply_async_must_use_workspace_root_from_request()
+    {
+        using var workspace = new TempTestWorkspace();
+        var unrelatedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "Nebula",
+            "tests",
+            Guid.NewGuid().ToString("N"));
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: unrelatedRoot,
+            controlledTempRoot: Path.Combine(unrelatedRoot, "temp"));
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Session workspace patch",
+                [new PlannedPatchFile("hello.txt", "ok")],
+                workspace.Path,
+                WorkspaceRoot: workspace.Path));
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            "ok",
+            File.ReadAllText(Path.Combine(workspace.Path, "hello.txt")));
+    }
+
+    [Fact]
     public async Task apply_async_must_refuse_file_that_escapes_target_directory()
     {
         using var workspace = new TempTestWorkspace();

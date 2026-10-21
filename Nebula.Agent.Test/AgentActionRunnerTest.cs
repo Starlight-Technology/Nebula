@@ -2488,6 +2488,53 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_apply_planned_patch_using_session_workspace()
+    {
+        using var workspace = new TempTestWorkspace();
+        var unrelatedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "Nebula",
+            "tests",
+            Guid.NewGuid().ToString("N"));
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to apply the planned patch.",
+                "Create the session workspace files",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("src/App.cs", "public class App { }"),
+                    new PlannedPatchFile("README.md", "# My Project")
+                ]),
+            CompleteDecision(
+                "The patch was applied.",
+                "Applied the planned patch to 2 files.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: unrelatedRoot,
+                controlledTempRoot: Path.Combine(unrelatedRoot, "temp")));
+
+        var result = await runner.RunAsync(
+            CreateRequest(
+                "Create the session workspace files",
+                workspaceRoot: workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "src", "App.cs")));
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "README.md")));
+    }
+
+    [Fact]
     public async Task run_async_must_request_approval_when_patch_contains_risky_file()
     {
         using var workspace = new TempTestWorkspace();

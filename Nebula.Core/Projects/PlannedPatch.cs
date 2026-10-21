@@ -14,7 +14,8 @@ public sealed record PlannedPatch(
 public sealed record PlannedPatchRequest(
     string Objective,
     IReadOnlyList<PlannedPatchFile> Files,
-    string TargetDirectory);
+    string TargetDirectory,
+    string? WorkspaceRoot = null);
 
 public sealed record PlannedPatchResult(
     bool Success,

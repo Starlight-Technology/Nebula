@@ -5,7 +5,8 @@ namespace Nebula.Core.Projects;
 public sealed record ProjectScaffoldRequest(
     string TemplateId,
     string TargetDirectory,
-    string? ProjectName = null);
+    string? ProjectName = null,
+    string? WorkspaceRoot = null);
 
 public sealed record ProjectScaffoldResult(
     bool Success,
