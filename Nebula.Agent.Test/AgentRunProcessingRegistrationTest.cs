@@ -9,6 +9,9 @@ using Nebula.Agent.Infrastructure.Events;
 using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
+using Nebula.Core.Operations;
+using Nebula.Core.Projects;
+using Nebula.Core.Safety;
 
 namespace Nebula.Agent.Test;
 
@@ -27,6 +30,76 @@ public sealed class AgentRunProcessingRegistrationTest
 
         Assert.Same(queue, hostedService);
         Assert.IsType<AgentRunBackgroundService>(queue);
+    }
+
+    [Fact]
+    public async Task run_approved_command_must_reuse_conversation_request_and_workspace()
+    {
+        AgentRunWorkItem? capturedWorkItem = null;
+        var queue = new Mock<IAgentRunQueue>();
+        queue
+            .Setup(runQueue => runQueue.EnqueueAsync(
+                It.IsAny<AgentRunWorkItem>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AgentRunWorkItem, CancellationToken>(
+                (workItem, _) => capturedWorkItem = workItem)
+            .Returns(ValueTask.CompletedTask);
+
+        var savedRuns = new List<AgentRun>();
+        var store = new Mock<IAgentRunStore>();
+        store
+            .Setup(runStore => runStore.SaveRunAsync(
+                It.IsAny<AgentRun>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AgentRun, CancellationToken>(
+                (run, _) => savedRuns.Add(run))
+            .Returns(Task.CompletedTask);
+
+        using var publisher = new ChannelAgentRunEventPublisher();
+        var orchestrator = new AgentRunOrchestrator(
+            queue.Object,
+            publisher,
+            store.Object);
+
+        var conversationId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var command = new CommandExecution
+        {
+            Objective = "Create index.html",
+            OperationKind = OperationKind.PlannedPatch,
+            TargetPath = "/tmp/nebula-workspace",
+            WorkingDirectory = "/tmp/nebula-workspace",
+            PlannedFiles =
+            [
+                new PlannedPatchFile("index.html", "<html></html>")
+            ]
+        };
+
+        var runId = await orchestrator.RunApprovedCommandAsync(
+            command,
+            ApprovalScope.Once,
+            conversationId,
+            requestId,
+            CancellationToken.None);
+
+        Assert.NotNull(capturedWorkItem);
+        Assert.Equal(runId, capturedWorkItem.RunId);
+        Assert.Equal(conversationId, capturedWorkItem.Request.ConversationId);
+        Assert.Equal(requestId, capturedWorkItem.Request.RequestId);
+        Assert.Equal(runId, capturedWorkItem.Request.RunId);
+        Assert.Equal(
+            "/tmp/nebula-workspace",
+            capturedWorkItem.Request.WorkspaceRoot);
+        Assert.Equal(10, capturedWorkItem.Request.MaxSteps);
+        Assert.Equal(2, capturedWorkItem.Request.MaxRetriesPerStep);
+
+        var savedRun = Assert.Single(savedRuns);
+        Assert.Equal(runId, savedRun.Id);
+        Assert.Equal(conversationId, savedRun.ConversationId);
+        Assert.Equal(requestId, savedRun.RequestId);
+        Assert.Equal(
+            "/tmp/nebula-workspace",
+            savedRun.WorkspaceRoot);
     }
 
     [Fact]

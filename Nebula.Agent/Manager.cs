@@ -8,6 +8,7 @@ using Nebula.Agent.Data;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Memory;
+using Nebula.Core.Operations;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
@@ -208,7 +209,13 @@ public class Manager : IManager
         ArgumentNullException.ThrowIfNull(command);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Run);
 
-        var prompt = $"Executar comando aprovado: {command.Run}";
+        var isTerminalCommand = command.OperationKind == OperationKind.TerminalCommand;
+        var prompt = isTerminalCommand
+            ? $"Executar comando aprovado: {command.Run}"
+            : $"Executar acao aprovada ({command.OperationKind}): {command.Objective}";
+        var approvedContext = isTerminalCommand
+            ? $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}"
+            : $"[approved_action]\nOperation: {command.OperationKind}\nObjective: {command.Objective}\nTarget: {command.TargetPath}";
         logger.Log(
             $"[AGENT] User approved command for ConversationId '{activeConversationId}' " +
             $"(scope {scope}): {command.Run}");
@@ -241,8 +248,10 @@ public class Manager : IManager
                 Prompt = prompt,
                 Mode = InteractionMode.Agent,
                 ModelName = llamaClient.SelectedModel,
-                ChatHistoryContext =
-                    $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}",
+                ChatHistoryContext = approvedContext,
+                WorkspaceRoot = string.IsNullOrWhiteSpace(command.WorkingDirectory)
+                    ? null
+                    : command.WorkingDirectory,
                 ApprovedAction = new AgentApprovedAction
                 {
                     Objective = command.Objective,
@@ -259,7 +268,12 @@ public class Manager : IManager
             }, progress, cancellationToken);
         }
 
-        var runId = await orchestrator.RunApprovedCommandAsync(command, scope, cancellationToken);
+        var runId = await orchestrator.RunApprovedCommandAsync(
+            command,
+            scope,
+            activeConversationId,
+            requestId,
+            cancellationToken);
         return await BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
     }
 

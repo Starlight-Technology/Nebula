@@ -14,6 +14,13 @@ public sealed class AgentActionRunRequest
 
     public Guid RequestId { get; set; }
 
+    /// <summary>
+    /// Identifier of the persisted agent run. When set, the runner persists
+    /// (upserts) the run under this id instead of creating another row keyed by
+    /// the request id.
+    /// </summary>
+    public Guid? RunId { get; set; }
+
     public string Prompt { get; set; } = string.Empty;
 
     public InteractionMode Mode { get; set; } = InteractionMode.Agent;

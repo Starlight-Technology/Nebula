@@ -36,6 +36,30 @@ public sealed class PlannedPatchApplierTest
     }
 
     [Fact]
+    public async Task apply_async_must_refuse_truncated_html()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the page",
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html><html><body><button>1</button>")
+                ],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains("truncado", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AppliedFiles);
+        Assert.False(File.Exists(Path.Combine(workspace.Path, "index.html")));
+    }
+
+    [Fact]
     public async Task apply_async_must_refuse_empty_patch()
     {
         using var workspace = new TempTestWorkspace();

@@ -537,21 +537,51 @@ public sealed class AgentActionRunner : IAgentActionRunner
             RequiresSafetyReview = true
         };
 
-var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
-        ConversationTurn result;
+        var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         if (actionResult.TerminalTurn is not null)
         {
-            result = actionResult.TerminalTurn;
+            var terminal = actionResult.TerminalTurn;
+            await PersistRunAsync(request, terminal, cancellationToken);
+            return terminal;
         }
-        else if (actionResult.RequiresRetry)
+
+        if (approved.OperationKind is OperationKind.PlannedPatch or OperationKind.ProjectScaffold)
         {
-            result = session.FailRetryLimit(actionResult.Observation);
+            // The approved action is only one step of the task. Hand control
+            // back to the ReAct loop so the agent can create the remaining
+            // files and verify the result instead of stopping immediately.
+            // The prompt/context must state that the approved action was already
+            // executed, otherwise the model repeats it instead of continuing.
+            var approvedObjective = string.IsNullOrWhiteSpace(approved.Objective)
+                ? request.Prompt
+                : approved.Objective.Trim();
+            // The approved action was already executed above; clearing it keeps
+            // the approval from silently authorizing unrelated actions in the
+            // continuation (scope Once covers only the approved action).
+            request.ApprovedAction = null;
+            request.Prompt =
+                $"Continuar a tarefa apos a acao aprovada ({approved.OperationKind}): {approvedObjective}";
+            request.ChatHistoryContext =
+                $"{request.ChatHistoryContext}{Environment.NewLine}" +
+                "[approved_action_executed]" + Environment.NewLine +
+                $"Operation: {approved.OperationKind}{Environment.NewLine}" +
+                $"Objective: {approvedObjective}{Environment.NewLine}" +
+                "Status: executed successfully. Do not repeat the approved action; " +
+                "continue with the remaining work and verify the result.";
+            session.RecordObservation(
+                "approved action",
+                "A acao aprovada foi executada com sucesso. Nao a repita; continue a tarefa e verifique o resultado.");
+
+            var continued = await RunCoreAsync(session, cancellationToken);
+            await EnrichTurnWithGitDiffAsync(continued, session, cancellationToken);
+            await PersistRunAsync(request, continued, cancellationToken);
+            return continued;
         }
-        else
-        {
-            result = session.Complete(
+
+        var result = actionResult.RequiresRetry
+            ? session.FailRetryLimit(actionResult.Observation)
+            : session.Complete(
                 $"Comando aprovado executado. {actionResult.Observation}");
-        }
 
         await PersistRunAsync(request, result, cancellationToken);
         return result;
@@ -1107,11 +1137,14 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             action,
             step,
             OperationKind.ProjectScaffold);
+        var scaffoldTarget = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : action.TargetPath;
         var targetDirectory = ResolveOperationPath(
-            action.TargetPath ?? execution.WorkingDirectory,
+            scaffoldTarget,
             execution.WorkingDirectory);
         execution.TargetPath = targetDirectory;
-        execution.Run = $"scaffold \"{targetDirectory}\"";
+        execution.Run = $"project scaffold: {action.TemplateId ?? action.Objective} -> {targetDirectory}";
         execution.OriginalCommand = action.Command;
 
         var template = projectTemplateCatalog.FindById(
@@ -1308,15 +1341,38 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             action,
             step,
             OperationKind.PlannedPatch);
+        var patchTarget = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : action.TargetPath;
         var targetDirectory = ResolveOperationPath(
-            action.TargetPath ?? execution.WorkingDirectory,
+            patchTarget,
             execution.WorkingDirectory);
         execution.TargetPath = targetDirectory;
         execution.PlannedFiles = files;
-        execution.Run = $"apply-patch ({files.Count} files)";
+        var fileLabel = string.Join(
+            ", ",
+            files.Take(5).Select(file => file.RelativePath));
+        if (files.Count > 5)
+        {
+            fileLabel += ", ...";
+        }
+
+        execution.Run = $"planned patch: {fileLabel}";
         execution.OriginalCommand = action.Command;
         execution.Notes = BuildPatchSummary(targetDirectory, files);
         session.Commands.Add(execution);
+
+        var incompleteContent = PlannedPatchContentValidator.Validate(files);
+        if (incompleteContent is not null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = incompleteContent;
+            execution.Notes = incompleteContent;
+            session.RecordObservation(execution.Run, incompleteContent);
+            return ActionAttemptResult.Retry(incompleteContent);
+        }
 
         var classification = ClassifyPlannedPatch(
             session,
@@ -1917,6 +1973,20 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         execution.Content = content;
         execution.Language = action.Language;
 
+        var incompleteContent = PlannedPatchContentValidator.ValidateFile(
+            new PlannedPatchFile(targetPath, content));
+        if (incompleteContent is not null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = incompleteContent;
+            execution.Notes = incompleteContent;
+            session.Commands.Add(execution);
+            session.RecordObservation(execution.Run, incompleteContent);
+            return ActionAttemptResult.Retry(incompleteContent);
+        }
+
         var classification = operationKind == OperationKind.ScriptContent
             ? scriptContentClassifier.Classify(
                 content,
@@ -2038,11 +2108,10 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 }
             }
 
-            var verifyResult = await AutoVerifyFileSystemAsync(
+            var verifyResult = VerifyFileSystem(
                 targetPath,
                 execution,
-                session,
-                cancellationToken);
+                session);
             var finalObservation = string.IsNullOrWhiteSpace(verifyResult)
                 ? observation
                 : $"{observation}{Environment.NewLine}{verifyResult}";
@@ -3859,7 +3928,7 @@ return (observationMessage, historyEntry);
         {
             var status = turn.ActionStatus?.ToString() ?? "Unknown";
             var run = new AgentRun(
-                turn.RequestId,
+                request.RunId ?? turn.RequestId,
                 turn.ConversationId,
                 turn.RequestId,
                 turn.Prompt,
@@ -4017,7 +4086,7 @@ return (observationMessage, historyEntry);
             For FileRead: provide targetPath with the exact absolute path of the requested file, based on the workspace context or working directory (command is optional). Never invent a path or use a placeholder.
             For TerminalCommand/ScriptExecution: provide the command.
             For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
-            For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Prefer PlannedPatch over many separate FileWrite steps.
+            For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Every plannedFiles[].content must be the COMPLETE file, including closing tags and braces. Never emit partial or truncated content. If a file is too large for one response, split it into multiple PlannedPatch steps instead of shortening it. Before returning, check that every HTML file has </html> and every CSS/JS file has balanced braces. Prefer PlannedPatch over many separate FileWrite steps.
             For large projects, first create a PROJECT_SPEC.md file (FileWrite) with requirements and architecture BEFORE writing code files.
             For large tasks, decompose them into subtasks in the plan and mark milestone steps as checkpoints (isCheckpoint: true), for example right after scaffolding, after tests build, and after verification succeeds. Each checkpoint must have a deterministic way to confirm it (build, test or file listing).
             Before implementing a large change (new module, architecture decision, major refactor), provide an architectureComparison: an array of at least 2 options (name, pros, cons, recommendation, risk) comparing the viable approaches. Emit it in the same decision that starts the change, before the first implementation action, so the user can review the trade-offs. For small or localized changes, omit it.
@@ -4386,26 +4455,14 @@ return (observationMessage, historyEntry);
         return true;
     }
 
-    private async Task<string> AutoVerifyFileSystemAsync(
+    private string VerifyFileSystem(
         string targetPath,
         CommandExecution execution,
-        AgentActionSession session,
-        CancellationToken cancellationToken)
+        AgentActionSession session)
     {
         try
         {
-            var verifyCommand = OperatingSystem.IsWindows()
-                ? $"powershell.exe -Command \"Test-Path -LiteralPath '{targetPath.Replace("'", "''")}'\""
-                : $"test -f '{targetPath.Replace("'", "'\\''")}' || test -d '{targetPath.Replace("'", "'\\''")}'";
-
-            var verifyOutput = await executor.RunCommandAsync(
-                verifyCommand, cancellationToken);
-
-            var exists = OperatingSystem.IsWindows()
-                ? verifyOutput.Trim().Equals("True", StringComparison.OrdinalIgnoreCase)
-                : verifyOutput.Trim() == "0" ||
-                  (verifyOutput.Contains("exists", StringComparison.OrdinalIgnoreCase) &&
-                   !verifyOutput.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+            var exists = File.Exists(targetPath) || Directory.Exists(targetPath);
 
             if (exists)
             {

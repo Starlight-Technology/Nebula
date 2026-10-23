@@ -8,6 +8,7 @@
 @inject ILlamaRuntimeTelemetryService RuntimeTelemetryService
 @inject CoronaThemeProvider ThemeProvider
 @inject NebulaWorkspaceState WorkspaceState
+@inject NavigationManager NavigationManager
 
 <CoronaThemeCascadingValue>
     <CoronaLayoutShell DrawerTitle="Nebula"
@@ -19,7 +20,17 @@
                        HeaderActions="@HeaderActions"
                        DrawerOpen="false"
                        DrawerItens="itemsMenu">
-        @Body
+        <ErrorBoundary @key="NavigationManager.Uri">
+            <ChildContent>
+                @Body
+            </ChildContent>
+            <ErrorContent Context="exception">
+                <div style="padding: 1.5rem;">
+                    <strong>Nao foi possivel renderizar esta tela.</strong>
+                    <p>@exception.Message</p>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
     </CoronaLayoutShell>
 </CoronaThemeCascadingValue>
 

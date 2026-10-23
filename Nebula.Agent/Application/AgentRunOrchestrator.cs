@@ -29,6 +29,7 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
     public async Task<Guid> RunAsync(AgentActionRunRequest request, CancellationToken cancellationToken = default)
     {
         var runId = Guid.NewGuid();
+        request.RunId ??= runId;
         var workItem = new AgentRunWorkItem(runId, request, cancellationToken);
 
         _statusCache[runId] = new AgentRunStatus(
@@ -102,19 +103,31 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
         return await RunAsync(request, cancellationToken);
     }
 
-    public async Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, CancellationToken cancellationToken = default)
+    public async Task<Guid> RunApprovedCommandAsync(
+        CommandExecution command,
+        ApprovalScope scope,
+        Guid conversationId,
+        Guid requestId,
+        CancellationToken cancellationToken = default)
     {
-        var runId = Guid.NewGuid();
+        var isTerminalCommand = command.OperationKind == OperationKind.TerminalCommand;
         var request = new AgentActionRunRequest
         {
-            ConversationId = Guid.NewGuid(),
-            RequestId = Guid.NewGuid(),
-            Prompt = $"Executar comando aprovado: {command.Run}",
+            ConversationId = conversationId,
+            RequestId = requestId,
+            Prompt = isTerminalCommand
+                ? $"Executar comando aprovado: {command.Run}"
+                : $"Executar acao aprovada ({command.OperationKind}): {command.Objective}",
             Mode = InteractionMode.Agent,
-            ChatHistoryContext = $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}",
+            ChatHistoryContext = isTerminalCommand
+                ? $"[approved_command]\nObjective: {command.Objective}\nCommand: {command.Run}"
+                : $"[approved_action]\nOperation: {command.OperationKind}\nObjective: {command.Objective}\nTarget: {command.TargetPath}",
             ModelName = "",
-            MaxSteps = 1,
-            MaxRetriesPerStep = 0,
+            MaxSteps = 10,
+            MaxRetriesPerStep = 2,
+            WorkspaceRoot = string.IsNullOrWhiteSpace(command.WorkingDirectory)
+                ? null
+                : command.WorkingDirectory,
             ApprovedAction = new AgentApprovedAction
             {
                 Objective = command.Objective,

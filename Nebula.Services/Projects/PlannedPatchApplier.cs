@@ -29,6 +29,12 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
                 "A planned patch requires at least one file.");
         }
 
+        var incompleteContent = PlannedPatchContentValidator.Validate(request.Files);
+        if (incompleteContent is not null)
+        {
+            return PlannedPatchResult.Failed(incompleteContent);
+        }
+
         var targetDirectory = NormalizeTarget(request.TargetDirectory);
         var effectiveWorkspaceRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
             ? workspaceRoot

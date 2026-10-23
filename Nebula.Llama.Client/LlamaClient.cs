@@ -158,7 +158,7 @@ public class LlamaClient : ILlamaClient
                 Options = jsonFormat is not null
                     ? new LlamaGenerateOptions
                     {
-                        NumPredict = format is null ? 384 : 2048
+                        NumPredict = format is null ? 384 : 4096
                     }
                     : null
             })

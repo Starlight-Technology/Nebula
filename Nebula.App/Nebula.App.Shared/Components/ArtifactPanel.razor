@@ -44,16 +44,14 @@
                             {
                                 <CoronaBadge Content="@artifact.ContentHash[..Math.Min(12, artifact.ContentHash.Length)]"
                                              Variant="CoronaBadgeVariant.Outlined"
-                                             Color="CoronaColorSemantic.Neutral"
-                                             Size="CoronaComponentSize.Small" />
+                                             Color="CoronaColorSemantic.Neutral" />
                             }
 @if (IsScreenshotDiff(artifact))
                             {
                                 var diffPercent = GetDiffPercent(artifact).ToString("F1");
                                 <CoronaBadge Content="@($"Diff: {diffPercent}%")"
                                              Variant="CoronaBadgeVariant.Soft"
-                                             Color="CoronaColorSemantic.Warning"
-                                             Size="CoronaComponentSize.Small" />
+                                             Color="CoronaColorSemantic.Warning" />
                             }
                         </span>
                     </div>
