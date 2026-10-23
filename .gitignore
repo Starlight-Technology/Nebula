@@ -363,3 +363,9 @@ MigrationBackup/
 FodyWeavers.xsd
 # Locally trained command safety models
 models/*.zip
+
+# Local environment (keep .env.example tracked)
+.env
+
+# Local build/test output
+*.out
