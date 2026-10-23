@@ -36,6 +36,68 @@ public sealed class PlannedPatchApplierTest
     }
 
     [Fact]
+    public async Task apply_async_must_normalize_windows_style_relative_paths()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile(@"src\calc.js", "console.log('ok');")],
+                workspace.Path));
+
+        Assert.True(result.Success);
+        Assert.Contains("src/calc.js", result.AppliedFiles);
+        Assert.Equal(
+            "console.log('ok');",
+            File.ReadAllText(Path.Combine(workspace.Path, "src", "calc.js")));
+    }
+
+    [Fact]
+    public async Task apply_async_must_refuse_control_characters_in_relative_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile("bad\tcalc.js", "console.log('ok');")],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            "control characters",
+            result.Error,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AppliedFiles);
+    }
+
+    [Fact]
+    public async Task apply_async_must_refuse_windows_rooted_relative_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile(@"C:\Temp\evil.js", "console.log('x');")],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains("not a valid relative path", result.Error);
+        Assert.Empty(result.AppliedFiles);
+    }
+
+    [Fact]
     public async Task apply_async_must_refuse_truncated_html()
     {
         using var workspace = new TempTestWorkspace();

@@ -413,14 +413,80 @@ while (true)
     var turn = await turnTask;
     lock (progressLock)
     {
-        if (!string.IsNullOrWhiteSpace(turn.CurrentPlan) &&
-            !string.Equals(lastDisplayedPlan, turn.CurrentPlan, StringComparison.Ordinal))
+        PrintPlan(turn, ref lastDisplayedPlan);
+    }
+    PrintTurn(turn);
+
+    const int maxApprovalRounds = 10;
+    var approvalRounds = 0;
+    var declinedCommands = new HashSet<Guid>();
+    while (turn.ActionStatus == ActionExecutionStatus.AwaitingApproval &&
+           approvalRounds < maxApprovalRounds)
+    {
+        var pending = turn.Commands
+            .Where(IsPendingApproval)
+            .Where(command => !declinedCommands.Contains(command.StepId))
+            .ToList();
+        if (pending.Count == 0)
         {
-            Console.WriteLine("[PLANO]");
-            Console.WriteLine(turn.CurrentPlan);
+            break;
+        }
+
+        var approvedAny = false;
+        foreach (var command in pending)
+        {
+            Console.Write($"Executar aprovado? [s/N] {command.Run}: ");
+            var answer = Console.ReadLine();
+            if (!IsApproval(answer))
+            {
+                Console.WriteLine("Aprovacao recusada.");
+                declinedCommands.Add(command.StepId);
+                continue;
+            }
+
+            approvalRounds++;
+            turn = await manager.RunApprovedCommandAsync(
+                command,
+                progress: null,
+                cancellationToken: cancellationSource.Token);
+            PrintPlan(turn, ref lastDisplayedPlan);
+            PrintTurn(turn);
+            approvedAny = true;
+            break;
+        }
+
+        if (!approvedAny)
+        {
+            break;
         }
     }
 
+    if (turn.ActionStatus == ActionExecutionStatus.AwaitingApproval)
+    {
+        Console.WriteLine(
+            approvalRounds >= maxApprovalRounds
+                ? "(limite de aprovacoes por turno atingido)"
+                : "(aprovacoes pendentes encerradas)");
+    }
+
+    Console.WriteLine("[=== turno concluido ===]");
+}
+
+await host.StopAsync();
+
+static void PrintPlan(ConversationTurn turn, ref string lastPlan)
+{
+    if (!string.IsNullOrWhiteSpace(turn.CurrentPlan) &&
+        !string.Equals(lastPlan, turn.CurrentPlan, StringComparison.Ordinal))
+    {
+        Console.WriteLine("[PLANO]");
+        Console.WriteLine(turn.CurrentPlan);
+        lastPlan = turn.CurrentPlan;
+    }
+}
+
+static void PrintTurn(ConversationTurn turn)
+{
     Console.WriteLine($"[STATUS] {turn.ActionStatus}");
     Console.WriteLine(turn.Response);
 
@@ -440,39 +506,23 @@ while (true)
             Console.WriteLine($"    stderr: {TruncateLine(command.StandardError)}");
         }
     }
-
-    if (turn.ActionStatus == ActionExecutionStatus.AwaitingApproval)
-    {
-        foreach (var command in turn.Commands.Where(
-            command =>
-                command.SafetyDecision == CommandSafetyDecisionType.AskApproval &&
-                !command.Executed &&
-                !command.ApprovedByUser &&
-                !command.AutoApproved &&
-                !string.IsNullOrWhiteSpace(command.Run)))
-        {
-            Console.Write($"Executar aprovado? [s/N] {command.Run}: ");
-            var answer = Console.ReadLine();
-            if (answer?.Trim().Equals("s", StringComparison.OrdinalIgnoreCase) == true ||
-                answer?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                var approvedTurn = await manager.RunApprovedCommandAsync(
-                    command,
-                    progress: null,
-                    cancellationToken: cancellationSource.Token);
-                Console.WriteLine(approvedTurn.Response);
-            }
-            else
-            {
-                Console.WriteLine("Aprovacao recusada.");
-            }
-        }
-    }
-
-    Console.WriteLine("[=== turno concluido ===]");
 }
 
-await host.StopAsync();
+static bool IsPendingApproval(CommandExecution command)
+{
+    return command.SafetyDecision == CommandSafetyDecisionType.AskApproval &&
+           !command.Executed &&
+           !command.ApprovedByUser &&
+           !command.AutoApproved &&
+           !string.IsNullOrWhiteSpace(command.Run);
+}
+
+static bool IsApproval(string? answer)
+{
+    var normalized = answer?.Trim();
+    return normalized?.Equals("s", StringComparison.OrdinalIgnoreCase) == true ||
+           normalized?.Equals("y", StringComparison.OrdinalIgnoreCase) == true;
+}
 
 static string TruncateLine(string value)
 {

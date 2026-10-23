@@ -3986,13 +3986,6 @@ return (observationMessage, historyEntry);
         return records;
     }
 
-    private static string NormalizePathSlashes(string? path)
-    {
-        return string.IsNullOrWhiteSpace(path)
-            ? string.Empty
-            : path.Replace('/', '\\');
-    }
-
     private static string CreateDecisionPrompt(
         AgentActionDecisionRequest request,
         RuntimeCommandEnvironment environment,
@@ -4056,9 +4049,9 @@ return (observationMessage, historyEntry);
             """
             : string.Empty;
 
-        var exampleFilePath = NormalizePathSlashes(
+        var exampleFilePath = NormalizePathSeparators(
             Path.Combine(environment.WorkingDirectory, "hello.py"));
-        var exampleProjectPath = NormalizePathSlashes(
+        var exampleProjectPath = NormalizePathSeparators(
             Path.Combine(environment.WorkingDirectory, "MyProject"));
 
         return $$"""
@@ -4353,8 +4346,52 @@ return (observationMessage, historyEntry);
         decision.Action!.Objective = decision.Action.Objective.Trim();
         decision.Action.Command = decision.Action.Command.Trim();
         decision.Action.Content = decision.Action.Content?.Trim();
-        decision.Action.TargetPath = NormalizePathSlashes(decision.Action.TargetPath);
+        decision.Action.TargetPath = NormalizePathSeparators(
+            decision.Action.TargetPath ?? string.Empty);
+        decision.Action.WorkingDirectory = NormalizePathSeparators(
+            decision.Action.WorkingDirectory ?? string.Empty);
         decision.Action.Language = decision.Action.Language?.Trim();
+        ValidatePathArgument(decision.Action.TargetPath, "targetPath");
+        ValidatePathArgument(decision.Action.WorkingDirectory, "workingDirectory");
+
+        if (decision.Action.PlannedFiles is { Count: > 0 } plannedFiles)
+        {
+            var normalizedFiles = new List<PlannedPatchFile>(plannedFiles.Count);
+            foreach (var file in plannedFiles)
+            {
+                var relativePath = NormalizePathSeparators(
+                    file.RelativePath?.Trim() ?? string.Empty);
+                ValidatePathArgument(relativePath, "plannedFiles.path");
+                if (string.IsNullOrWhiteSpace(relativePath) ||
+                    Path.IsPathRooted(relativePath) ||
+                    IsWindowsRooted(relativePath))
+                {
+                    throw new ArgumentException(
+                        $"The ReAct decision contains an invalid relative patch path: " +
+                        $"'{file.RelativePath}'.");
+                }
+
+                normalizedFiles.Add(file with { RelativePath = relativePath });
+            }
+
+            decision.Action.PlannedFiles = normalizedFiles;
+        }
+    }
+
+    private static void ValidatePathArgument(string? path, string argumentName)
+    {
+        if (!string.IsNullOrEmpty(path) && path.Any(char.IsControl))
+        {
+            throw new ArgumentException(
+                $"The ReAct decision contains control characters in {argumentName}.");
+        }
+    }
+
+    private static bool IsWindowsRooted(string path)
+    {
+        return path.Length >= 2 &&
+               char.IsLetter(path[0]) &&
+               path[1] == ':';
     }
 
     private static string TruncateForError(string text, int maxLen = 500)

@@ -1853,6 +1853,146 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_retry_file_write_with_control_characters_in_target_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var invalidPath = Path.Combine(workspace.Path, "bad\tname.txt");
+        var validPath = Path.Combine(workspace.Path, "note.txt");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: invalidPath,
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous path was invalid; I will use a clean name.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: validPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create a note file in the workspace."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(validPath));
+        Assert.False(File.Exists(invalidPath));
+        Assert.DoesNotContain(
+            result.Commands,
+            command => command.TargetPath?.Contains('\t') == true);
+    }
+
+    [Fact]
+    public async Task run_async_must_normalize_windows_style_planned_patch_paths()
+    {
+        using var workspace = new TempTestWorkspace();
+        var expectedRelativePath = Path.Combine("src", "Calc.cs");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the source file.",
+                "Create src/Calc.cs",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(@"src\Calc.cs", "public class Calc { }")
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The source file was created.",
+                "Created src/Calc.cs.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the Calc source file."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var patch = Assert.Single(
+            result.Commands,
+            command => command.OperationKind == OperationKind.PlannedPatch);
+        Assert.Equal(expectedRelativePath, patch.PlannedFiles![0].RelativePath);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, expectedRelativePath)));
+    }
+
+    [Fact]
+    public async Task run_async_must_retry_planned_patch_with_control_characters_in_file_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var validRelativePath = Path.Combine("src", "Calc.cs");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the source file.",
+                "Create the source file",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("bad\tCalc.cs", "public class Bad { }")
+                ],
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous path was invalid; I will use a clean name.",
+                "Create src/Calc.cs",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("src/Calc.cs", "public class Calc { }")
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The source file was created.",
+                "Created src/Calc.cs.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the Calc source file."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, validRelativePath)));
+        Assert.DoesNotContain(
+            result.Commands,
+            command => command.PlannedFiles is not null &&
+                       command.PlannedFiles.Any(file => file.RelativePath.Contains('\t')));
+    }
+
+    [Fact]
     public async Task run_async_must_confirm_file_write_without_shell_verification()
     {
         using var workspace = new TempTestWorkspace();
