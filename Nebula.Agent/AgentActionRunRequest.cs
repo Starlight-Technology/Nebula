@@ -21,6 +21,12 @@ public sealed class AgentActionRunRequest
     /// </summary>
     public Guid? RunId { get; set; }
 
+    /// <summary>
+    /// Identifier of the run that originated this one, when this request is a
+    /// continuation (approved action or resumed task).
+    /// </summary>
+    public Guid? ParentRunId { get; set; }
+
     public string Prompt { get; set; } = string.Empty;
 
     public InteractionMode Mode { get; set; } = InteractionMode.Agent;

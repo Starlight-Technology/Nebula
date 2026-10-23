@@ -58,6 +58,11 @@
                 <p class="nebula-agent-run__meta">
                     Run @Run.Id.ToString()[..8] · Modelo @Run.ModelName · 
                     @GetDurationText()
+                    @if (Run.ParentRunId is Guid parentRunId)
+                    {
+                        <span> · </span>
+                        <a href="/agent-run/@parentRunId">Continuacao de Run @parentRunId.ToString()[..8]</a>
+                    }
                 </p>
             </div>
 

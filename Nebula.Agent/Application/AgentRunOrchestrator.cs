@@ -58,7 +58,8 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
                 CurrentPlan: "",
                 Artifacts: [],
                 Approvals: [],
-                WorkspaceRoot: request.WorkspaceRoot);
+                WorkspaceRoot: request.WorkspaceRoot,
+                ParentRunId: request.ParentRunId);
             await _runStore.SaveRunAsync(agentRun, CancellationToken.None);
         }
 
@@ -79,6 +80,7 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
             MaxSteps = request.MaxSteps,
             MaxRetriesPerStep = request.MaxRetriesPerStep,
             WorkspaceRoot = request.WorkspaceRoot,
+            ParentRunId = request.ParentRunId,
             ApprovedAction = request.ApprovedAction,
             ConversationApprovedCommands = request.ConversationApprovedCommands,
             DryRun = true
@@ -98,7 +100,8 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
             ModelName = run.ModelName,
             MaxSteps = 20,
             MaxRetriesPerStep = 2,
-            WorkspaceRoot = run.WorkspaceRoot
+            WorkspaceRoot = run.WorkspaceRoot,
+            ParentRunId = run.Id
         };
         return await RunAsync(request, cancellationToken);
     }
@@ -111,6 +114,9 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
         CancellationToken cancellationToken = default)
     {
         var isTerminalCommand = command.OperationKind == OperationKind.TerminalCommand;
+        var parentRunId = _runStore is null
+            ? null
+            : await _runStore.GetRunIdByStepIdAsync(command.StepId, cancellationToken);
         var request = new AgentActionRunRequest
         {
             ConversationId = conversationId,
@@ -128,6 +134,7 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
             WorkspaceRoot = string.IsNullOrWhiteSpace(command.WorkingDirectory)
                 ? null
                 : command.WorkingDirectory,
+            ParentRunId = parentRunId,
             ApprovedAction = new AgentApprovedAction
             {
                 Objective = command.Objective,

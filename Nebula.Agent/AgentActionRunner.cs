@@ -3944,7 +3944,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 string.IsNullOrWhiteSpace(turn.CurrentPlan) ? null : turn.CurrentPlan,
                 turn.Artifacts,
                 turn.Approvals,
-                ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root);
+                ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root,
+                ParentRunId: request.ParentRunId);
             await agentRunStore.SaveRunAsync(run, cancellationToken);
         }
         catch (OperationCanceledException)

@@ -21,7 +21,8 @@ public sealed record AgentRun(
     IReadOnlyList<AgentApprovalRecord> Approvals = null!,
     string? WorkspaceRoot = null,
     InteractionMode Mode = InteractionMode.Agent,
-    IReadOnlyList<ArchitectureComparisonOption> ArchitectureOptions = null!);
+    IReadOnlyList<ArchitectureComparisonOption> ArchitectureOptions = null!,
+    Guid? ParentRunId = null);
 
 public sealed record ArchitectureComparisonOption(
     string Name,
@@ -86,5 +87,9 @@ public interface IAgentRunStore
 
     Task<IReadOnlyList<AgentRun>> GetUnfinishedRunsAsync(
         Guid conversationId,
+        CancellationToken cancellationToken = default);
+
+    Task<Guid?> GetRunIdByStepIdAsync(
+        Guid stepId,
         CancellationToken cancellationToken = default);
 }

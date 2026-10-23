@@ -36,6 +36,7 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
         existing.IsCancelled = entity.IsCancelled;
         existing.CurrentPlan = entity.CurrentPlan;
         existing.WorkspaceRoot = entity.WorkspaceRoot;
+        existing.ParentRunId ??= entity.ParentRunId;
 
         context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
         context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
@@ -108,6 +109,16 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             .ToList();
     }
 
+    public async Task<Guid?> GetRunIdByStepIdAsync(
+        Guid stepId,
+        CancellationToken cancellationToken = default)
+    {
+        return await context.AgentStepRecords
+            .Where(value => value.Id == stepId)
+            .Select(value => (Guid?)value.RunId)
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
     private static AgentRunEntity Map(AgentRun run)
     {
         return new AgentRunEntity
@@ -124,6 +135,7 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             IsCancelled = run.IsCancelled,
             CurrentPlan = run.CurrentPlan,
             WorkspaceRoot = run.WorkspaceRoot,
+            ParentRunId = run.ParentRunId,
             Steps = run.Steps.Select(Map).ToList(),
             Artifacts = run.Artifacts?.Select(Map).ToList() ?? [],
             Approvals = run.Approvals?.Select(Map).ToList() ?? []
@@ -251,6 +263,7 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
                     approval.AutoApproved,
                     approval.CreatedAt))
                 .ToList(),
-            entity.WorkspaceRoot);
+            entity.WorkspaceRoot,
+            ParentRunId: entity.ParentRunId);
     }
 }

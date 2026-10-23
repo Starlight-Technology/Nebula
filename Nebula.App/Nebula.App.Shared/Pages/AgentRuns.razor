@@ -233,6 +233,19 @@
                                          Color="@NebulaWorkspaceState.GetAgentRunStatusColor(run)" />
                         </div>
 
+                        @if (run.ParentRunId is Guid parentRunId)
+                        {
+                            <div class="nebula-runs-card__parent">
+                                <CoronaButton Variant="CoronaButtonVariant.Text"
+                                              Size="CoronaComponentSize.Small"
+                                              Color="CoronaColorSemantic.Primary"
+                                              OnClick="@(() => OpenRun(parentRunId))"
+                                              StopPropagation="true">
+                                    Continuacao de Run @parentRunId.ToString()[..8]
+                                </CoronaButton>
+                            </div>
+                        }
+
                         <div class="nebula-runs-card__footer">
                             <span>@run.StartedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>
                             <span>Run @run.Id.ToString()[..8]</span>

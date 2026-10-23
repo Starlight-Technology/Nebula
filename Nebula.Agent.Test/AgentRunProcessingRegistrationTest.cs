@@ -45,6 +45,8 @@ public sealed class AgentRunProcessingRegistrationTest
                 (workItem, _) => capturedWorkItem = workItem)
             .Returns(ValueTask.CompletedTask);
 
+        var parentRunId = Guid.NewGuid();
+        var stepId = Guid.NewGuid();
         var savedRuns = new List<AgentRun>();
         var store = new Mock<IAgentRunStore>();
         store
@@ -54,6 +56,11 @@ public sealed class AgentRunProcessingRegistrationTest
             .Callback<AgentRun, CancellationToken>(
                 (run, _) => savedRuns.Add(run))
             .Returns(Task.CompletedTask);
+        store
+            .Setup(runStore => runStore.GetRunIdByStepIdAsync(
+                stepId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentRunId);
 
         using var publisher = new ChannelAgentRunEventPublisher();
         var orchestrator = new AgentRunOrchestrator(
@@ -65,6 +72,7 @@ public sealed class AgentRunProcessingRegistrationTest
         var requestId = Guid.NewGuid();
         var command = new CommandExecution
         {
+            StepId = stepId,
             Objective = "Create index.html",
             OperationKind = OperationKind.PlannedPatch,
             TargetPath = "/tmp/nebula-workspace",
@@ -87,6 +95,7 @@ public sealed class AgentRunProcessingRegistrationTest
         Assert.Equal(conversationId, capturedWorkItem.Request.ConversationId);
         Assert.Equal(requestId, capturedWorkItem.Request.RequestId);
         Assert.Equal(runId, capturedWorkItem.Request.RunId);
+        Assert.Equal(parentRunId, capturedWorkItem.Request.ParentRunId);
         Assert.Equal(
             "/tmp/nebula-workspace",
             capturedWorkItem.Request.WorkspaceRoot);
@@ -97,6 +106,7 @@ public sealed class AgentRunProcessingRegistrationTest
         Assert.Equal(runId, savedRun.Id);
         Assert.Equal(conversationId, savedRun.ConversationId);
         Assert.Equal(requestId, savedRun.RequestId);
+        Assert.Equal(parentRunId, savedRun.ParentRunId);
         Assert.Equal(
             "/tmp/nebula-workspace",
             savedRun.WorkspaceRoot);

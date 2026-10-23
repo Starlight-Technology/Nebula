@@ -234,11 +234,13 @@ public class PostgresContext : DbContext
             b.Property(x => x.Response);
             b.Property(x => x.CurrentPlan);
             b.Property(x => x.WorkspaceRoot);
+            b.Property(x => x.ParentRunId);
             b.Property(x => x.IsCancelled).HasDefaultValue(false);
             b.Property(x => x.StartedAt).HasDefaultValueSql("now()");
 
             b.HasIndex(x => x.ConversationId);
             b.HasIndex(x => x.StartedAt);
+            b.HasIndex(x => x.ParentRunId);
         });
 
         modelBuilder.Entity<AgentStepRecordEntity>(b =>

@@ -139,6 +139,37 @@ public sealed class PostgresAgentRunStoreTest
     }
 
     [Fact]
+    public async Task save_and_get_run_must_round_trip_parent_run_id()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var parentRunId = Guid.NewGuid();
+        var run = CreateRun() with { ParentRunId = parentRunId };
+
+        await store.SaveRunAsync(run);
+        var loaded = await store.GetRunAsync(run.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(parentRunId, loaded.ParentRunId);
+    }
+
+    [Fact]
+    public async Task get_run_id_by_step_must_resolve_owner_run()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var run = CreateRun();
+
+        await store.SaveRunAsync(run);
+
+        var ownerRunId = await store.GetRunIdByStepIdAsync(run.Steps[0].Id);
+        var unknownRunId = await store.GetRunIdByStepIdAsync(Guid.NewGuid());
+
+        Assert.Equal(run.Id, ownerRunId);
+        Assert.Null(unknownRunId);
+    }
+
+    [Fact]
     public async Task get_unfinished_runs_must_return_only_incomplete_runs_of_conversation()
     {
         var context = CreateContext();

@@ -449,6 +449,15 @@ public sealed class AgentActionRunnerTest
                 SavedRuns.Where(run => run.ConversationId == conversationId && run.FinishedAt is null)
                     .ToList());
         }
+
+        public Task<Guid?> GetRunIdByStepIdAsync(
+            Guid stepId,
+            CancellationToken cancellationToken = default)
+        {
+            var run = SavedRuns.FirstOrDefault(
+                value => value.Steps.Any(step => step.Id == stepId));
+            return Task.FromResult(run?.Id);
+        }
     }
 
     [Fact]

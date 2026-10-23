@@ -121,6 +121,9 @@ namespace Nebula.Postgres.Context.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ParentRunId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Prompt")
                         .IsRequired()
                         .HasColumnType("text");
@@ -146,6 +149,8 @@ namespace Nebula.Postgres.Context.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ConversationId");
+
+                    b.HasIndex("ParentRunId");
 
                     b.HasIndex("StartedAt");
 
