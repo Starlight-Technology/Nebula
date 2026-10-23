@@ -1345,7 +1345,7 @@ public sealed class AgentActionRunnerTest
 
         var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
 
-Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
         Assert.Single(result.Commands);
         Assert.True(result.Commands[0].Executed);
         Assert.True(result.Commands[0].Sandboxed);
@@ -1731,7 +1731,7 @@ Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
             },
             commandSandbox: sandboxMock.Object);
 
-var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
         sandboxMock.Verify(

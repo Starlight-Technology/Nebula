@@ -1646,7 +1646,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 action,
                 execution,
                 cancellationToken);
-if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
+            if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             {
                 var sandboxWillIsolate =
                     artifactDecision.Decision == CommandSafetyDecisionType.AskApproval &&
@@ -1857,10 +1857,10 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             var timeoutObservation = BuildObservationMessage(execution);
             session.EmitToolObservation(execution, timeoutObservation, timeoutMessage);
             session.RecordObservation(execution.Run, timeoutObservation);
-return ActionAttemptResult.Retry(timeoutObservation);
+            return ActionAttemptResult.Retry(timeoutObservation);
         }
 
-var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
+        var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             session,
             execution,
             toolResult,
@@ -2666,7 +2666,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             }
         }
 
-return (observationMessage, historyEntry);
+        return (observationMessage, historyEntry);
     }
 
     private static IShellOutputObserver? CreateStreamObserver(AgentActionSession session)
