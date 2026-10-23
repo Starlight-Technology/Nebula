@@ -337,6 +337,7 @@ public sealed class AgentActionRunnerTest
         using var workspace = new TempTestWorkspace();
         var targetPath = Path.Combine(workspace.Path, "note.txt");
         var runId = Guid.NewGuid();
+        var parentRunId = Guid.NewGuid();
 
         var decisions = new Queue<string>(
         [
@@ -361,6 +362,7 @@ public sealed class AgentActionRunnerTest
             "Create note.txt",
             workspaceRoot: workspace.Path);
         request.RunId = runId;
+        request.ParentRunId = parentRunId;
 
         var result = await runner.RunAsync(request, progress: null);
 
@@ -370,6 +372,9 @@ public sealed class AgentActionRunnerTest
         Assert.All(
             runStore.SavedRuns,
             run => Assert.Equal(request.RequestId, run.RequestId));
+        Assert.All(
+            runStore.SavedRuns,
+            run => Assert.Equal(parentRunId, run.ParentRunId));
     }
 
     [Fact]
