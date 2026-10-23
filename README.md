@@ -121,6 +121,22 @@ No treinamento, `COMMAND_SAFETY_MODEL` pode ser definido para também gerar esse
 O CSV e a versão podem ser sobrescritos por `COMMAND_SAFETY_TRAINING_DATA` e
 `COMMAND_SAFETY_MODEL_VERSION`.
 
+## Aprovação e continuação
+
+Ações que exigem aprovação (comandos, scripts, arquivos e patches) mostram um card com
+escopo `Once`, `Conversation`, `Workspace` ou `Category`. Ao aprovar, o Nebula cria um
+novo run que reproduz a ação aprovada sem consultar o LLM; se a continuação pedir nova
+aprovação, o card aparece novamente. No CLI, o loop de aprovação continua por até 10
+rodadas por turno.
+
+Cada continuação guarda `ParentRunId` (migração `add_agent_run_parent_run_id`) e o
+histórico em `/agent-runs` e `/agent-run/{id}` mostra o link "Continuação de Run ...".
+Runs retomados também apontam para o run original.
+
+Caminhos de ação são normalizados e validados antes de executar ou gravar: caracteres
+de controle, caminhos relativos inválidos e separadores que escapam da raiz são
+rejeitados.
+
 ## Pesquisa e aprendizado gratuito
 
 O Learning Engine usa `WebResearch:Provider=Free` por padrão. Esse modo consulta primeiro
@@ -235,6 +251,7 @@ A UI web (`Nebula.App.Web`) inclui agora uma tela dedicada para execucoes do age
 - **Plano estruturado** com checkpoints (◆), riscos (baixo/médio/alto/crítico), dependências
 - **Terminal com cores ANSI**, modo compacto (últimas 50 linhas), auto-scroll, copiar/limpar
 - **Artefatos** com ícones por tipo de arquivo, copiar caminho, abrir
+- **Link para o run de origem** quando a execução é uma continuação aprovada
 
 ### Componentes reutilizáveis (`Nebula.App.Shared/Components/`)
 - `CommandCard` - Comando unificado com status, aprovação inline, edição prévia
