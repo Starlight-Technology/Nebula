@@ -5,6 +5,7 @@ using Nebula.Agent.Data;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
+using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 
 namespace Nebula.Agent.Application;
@@ -30,6 +31,9 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
     {
         var runId = Guid.NewGuid();
         request.RunId ??= runId;
+        request.WorkspaceRoot = ReferenceWorkspace.Resolve(
+            request.WorkspaceRoot,
+            request.ConversationId).Root;
         var workItem = new AgentRunWorkItem(runId, request, cancellationToken);
 
         _statusCache[runId] = new AgentRunStatus(

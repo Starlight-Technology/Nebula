@@ -101,6 +101,14 @@ A central em `Nebula.App` mostra:
 - resposta, raciocinio e passos executados
 - perfis de aceleracao disponiveis
 
+## Workspace por conversa
+
+Sem um workspace explicito, cada conversa usa uma pasta propria em
+`%TEMP%/nebula-workspace/<conversationId>`, evitando que arquivos de conversas
+diferentes se misturem. Quando `Nebula:WorkspaceRoot` ou o campo de workspace nas
+configuracoes e informado, essa raiz e usada como esta, sem subpasta por conversa.
+No container web, `/tmp` e montado em `~/nebula-tmp` no host.
+
 ## Classificação e autorização de comandos
 
 A segurança de comandos usa regras determinísticas como primeira camada, ML.NET apenas como

@@ -31,7 +31,9 @@ internal sealed class AgentActionSession
         this.progress = progress;
         this.logger = logger;
         this.selectedModel = selectedModel;
-        WorkspaceRoot = ReferenceWorkspace.Resolve(request.WorkspaceRoot);
+        WorkspaceRoot = ReferenceWorkspace.Resolve(
+            request.WorkspaceRoot,
+            request.ConversationId);
         MaxSteps = Math.Max(1, request.MaxSteps ?? defaultMaxSteps);
         MaxRetriesPerStep = ResolveMaxRetries(request, defaultMaxRetriesPerStep);
         if (request.ConversationApprovedCommands is { Count: > 0 })
@@ -250,7 +252,7 @@ internal sealed class AgentActionSession
             command: execution.Run);
     }
 
-public void EmitApprovalGranted(CommandExecution execution)
+    public void EmitApprovalGranted(CommandExecution execution)
     {
         var mode = execution.AutoApproved
             ? "automaticamente pelas preferencias do runtime"

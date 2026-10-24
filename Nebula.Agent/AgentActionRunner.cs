@@ -326,7 +326,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 SessionId = request.ConversationId,
                 OriginalText = request.Prompt,
                 Objective = request.Prompt,
-                WorkingDirectory = ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root
+                WorkingDirectory = ReferenceWorkspace.Resolve(
+                    request.WorkspaceRoot,
+                    request.ConversationId).Root
             });
             if (requestOperation is OperationKind.Learning or OperationKind.Research)
             {
@@ -3944,7 +3946,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 string.IsNullOrWhiteSpace(turn.CurrentPlan) ? null : turn.CurrentPlan,
                 turn.Artifacts,
                 turn.Approvals,
-                ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root,
+                ReferenceWorkspace.Resolve(
+                    request.WorkspaceRoot,
+                    request.ConversationId).Root,
                 ParentRunId: request.ParentRunId);
             await agentRunStore.SaveRunAsync(run, cancellationToken);
         }

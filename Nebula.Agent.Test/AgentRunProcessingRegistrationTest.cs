@@ -33,6 +33,77 @@ public sealed class AgentRunProcessingRegistrationTest
     }
 
     [Fact]
+    public async Task run_async_must_scope_default_workspace_to_conversation()
+    {
+        AgentRunWorkItem? capturedWorkItem = null;
+        var queue = new Mock<IAgentRunQueue>();
+        queue
+            .Setup(runQueue => runQueue.EnqueueAsync(
+                It.IsAny<AgentRunWorkItem>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AgentRunWorkItem, CancellationToken>(
+                (workItem, _) => capturedWorkItem = workItem)
+            .Returns(ValueTask.CompletedTask);
+
+        using var publisher = new ChannelAgentRunEventPublisher();
+        var orchestrator = new AgentRunOrchestrator(queue.Object, publisher);
+        var conversationId = Guid.NewGuid();
+        var request = new AgentActionRunRequest
+        {
+            ConversationId = conversationId,
+            RequestId = Guid.NewGuid(),
+            Prompt = "List the files.",
+            Mode = InteractionMode.Agent,
+            ModelName = "test-model"
+        };
+
+        await orchestrator.RunAsync(request);
+
+        Assert.NotNull(capturedWorkItem);
+        var expectedRoot = ReferenceWorkspace.Resolve(null, conversationId).Root;
+        Assert.Equal(expectedRoot, request.WorkspaceRoot);
+        Assert.Equal(expectedRoot, capturedWorkItem.Request.WorkspaceRoot);
+        Assert.NotEqual(ReferenceWorkspace.Resolve(null).Root, expectedRoot);
+    }
+
+    [Fact]
+    public async Task run_async_must_preserve_explicit_workspace()
+    {
+        AgentRunWorkItem? capturedWorkItem = null;
+        var queue = new Mock<IAgentRunQueue>();
+        queue
+            .Setup(runQueue => runQueue.EnqueueAsync(
+                It.IsAny<AgentRunWorkItem>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AgentRunWorkItem, CancellationToken>(
+                (workItem, _) => capturedWorkItem = workItem)
+            .Returns(ValueTask.CompletedTask);
+
+        using var publisher = new ChannelAgentRunEventPublisher();
+        var orchestrator = new AgentRunOrchestrator(queue.Object, publisher);
+        var explicitRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-explicit-{Guid.NewGuid():N}");
+        var request = new AgentActionRunRequest
+        {
+            ConversationId = Guid.NewGuid(),
+            RequestId = Guid.NewGuid(),
+            Prompt = "List the files.",
+            Mode = InteractionMode.Agent,
+            ModelName = "test-model",
+            WorkspaceRoot = explicitRoot
+        };
+
+        await orchestrator.RunAsync(request);
+
+        Assert.NotNull(capturedWorkItem);
+        Assert.Equal(Path.GetFullPath(explicitRoot), request.WorkspaceRoot);
+        Assert.Equal(
+            Path.GetFullPath(explicitRoot),
+            capturedWorkItem.Request.WorkspaceRoot);
+    }
+
+    [Fact]
     public async Task run_approved_command_must_reuse_conversation_request_and_workspace()
     {
         AgentRunWorkItem? capturedWorkItem = null;

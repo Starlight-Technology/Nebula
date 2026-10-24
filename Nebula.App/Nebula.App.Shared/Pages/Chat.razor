@@ -422,72 +422,76 @@ Skipped="@command.Skipped"
                     </details>
 
                     <div class="nebula-composer__footer">
-                        <div class="nebula-composer__footer-top">
-                            <p class="nebula-composer__hint">Sessao atual com @WorkspaceState.Turns.Count turno(s).</p>
+                        <div class="nebula-composer__footer-info">
+                            <div class="nebula-composer__footer-top">
+                                <p class="nebula-composer__hint">Sessao atual com @WorkspaceState.Turns.Count turno(s).</p>
 
-                            @if (WorkspaceState.SelectedInteractionMode == InteractionMode.Agent)
-                            {
-                                <label class="nebula-composer__compact-toggle">
-                                    <input type="checkbox"
-                                           checked="@WorkspaceState.QuickSettings.CompactMode"
-                                           @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.CompactMode = args.Value is true)" />
-                                    <span>Modo compacto</span>
-                                </label>
-                            }
+                                @if (WorkspaceState.SelectedInteractionMode == InteractionMode.Agent)
+                                {
+                                    <label class="nebula-composer__compact-toggle">
+                                        <input type="checkbox"
+                                               checked="@WorkspaceState.QuickSettings.CompactMode"
+                                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.CompactMode = args.Value is true)" />
+                                        <span>Modo compacto</span>
+                                    </label>
+                                }
+                            </div>
+
+                            <div class="nebula-composer__shortcuts">
+                                <kbd>Ctrl+Enter</kbd> Enviar
+                                <kbd>Esc</kbd> Cancelar
+                                <kbd>Ctrl+Shift+P</kbd> Prever
+                                @if (WorkspaceState.SelectedInteractionMode == InteractionMode.Agent)
+                                {
+                                    <text><kbd>Ctrl+Shift+C</kbd> Compacto </text>
+                                }
+                                <kbd>Ctrl+N</kbd> Nova
+                            </div>
                         </div>
 
-                        <div class="nebula-composer__shortcuts">
-                            <kbd>Ctrl+Enter</kbd> Enviar
-                            <kbd>Esc</kbd> Cancelar
-                            <kbd>Ctrl+Shift+P</kbd> Prever
-                            @if (WorkspaceState.SelectedInteractionMode == InteractionMode.Agent)
-                            {
-                                <text><kbd>Ctrl+Shift+C</kbd> Compacto </text>
-                            }
-                            <kbd>Ctrl+N</kbd> Nova
-                        </div>
-
-                        <CoronaStack Direction="CoronaStackDirection.Row"
-                                     Align="CoronaStackAlign.Center"
-                                     Justify="CoronaStackJustify.End"
-                                     Spacing=".75rem"
-                                     FullWidth="true">
-                            <CoronaButton Variant="CoronaButtonVariant.Text"
-                                          Size="CoronaComponentSize.Small"
-                                          Color="CoronaColorSemantic.Neutral"
-                                          Disabled="@(WorkspaceState.IsSending || WorkspaceState.Turns.Count == 0)"
-                                          OnClick="WorkspaceState.ClearConversation">
-                                Nova conversa
-                            </CoronaButton>
-
-                            @if (WorkspaceState.IsSending)
-                            {
-                                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                        <div class="nebula-composer__footer-actions">
+                            <CoronaStack Direction="CoronaStackDirection.Row"
+                                         Wrap="CoronaStackWrap.Wrap"
+                                         Align="CoronaStackAlign.Center"
+                                         Justify="CoronaStackJustify.End"
+                                         Spacing=".75rem">
+                                <CoronaButton Variant="CoronaButtonVariant.Text"
                                               Size="CoronaComponentSize.Small"
-                                              Color="CoronaColorSemantic.Warning"
-                                              Icon="@CoronaIcons.Xmark"
-                                              OnClick="WorkspaceState.CancelActiveTurn">
-                                    Cancelar
+                                              Color="CoronaColorSemantic.Neutral"
+                                              Disabled="@(WorkspaceState.IsSending || WorkspaceState.Turns.Count == 0)"
+                                              OnClick="WorkspaceState.ClearConversation">
+                                    Nova conversa
                                 </CoronaButton>
-                            }
 
-                            <CoronaButton Variant="CoronaButtonVariant.Outlined"
-                                          Size="CoronaComponentSize.Large"
-                                          Color="CoronaColorSemantic.Primary"
-                                          Icon="@CoronaIcons.MagnifyingGlass"
-                                          Disabled="@(!WorkspaceState.CanSend)"
-                                          OnClick="WorkspaceState.SendDryRunAsync">
-                                Prever
-                            </CoronaButton>
+                                @if (WorkspaceState.IsSending)
+                                {
+                                    <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                                  Size="CoronaComponentSize.Small"
+                                                  Color="CoronaColorSemantic.Warning"
+                                                  Icon="@CoronaIcons.Xmark"
+                                                  OnClick="WorkspaceState.CancelActiveTurn">
+                                        Cancelar
+                                    </CoronaButton>
+                                }
 
-                            <CoronaButton Size="CoronaComponentSize.Large"
-                                          Loading="@WorkspaceState.IsSending"
-                                          Disabled="@(!WorkspaceState.CanSend)"
-                                          Icon="@CoronaIcons.ArrowRight"
-                                          OnClick="WorkspaceState.SendAsync">
-                                Enviar
-                            </CoronaButton>
-                        </CoronaStack>
+                                <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                              Size="CoronaComponentSize.Large"
+                                              Color="CoronaColorSemantic.Primary"
+                                              Icon="@CoronaIcons.MagnifyingGlass"
+                                              Disabled="@(!WorkspaceState.CanSend)"
+                                              OnClick="WorkspaceState.SendDryRunAsync">
+                                    Prever
+                                </CoronaButton>
+
+                                <CoronaButton Size="CoronaComponentSize.Large"
+                                              Loading="@WorkspaceState.IsSending"
+                                              Disabled="@(!WorkspaceState.CanSend)"
+                                              Icon="@CoronaIcons.ArrowRight"
+                                              OnClick="WorkspaceState.SendAsync">
+                                    Enviar
+                                </CoronaButton>
+                            </CoronaStack>
+                        </div>
                     </div>
                 </div>
             </CoronaCard>

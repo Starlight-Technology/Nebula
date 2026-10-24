@@ -47,12 +47,14 @@
                     <CoronaBadge Content="AO VIVO" Variant="CoronaBadgeVariant.Soft" Color="CoronaColorSemantic.Warning" />
                     <CoronaBadge Content="@Run.Status" Variant="CoronaBadgeVariant.Outlined" Color="@GetStatusColor(Run.Status)" />
                     <CoronaBadge Content="@Run.Mode.ToString()" Variant="CoronaBadgeVariant.Outlined" Color="@(Run.Mode == InteractionMode.Agent ? CoronaColorSemantic.Warning : CoronaColorSemantic.Primary)" />
-                    <CoronaBadge Content="@(WorkspaceState.IsGitRepository ? "Git: ✓" : "Git: ✗")"
-                                 Variant="CoronaBadgeVariant.Soft"
-                                 Color="@(WorkspaceState.IsGitRepository ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)"
-                                 Title="@(WorkspaceState.IsGitRepository ? "Repositorio Git ativo" : "Nao e um repositorio Git - funcionalidades de PR indisponiveis")"
-                                 @onclick="NavigateToGit"
-                                 style="cursor: pointer;" />
+                    <button type="button"
+                            title="@(WorkspaceState.IsGitRepository ? "Repositorio Git ativo" : "Nao e um repositorio Git - funcionalidades de PR indisponiveis")"
+                            @onclick="NavigateToGit"
+                            style="padding: 0; border: 0; background: transparent; cursor: pointer;">
+                        <CoronaBadge Content="@(WorkspaceState.IsGitRepository ? "Git: ✓" : "Git: ✗")"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="@(WorkspaceState.IsGitRepository ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                    </button>
                 </div>
                 <h2>@Run.Prompt</h2>
                 <p class="nebula-agent-run__meta">

@@ -271,7 +271,9 @@ public sealed class NebulaWorkspaceState(
     /// falls back to a fresh empty workspace when nothing is configured.
     /// </summary>
     public ReferenceWorkspace ResolvedWorkspace =>
-        ReferenceWorkspace.Resolve(QuickSettings.WorkspaceRoot);
+        ReferenceWorkspace.Resolve(
+            QuickSettings.WorkspaceRoot,
+            ActiveConversationId);
 
     public async Task EnsureRuntimeAsync()
     {
@@ -480,7 +482,7 @@ public sealed class NebulaWorkspaceState(
             return;
         }
 
-var turn = new ConversationEntryViewModel
+        var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
             Mode = SelectedInteractionMode,
@@ -542,7 +544,7 @@ var turn = new ConversationEntryViewModel
         _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource, isDryRun: true);
     }
 
-public Task ApproveCommandAsync(CommandExecution command)
+    public Task ApproveCommandAsync(CommandExecution command)
     {
         if (!CanApproveCommand(command))
         {
