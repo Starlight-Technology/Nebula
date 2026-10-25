@@ -61,7 +61,15 @@ public sealed class NebulaRuntimeSettings
 
     public int ScriptTimeoutSeconds { get; set; } = 300;
 
+    public int LlmTimeoutSeconds { get; set; } = 300;
+
     public int MaxVerificationRetries { get; set; } = 2;
+
+    public int MaxConsecutiveErrorRetries { get; set; } = 3;
+
+    public bool EnableResultValidation { get; set; } = true;
+
+    public bool EnableEnvironmentValidation { get; set; } = true;
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 
@@ -119,6 +127,10 @@ public sealed class NebulaRuntimeSettings
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
         MaxVerificationRetries = Math.Max(0, snapshot.MaxVerificationRetries);
+        LlmTimeoutSeconds = Math.Max(1, snapshot.LlmTimeoutSeconds);
+        MaxConsecutiveErrorRetries = Math.Max(1, snapshot.MaxConsecutiveErrorRetries);
+        EnableResultValidation = snapshot.EnableResultValidation;
+        EnableEnvironmentValidation = snapshot.EnableEnvironmentValidation;
         SandboxMode = snapshot.SandboxMode;
         SandboxImage = NormalizeOrDefault(snapshot.SandboxImage, "mcr.microsoft.com/powershell:lts");
         SandboxMemoryLimitMb = Math.Max(0, snapshot.SandboxMemoryLimitMb);
@@ -150,6 +162,10 @@ public sealed class NebulaRuntimeSettings
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
             MaxVerificationRetries = MaxVerificationRetries,
+            LlmTimeoutSeconds = LlmTimeoutSeconds,
+            MaxConsecutiveErrorRetries = MaxConsecutiveErrorRetries,
+            EnableResultValidation = EnableResultValidation,
+            EnableEnvironmentValidation = EnableEnvironmentValidation,
             SandboxMode = SandboxMode,
             SandboxImage = SandboxImage,
             SandboxMemoryLimitMb = SandboxMemoryLimitMb,
@@ -212,7 +228,6 @@ public sealed class NebulaRuntimeSettings
         };
     }
 }
-
 public sealed class NebulaRuntimeSettingsSnapshot
 {
     public string MainModel { get; set; } = string.Empty;
@@ -250,6 +265,14 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public int ScriptTimeoutSeconds { get; set; } = 300;
 
     public int MaxVerificationRetries { get; set; } = 2;
+
+    public int LlmTimeoutSeconds { get; set; } = 300;
+
+    public int MaxConsecutiveErrorRetries { get; set; } = 3;
+
+    public bool EnableResultValidation { get; set; } = true;
+
+    public bool EnableEnvironmentValidation { get; set; } = true;
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 

@@ -59,7 +59,12 @@ public static class MauiProgram
         builder.Logging.AddDebug();
 #endif
 
-        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
+        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
+            timeoutSeconds: int.TryParse(
+                Environment.GetEnvironmentVariable("NEBULA_LLM_TIMEOUT_SECONDS"),
+                out var llmTimeout) && llmTimeout > 0
+                ? llmTimeout
+                : 300));
         builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
             commandRunner: new ProcessRuntimeCommandRunner()));
 
@@ -290,6 +295,9 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
         builder.Services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
         builder.Services.AddScoped<IOutputVerificationService, OutputVerificationService>();
+        builder.Services.AddScoped<IErrorFixService, ErrorFixService>();
+        builder.Services.AddScoped<IEnvironmentValidator, EnvironmentValidator>();
+        builder.Services.AddScoped<IResultValidator, ResultValidator>();
         builder.Services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
         builder.Services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
         builder.Services.AddScoped<ITranslationService, TranslationService>();
@@ -379,6 +387,9 @@ builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>(
     knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
     projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
     userMemoryService: provider.GetRequiredService<IUserMemoryService>()));
+            errorFixService: provider.GetService<IErrorFixService>(),
+            environmentValidator: provider.GetService<IEnvironmentValidator>(),
+            resultValidator: provider.GetService<IResultValidator>()));
         builder.Services.AddScoped<IManager>(provider => new Manager(
             provider.GetRequiredService<ILlamaClient>(),
             provider.GetRequiredService<IShellExecutor>(),

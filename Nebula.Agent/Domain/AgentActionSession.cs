@@ -1,5 +1,7 @@
 using System.Text;
 
+using Nebula.Core.Learning; // for ErrorFix
+
 using Nebula.Agent.Application;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
@@ -114,6 +116,21 @@ internal sealed class AgentActionSession
     public HashSet<string> ApprovedCommandsForConversation { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    public HashSet<string> FilesReadThisSession { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, int> _consecutiveFailuresBySignature = new();
+
+    public int GetConsecutiveFailures(string errorSignature)
+        => _consecutiveFailuresBySignature.GetValueOrDefault(errorSignature, 0);
+
+    public void RecordFailure(string errorSignature)
+        => _consecutiveFailuresBySignature[errorSignature] =
+            _consecutiveFailuresBySignature.GetValueOrDefault(errorSignature, 0) + 1;
+
+    public void ResetFailureCount(string errorSignature)
+        => _consecutiveFailuresBySignature.Remove(errorSignature);
+
     public void RecordApproval(CommandExecution execution, bool autoApproved)
     {
         Approvals.Add(new ApprovalRecord(
@@ -128,6 +145,19 @@ internal sealed class AgentActionSession
 
     public AgentActionDecisionRequest CreateDecisionRequest()
     {
+        ErrorContext? errorContext = null;
+        var lastEntry = ExecutionHistory.Entries.LastOrDefault();
+        if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+        {
+            // The actual fixes will be injected by the runner when building the prompt
+            // We just pass the error signature here for context
+            errorContext = new ErrorContext(
+                lastEntry.ErrorSignature,
+                lastEntry.Command,
+                [], // Will be populated by runner
+                string.Empty); // Will be populated by runner
+        }
+
         return new AgentActionDecisionRequest
         {
             Objective = TranslatedObjective ?? Request.Prompt,
@@ -140,7 +170,8 @@ internal sealed class AgentActionSession
             RetryNumber = RetryNumber,
             WorkspaceRoot = WorkspaceRoot.Root,
             ConversationId = Request.ConversationId,
-            DryRun = IsDryRun
+            DryRun = IsDryRun,
+            ErrorContext = errorContext
         };
     }
 
@@ -161,6 +192,17 @@ internal sealed class AgentActionSession
         pendingRecoveryAction = null;
         pendingRecoveryReasoning = null;
         return true;
+    }
+
+    public void QueueRecoveryAction(AgentToolAction action, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        action.RequiresSafetyReview = true;
+        pendingRecoveryAction = action;
+        pendingRecoveryReasoning = $"Result validation correction: {reason}";
+        RecordObservation(
+            "result validation",
+            $"A validator-proposed correction will be retried through the normal safety checks: {reason}");
     }
 
     public AgentStep CreateStep(AgentToolAction action)

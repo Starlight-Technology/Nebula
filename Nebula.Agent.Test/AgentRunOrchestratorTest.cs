@@ -184,6 +184,36 @@ public sealed class AgentRunOrchestratorTest
     }
 
     [Fact]
+    public async Task run_approved_command_async_must_preserve_explicit_conversation_and_workspace_context()
+    {
+        var queueMock = new Mock<IAgentRunQueue>();
+        AgentRunWorkItem? captured = null;
+        queueMock.Setup(q => q.EnqueueAsync(It.IsAny<AgentRunWorkItem>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentRunWorkItem, CancellationToken>((w, _) => captured = w)
+            .Returns(ValueTask.CompletedTask);
+
+        var orchestrator = new AgentRunOrchestrator(queueMock.Object, Mock.Of<IAgentRunEventPublisher>());
+        var conversationId = Guid.NewGuid();
+        const string workspaceRoot = "/tmp/nebula-workspace";
+
+        var command = new CommandExecution
+        {
+            Objective = "modify existing file",
+            Run = "Set-Content -Path /tmp/nebula-workspace/example.txt -Value 'updated'",
+            OperationKind = OperationKind.FileWrite,
+            WorkingDirectory = workspaceRoot,
+            TargetPath = "/tmp/nebula-workspace/example.txt"
+        };
+
+        await orchestrator.RunApprovedCommandAsync(command, ApprovalScope.Once, conversationId, Guid.NewGuid());
+
+        Assert.NotNull(captured);
+        Assert.Equal(conversationId, captured!.Request.ConversationId);
+        Assert.Equal(workspaceRoot, captured.Request.WorkspaceRoot);
+        Assert.NotNull(captured.Request.ApprovedAction);
+    }
+
+    [Fact]
     public async Task get_status_async_must_return_null_for_unknown_run()
     {
         var orchestrator = new AgentRunOrchestrator(Mock.Of<IAgentRunQueue>(), Mock.Of<IAgentRunEventPublisher>());

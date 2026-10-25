@@ -1,4 +1,5 @@
 using Nebula.Agent.Domain;
+using Nebula.Core.Learning; // for ErrorFix
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 
@@ -37,7 +38,19 @@ public sealed class AgentActionDecisionRequest
     /// True when this decision is a dry-run preview: nothing may be executed or written.
     /// </summary>
     public bool DryRun { get; set; }
+
+    /// <summary>
+    /// Error context from the previous failed step, including known fixes.
+    /// Used to guide the agent toward proven solutions.
+    /// </summary>
+    public ErrorContext? ErrorContext { get; set; }
 }
+
+public sealed record ErrorContext(
+    string ErrorSignature,
+    string FailedCommand,
+    IReadOnlyList<ErrorFix> KnownFixes,
+    string Hypothesis);
 
 public sealed class AgentActionDecision
 {

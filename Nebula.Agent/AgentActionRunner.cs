@@ -171,6 +171,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly ILearningFromExecutionService? learningFromExecution;
     private readonly IPostTaskLearningService? postTaskLearning;
     private readonly IOutputVerificationService? outputVerificationService;
+    private readonly IResultValidator? resultValidator;
     private readonly ITranslationService? translationService;
     private readonly IAgentRunStore? agentRunStore;
     private readonly IDeterministicVerificationService? deterministicVerification;
@@ -189,6 +190,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IKnowledgeSearchService? knowledgeSearchService;
     private readonly IProjectDocumentationIndexer? projectDocumentationIndexer;
     private readonly IUserMemoryService? userMemoryService;
+    private readonly IErrorFixService? errorFixService;
+    private readonly IEnvironmentValidator? environmentValidator;
     private readonly int defaultMaxRetriesPerStep;
     private readonly int defaultMaxSteps;
     private static readonly IWorkspaceStackDetector StackDetector =
@@ -216,6 +219,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         ILearningFromExecutionService? learningFromExecution = null,
         IPostTaskLearningService? postTaskLearning = null,
         IOutputVerificationService? outputVerificationService = null,
+        IResultValidator? resultValidator = null,
         ITranslationService? translationService = null,
         NebulaRuntimeSettings? runtimeSettings = null,
         IAgentRunStore? agentRunStore = null,
@@ -233,7 +237,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
         IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
         IKnowledgeSearchService? knowledgeSearchService = null,
         IProjectDocumentationIndexer? projectDocumentationIndexer = null,
-        IUserMemoryService? userMemoryService = null)
+        IUserMemoryService? userMemoryService = null,
+        IErrorFixService? errorFixService = null,
+        IEnvironmentValidator? environmentValidator = null)
     {
         this.llamaClient = llamaClient;
         this.executor = executor;
@@ -278,6 +284,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.learningFromExecution = learningFromExecution;
         this.postTaskLearning = postTaskLearning;
         this.outputVerificationService = outputVerificationService;
+        this.resultValidator = resultValidator;
         this.translationService = translationService;
         this.agentRunStore = agentRunStore;
         this.deterministicVerification = deterministicVerificationService;
@@ -295,6 +302,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.knowledgeSearchService = knowledgeSearchService;
         this.projectDocumentationIndexer = projectDocumentationIndexer;
         this.userMemoryService = userMemoryService;
+        this.errorFixService = errorFixService;
+        this.environmentValidator = environmentValidator;
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -401,8 +410,44 @@ public sealed class AgentActionRunner : IAgentActionRunner
         var strategyContext = await BuildStrategyContextAsync(
             workspaceRoot.Root,
             cancellationToken);
-        var userPreferencesContext = await BuildUserPreferencesAsync(
+        var userPreferencesContext = await BuildUserPreferencesAsync(cancellationToken);
+        var previousRunsContext = await BuildPreviousAgentRunsContextAsync(
+            request.ConversationId,
             cancellationToken);
+
+        // Populate ErrorContext with known fixes if there's a previous error
+        if (request.ErrorContext is not null &&
+            !string.IsNullOrWhiteSpace(request.ErrorContext.ErrorSignature) &&
+            errorFixService is not null)
+        {
+            try
+            {
+                var stack = StackDetector.Detect(workspaceRoot.Root).Kind.ToString();
+                var fixes = await errorFixService.SearchFixesAsync(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    stack,
+                    workspaceRoot.Root,
+                    cancellationToken);
+
+                var hypothesis = request.ErrorContext.Hypothesis;
+                if (string.IsNullOrWhiteSpace(hypothesis) && fixes.Count > 0)
+                {
+                    hypothesis = $"Likely cause: {fixes[0].Description}";
+                }
+
+                request.ErrorContext = new ErrorContext(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    fixes,
+                    hypothesis);
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed in GenerateNextStepAsync: {ex.Message}");
+            }
+        }
+
         var decisionPrompt = CreateDecisionPrompt(
             request,
             environmentDetector.Detect(workspaceRoot.Root),
@@ -411,7 +456,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             workspaceContext,
             templateContext,
             strategyContext,
-            userPreferencesContext);
+            userPreferencesContext,
+            previousRunsContext);
         var rawResponse = await llamaClient.GetStructuredResponseAsync(
             decisionPrompt,
             DecisionJsonSchema,
@@ -489,6 +535,87 @@ public sealed class AgentActionRunner : IAgentActionRunner
         catch (Exception ex)
         {
             logger.Log($"[AGENT] User preferences context failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    private async Task<string> BuildPreviousAgentRunsContextAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        if (agentRunStore is null || conversationId == Guid.Empty)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var runs = await agentRunStore.GetRunsByConversationAsync(conversationId, cancellationToken);
+            if (runs is null || runs.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            // Get the last 2 completed runs (excluding the current one if it's in progress)
+            var completedRuns = runs
+                .Where(r => r.Status == "Completed" || r.Status == "Failed")
+                .OrderByDescending(r => r.StartedAt)
+                .Take(2)
+                .ToList();
+
+            if (completedRuns.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var sections = new List<string>();
+            foreach (var run in completedRuns)
+            {
+                var runSection = new StringBuilder();
+                runSection.AppendLine($"--- Previous Agent Run ({run.StartedAt:yyyy-MM-dd HH:mm}) ---");
+                runSection.AppendLine($"Objective: {run.Prompt}");
+                runSection.AppendLine($"Status: {run.Status}");
+
+                if (!string.IsNullOrWhiteSpace(run.CurrentPlan))
+                {
+                    runSection.AppendLine($"Plan: {run.CurrentPlan}");
+                }
+
+                if (run.Artifacts is { Count: > 0 })
+                {
+                    runSection.AppendLine("Artifacts created:");
+                    foreach (var artifact in run.Artifacts)
+                    {
+                        runSection.AppendLine($"  - {artifact.Name}: {artifact.Path}");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(run.Response))
+                {
+                    var summary = run.Response.Length > 500
+                        ? run.Response[..500] + "..."
+                        : run.Response;
+                    runSection.AppendLine($"Summary: {summary}");
+                }
+
+                sections.Add(runSection.ToString());
+            }
+
+            return $$"""
+
+                Previous agent runs in this conversation:
+                {{string.Join(Environment.NewLine + Environment.NewLine, sections)}}
+
+                Use this context to understand what files were created and what was accomplished. When the user asks to modify existing files, use PlannedPatch with the exact file paths shown above.
+                """;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Previous agent runs context failed (non-fatal): {ex.Message}");
             return string.Empty;
         }
     }
@@ -729,6 +856,24 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
             if (actionResult.RequiresRetry)
             {
+                // Track consecutive failures for escalation
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    session.RecordFailure(lastEntry.ErrorSignature);
+                    var consecutiveFailures = session.GetConsecutiveFailures(lastEntry.ErrorSignature);
+
+                    // Escalate after configured max consecutive failures
+                    if (consecutiveFailures >= runtimeSettings.MaxConsecutiveErrorRetries)
+                    {
+                        var escalationMsg = $"Same error '{lastEntry.ErrorSignature}' failed {consecutiveFailures} times. " +
+                            "Known fixes exhausted. Requesting human input or alternative approach.";
+                        logger.Log($"[ESCALATION] {escalationMsg}");
+                        return await TranslateTurnResponseAsync(
+                            session.FailRetryLimit(escalationMsg), cancellationToken);
+                    }
+                }
+
                 var terminalTurn = ScheduleRetryOrFail(session, actionResult.Observation);
                 if (terminalTurn is not null)
                 {
@@ -736,7 +881,21 @@ public sealed class AgentActionRunner : IAgentActionRunner
                         terminalTurn, cancellationToken);
                 }
 
+                if (actionResult.RecoveryAction is not null)
+                {
+                    session.QueueRecoveryAction(
+                        actionResult.RecoveryAction,
+                        actionResult.Observation);
+                }
+
                 continue;
+            }
+
+            // Reset failure count on success
+            var successEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (successEntry is not null && !string.IsNullOrWhiteSpace(successEntry.ErrorSignature))
+            {
+                session.ResetFailureCount(successEntry.ErrorSignature);
             }
 
             session.CompleteStep(decision.Action!.Objective, actionResult.Observation);
@@ -1069,11 +1228,13 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 classification = scriptContentClassifier.Classify(
                     action.Content ?? string.Empty,
                     action.Language ?? string.Empty,
-                    targetPath);
+                    targetPath,
+                    session.WorkspaceRoot.Root,
+                    null);
             }
             else
             {
-                classification = fileWriteSafetyClassifier.Classify(targetPath);
+                classification = fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
             }
 
             operationRequest = new OperationPolicyRequest(
@@ -1295,6 +1456,36 @@ public sealed class AgentActionRunner : IAgentActionRunner
                     $"{string.Join(", ", validation.MissingEssentialFiles)}");
             }
 
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validationResult = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validationResult.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validationResult.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validationResult.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validationResult.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validationResult.Verdict}; reason={reason}");
+
+                    if (validationResult.Verdict == ValidationVerdict.Mismatch && validationResult.CorrectedAction is not null)
+                    {
+                        var correctedAction = validationResult.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validationResult.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1495,6 +1686,37 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 observation,
                 execution.StandardOutput);
             session.RecordObservation(execution.Run, observation);
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1565,7 +1787,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
                     session,
                     path);
                 return concurrentModification ??
-                       fileWriteSafetyClassifier.Classify(path);
+                       fileWriteSafetyClassifier.Classify(path, session.WorkspaceRoot.Root, null);
             })
             .ToList();
 
@@ -1691,6 +1913,24 @@ public sealed class AgentActionRunner : IAgentActionRunner
         var validation = await commandValidationService.ValidateAsync(
             execution,
             cancellationToken);
+
+        // Advisory environment validation
+        if (environmentValidator is not null && runtimeSettings.EnableEnvironmentValidation)
+        {
+            var envValidation = await environmentValidator.ValidateAsync(
+                operationKind,
+                execution.Run,
+                execution.WorkingDirectory,
+                cancellationToken);
+            if (!envValidation.IsValid)
+            {
+                var advisoryMessage = string.Join("\n", envValidation.Issues.Select(i =>
+                    $"[Environment] {i.Severity}: {i.Message}" +
+                    (i.SuggestedAction != null ? $" — Suggestion: {i.SuggestedAction}" : "")));
+                session.RecordCommandObservation(execution.Run, advisoryMessage);
+                logger.Log($"[ENV_VALIDATE] Advisory issues for {execution.Run}: {advisoryMessage}");
+            }
+        }
 
         var operationDecision = await operationPolicyEngine.EvaluateAsync(
             new OperationPolicyRequest(
@@ -1911,6 +2151,36 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 }
             }
 
+            // Result validation gate - runs on ALL operations
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var resultValidation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observationMessage,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (resultValidation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = resultValidation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {resultValidation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {resultValidation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={resultValidation.Verdict}; reason={reason}");
+
+                    if (resultValidation.Verdict == ValidationVerdict.Mismatch && resultValidation.CorrectedAction is not null)
+                    {
+                        var correctedAction = resultValidation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {resultValidation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observationMessage);
         }
 
@@ -1993,8 +2263,10 @@ public sealed class AgentActionRunner : IAgentActionRunner
             ? scriptContentClassifier.Classify(
                 content,
                 action.Language ?? string.Empty,
-                targetPath)
-            : fileWriteSafetyClassifier.Classify(targetPath);
+                targetPath,
+                session.WorkspaceRoot.Root,
+                null)
+            : fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
         var concurrentModification = TryDetectConcurrentModification(
             session,
             targetPath);
@@ -2118,6 +2390,36 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 ? observation
                 : $"{observation}{Environment.NewLine}{verifyResult}";
 
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    finalObservation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(finalObservation);
         }
         catch (Exception ex) when (
@@ -2224,6 +2526,38 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 $"Read {content.Length} character(s) from {targetPath}.";
             session.EmitToolObservation(execution, observation, content);
             session.RecordObservation(execution.Run, observation);
+            session.FilesReadThisSession.Add(Path.GetFullPath(targetPath));
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (Exception ex) when (
@@ -2432,6 +2766,46 @@ public sealed class AgentActionRunner : IAgentActionRunner
             environmentSnapshot,
             cancellationToken);
 
+        // Result validation gate
+        if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+        {
+            // Need to get the original action for validation - create a minimal action from execution
+            var sandboxAction = new AgentToolAction
+            {
+                Objective = execution.Objective,
+                Command = execution.Run,
+                OperationKind = operationKind,
+                TargetPath = execution.TargetPath,
+                WorkingDirectory = execution.WorkingDirectory
+            };
+
+            var validation = await resultValidator.ValidateAsync(
+                session.Request.Prompt,
+                sandboxAction,
+                observationMessage,
+                execution.WorkingDirectory,
+                cancellationToken);
+
+            if (validation.Verdict != ValidationVerdict.Sufficient)
+            {
+                var reason = validation.Verdict == ValidationVerdict.Mismatch
+                    ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                    : $"Insufficient result: {validation.Reason}";
+
+                logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                {
+                    var correctedAction = validation.CorrectedAction;
+                    correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                    correctedAction.RequiresSafetyReview = true;
+                    return ActionAttemptResult.Retry(reason, correctedAction);
+                }
+
+                return ActionAttemptResult.Retry(reason);
+            }
+        }
+
         if (execution.Executed)
         {
             return ActionAttemptResult.Completed(observationMessage);
@@ -2444,7 +2818,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         AgentActionSession session,
         CancellationToken cancellationToken)
     {
-        if (workspaceMemoryService is null)
+        if (workspaceMemoryService is null && learningFromExecution is null)
         {
             return;
         }
@@ -2471,12 +2845,31 @@ public sealed class AgentActionRunner : IAgentActionRunner
             }
 
             var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
-            await workspaceMemoryService.RecordWorkingStrategyAsync(
-                session.WorkspaceRoot.Root,
-                stack,
-                previous.ErrorSignature,
-                current.Command,
-                cancellationToken);
+            var workspace = session.WorkspaceRoot.Root;
+
+            if (workspaceMemoryService is not null)
+            {
+                await workspaceMemoryService.RecordWorkingStrategyAsync(
+                    workspace,
+                    stack,
+                    previous.ErrorSignature,
+                    current.Command,
+                    cancellationToken);
+            }
+
+            // Also record as ErrorFix for global learning
+            if (learningFromExecution is not null)
+            {
+                await learningFromExecution.RecordErrorFixAsync(
+                    previous.ErrorSignature,
+                    previous.Command,
+                    current.Command,
+                    stack,
+                    workspace,
+                    session.Request.ConversationId,
+                    Guid.NewGuid(),
+                    cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2521,6 +2914,44 @@ public sealed class AgentActionRunner : IAgentActionRunner
         string command,
         string baseObservation)
     {
+        // First, try to get error-specific fixes
+        if (errorFixService is not null)
+        {
+            try
+            {
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                    var fixes = await errorFixService.SearchFixesAsync(
+                        lastEntry.ErrorSignature,
+                        command,
+                        stack,
+                        session.WorkspaceRoot.Root);
+
+                    if (fixes.Count > 0)
+                    {
+                        var fixBlock = new StringBuilder();
+                        fixBlock.AppendLine();
+                        fixBlock.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+                        foreach (var fix in fixes.Take(5))
+                        {
+                            fixBlock.AppendLine(
+                                $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+                        }
+                        var fixText = fixBlock.ToString().Trim();
+                        var suffix = fixText.Length > 2000 ? fixText[..2000] : fixText;
+                        return $"{baseObservation}\n{suffix}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        // Fallback to general knowledge search
         if (knowledgeSearchService is null)
         {
             return baseObservation;
@@ -3040,12 +3471,41 @@ public sealed class AgentActionRunner : IAgentActionRunner
     {
         try
         {
+            // Get known fixes for this error
+            IReadOnlyList<ErrorFix> knownFixes = [];
+            string errorSignature = string.Empty;
+
+            var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+            {
+                errorSignature = lastEntry.ErrorSignature;
+                if (errorFixService is not null)
+                {
+                    try
+                    {
+                        var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                        knownFixes = await errorFixService.SearchFixesAsync(
+                            errorSignature,
+                            execution.Run,
+                            stack,
+                            session.WorkspaceRoot.Root,
+                            cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Log($"[AGENT] Error fix retrieval failed in reflection: {ex.Message}");
+                    }
+                }
+            }
+
             var decisionRequest = session.CreateDecisionRequest();
             var reflectionPrompt = CreateErrorReflectionPrompt(
                 execution,
                 decisionRequest.CurrentPlan,
                 session.ExecutionHistory.Entries,
-                runtimeSettings.BuildResponseLanguageInstruction());
+                runtimeSettings.BuildResponseLanguageInstruction(),
+                errorSignature,
+                knownFixes);
             var rawResponse = await llamaClient.GetResponseAsync(
                 reflectionPrompt,
                 progress: null,
@@ -3097,8 +3557,24 @@ public sealed class AgentActionRunner : IAgentActionRunner
         CommandExecution execution,
         string currentPlan,
         IReadOnlyList<ExecutionHistoryEntry> history,
-        string responseLanguageInstruction)
+        string responseLanguageInstruction,
+        string errorSignature,
+        IReadOnlyList<ErrorFix> knownFixes)
     {
+        var fixesSection = string.Empty;
+        if (knownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+            foreach (var fix in knownFixes.Take(5))
+            {
+                fixesLines.AppendLine(
+                    $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesSection = fixesLines.ToString();
+        }
+
         return $$"""
             You are Nebula's ErrorReflectionStep.
 
@@ -3131,6 +3607,10 @@ public sealed class AgentActionRunner : IAgentActionRunner
             Exit code:
             {{execution.ExitCode?.ToString() ?? "unknown"}}
 
+            Error signature:
+            {{errorSignature}}
+            {{fixesSection}}
+
             Current plan:
             {{currentPlan}}
 
@@ -3139,6 +3619,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
             Mandatory question:
             Qual hipótese explica esse erro e qual comando diferente deve ser tentado agora?
+            Prefer known fixes above if applicable. The next command MUST be different from the failed command.
             """;
     }
 
@@ -3999,8 +4480,28 @@ public sealed class AgentActionRunner : IAgentActionRunner
         string workspaceContext = "",
         string templateContext = "",
         string strategyContext = "",
-        string userPreferencesContext = "")
+        string userPreferencesContext = "",
+        string previousRunsContext = "")
     {
+        var isWindows = environment.OS == OperatingSystemKind.Windows;
+        var pathExample = isWindows ? "C:/Users/Name/file.txt" : "/home/user/file.txt";
+        var projectPathExample = isWindows ? "C:/Users/Name/MyProject" : "/home/user/MyProject";
+        var listCmd = isWindows ? "Get-ChildItem" : "ls -la";
+        var readCmd = isWindows ? "Get-Content" : "cat";
+        var verifyCmd = isWindows ? "Test-Path" : "test -f";
+        var shellExample = isWindows ? "PowerShell" : "bash";
+        var pathSeparatorNote = isWindows
+            ? "Use forward slashes in all paths (C:/Users/Name/file.py not C:\\Users\\Name\\file.py)."
+            : "Use forward slashes in all paths (/home/user/file.py).";
+
+        var verifyExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Users/Name/hello.py\""
+            : "ls -la /home/user/hello.py";
+
+        var listExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Dev/Backup\" -Force | Select-Object Name, Length, Extension"
+            : "ls -la /home/user/Dev/Backup";
+
         var knowledgeSection = string.IsNullOrWhiteSpace(knowledgeContext)
             ? string.Empty
             : $"""
@@ -4013,8 +4514,15 @@ public sealed class AgentActionRunner : IAgentActionRunner
             ? string.Empty
             : $"""
 
-            Current workspace context:
+            Current workspace context (files in conversation folder workspace/{request.ConversationId.ToString("N")[..8]}/):
             {workspaceContext}
+            """;
+
+        var previousRunsSection = string.IsNullOrWhiteSpace(previousRunsContext)
+            ? string.Empty
+            : $"""
+
+            {previousRunsContext}
             """;
 
         var templatesSection = string.IsNullOrWhiteSpace(templateContext)
@@ -4041,6 +4549,24 @@ public sealed class AgentActionRunner : IAgentActionRunner
             """;
 
         var shellGuidance = BuildShellGuidance(environment);
+
+        var errorContextSection = string.Empty;
+        if (request.ErrorContext is not null && request.ErrorContext.KnownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("ERROR CONTEXT FROM PREVIOUS FAILED STEP:");
+            fixesLines.AppendLine($"Error signature: {request.ErrorContext.ErrorSignature}");
+            fixesLines.AppendLine($"Failed command: {request.ErrorContext.FailedCommand}");
+            fixesLines.AppendLine($"Hypothesis: {request.ErrorContext.Hypothesis}");
+            fixesLines.AppendLine("KNOWN FIXES (try these first):");
+            foreach (var fix in request.ErrorContext.KnownFixes.Take(5))
+            {
+                fixesLines.AppendLine($"[{fix.Source}] {fix.Description} -> {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesLines.AppendLine("Your next action MUST be different from the failed command. Prefer one of the known fixes above if applicable.");
+            errorContextSection = fixesLines.ToString();
+        }
 
         var dryRunSection = request.DryRun
             ? $"""
@@ -4071,12 +4597,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
             - Set isComplete=true ONLY after at least one action succeeded and its result was verified with real output.
             - Never set isComplete=true on the first response - you must execute steps first.
             - Never repeat the exact same failed command.
-            {shellGuidance}
+            {{shellGuidance}}
             {{knowledgeSection}}
+            {{previousRunsSection}}
             {{workspaceSection}}
             {{templatesSection}}
             {{strategiesSection}}
             {{userPreferencesSection}}
+            {{errorContextSection}}
             {{dryRunSection}}
             Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
             For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
@@ -4105,7 +4633,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
             EXAMPLES - follow these patterns exactly:
 
-            Example 1 (create a file, then verify):
+            Example 1 (create a new file, then verify):
             {
               "reasoningSummary": "Creating hello.py and verifying it exists.",
               "isComplete": false,
@@ -4149,7 +4677,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
               "action": null
             }
 
-            Example 4 (planned multi-file patch):
+            Example 4 (planned multi-file patch for modifications):
             {
               "reasoningSummary": "Applying a planned patch that updates the app and its docs.",
               "isComplete": false,
@@ -4176,6 +4704,50 @@ public sealed class AgentActionRunner : IAgentActionRunner
               }
             }
 
+            Example 5 (modify an existing file - read first, then patch):
+            {
+              "reasoningSummary": "Reading existing hello.py to modify it with a new feature.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Read hello.py before modifying",
+                "operationKind": "FileRead",
+                "command": "",
+                "targetPath": "{{pathExample}}",
+                "language": "",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+            {
+              "reasoningSummary": "Modifying hello.py to add a greeting function using PlannedPatch.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Add greeting function to hello.py",
+                "operationKind": "PlannedPatch",
+                "command": "",
+                "targetPath": "{{projectPathExample}}",
+                "plannedFiles": [
+                  {
+                    "path": "hello.py",
+                    "content": "def greet(name):\n    print(f'Hello, {name}!')\n\ngreet('world')"
+                  }
+                ],
+                "language": "python",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": true
+              }
+            }
+            {
+              "reasoningSummary": "Verifying the modified hello.py works correctly.",
+              "isComplete": true,
+              "completionMessage": "Modified hello.py and verified it runs with the new greeting function.",
+              "action": null
+            }
+
             Use this format:
             {
               "reasoningSummary": "what you are doing (1 sentence)",
@@ -4198,6 +4770,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             Set action to null when isComplete: true.
 
             Objective: {{request.Objective}}
+            {{previousRunsSection}}
+            {{workspaceSection}}
             Chat history:
             {{request.ChatHistoryContext}}
             Plan and progress:
@@ -4230,7 +4804,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
 
         return """
         Use Linux shell commands for this runtime (ls, pwd, test, mkdir, find, grep, cat, python, bash, etc.).
-        Do not invent Windows-specific commands like Get-ChildItem, Test-Path or New-Item on Linux.
+        Do not use Windows-specific command names on Linux.
         Example directory listing: ls -la
         Example path check: test -f \"/tmp/example.txt\" || test -d \"/tmp/example.txt\"
         Example creation: mkdir -p \"/tmp/example-dir\"
@@ -4569,16 +5143,23 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private sealed record ActionAttemptResult(
         string Observation,
         bool RequiresRetry,
-        ConversationTurn? TerminalTurn)
+        ConversationTurn? TerminalTurn,
+        AgentToolAction? RecoveryAction = null)
     {
         public static ActionAttemptResult Completed(string observation)
         {
             return new ActionAttemptResult(observation, RequiresRetry: false, TerminalTurn: null);
         }
 
-        public static ActionAttemptResult Retry(string observation)
+        public static ActionAttemptResult Retry(
+            string observation,
+            AgentToolAction? recoveryAction = null)
         {
-            return new ActionAttemptResult(observation, RequiresRetry: true, TerminalTurn: null);
+            return new ActionAttemptResult(
+                observation,
+                RequiresRetry: true,
+                TerminalTurn: null,
+                recoveryAction);
         }
 
         public static ActionAttemptResult Terminal(ConversationTurn turn)

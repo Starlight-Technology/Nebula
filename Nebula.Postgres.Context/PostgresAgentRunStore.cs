@@ -158,6 +158,23 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             .SingleOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var entities = await context.AgentRuns
+            .Include(value => value.Steps)
+            .Include(value => value.Artifacts)
+            .Include(value => value.Approvals)
+            .Where(value => value.ConversationId == conversationId)
+            .OrderByDescending(value => value.StartedAt)
+            .Take(10)
+            .ToListAsync(cancellationToken);
+        return entities
+            .Select(Map)
+            .ToList();
+    }
+
     private static AgentRunEntity Map(AgentRun run)
     {
         return new AgentRunEntity

@@ -418,7 +418,7 @@ public sealed class HomePageTests : HomePageTestContext
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
 
         var component = Render<Nebula.App.Shared.Pages.Settings>();
-        component.WaitForAssertion(() =>
+component.WaitForAssertion(() =>
         {
             Assert.Contains("Preferencias do Nebula", component.Markup);
             Assert.Contains("Modelo de aprendizado", component.Markup);

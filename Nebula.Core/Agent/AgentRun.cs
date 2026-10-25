@@ -92,4 +92,8 @@ public interface IAgentRunStore
     Task<Guid?> GetRunIdByStepIdAsync(
         Guid stepId,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
 }
