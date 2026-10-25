@@ -58,16 +58,20 @@ public static class MauiProgram
         builder.Logging.AddDebug();
 #endif
 
-        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
-        builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
-        builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
-        builder.Services.AddSingleton<IOllamaUpdateService, OllamaUpdateService>();
-        builder.Services.AddSingleton<IProjectDoctorService, ProjectDoctorService>();
-        builder.Services.AddScoped(_ => new NebulaRuntimeSettings
-        {
-            MainModel =
-                Environment.GetEnvironmentVariable("LLAMA_MODEL") ??
-                Environment.GetEnvironmentVariable("OLLAMA_MODEL") ??
+builder.Services.AddSingleton<ILlamaClient>(provider =>
+{
+    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
+    return new LlamaClient(timeoutSeconds: settings.LlmTimeoutSeconds);
+});
+builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
+builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
+builder.Services.AddSingleton<IOllamaUpdateService, OllamaUpdateService>();
+builder.Services.AddSingleton<IProjectDoctorService, ProjectDoctorService>();
+builder.Services.AddScoped(_ => new NebulaRuntimeSettings
+{
+    MainModel =
+        Environment.GetEnvironmentVariable("LLAMA_MODEL") ??
+        Environment.GetEnvironmentVariable("OLLAMA_MODEL") ??
                 string.Empty,
             LearningModel =
                 Environment.GetEnvironmentVariable("LEARNING_MODEL") ??
@@ -278,6 +282,9 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
         builder.Services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
         builder.Services.AddScoped<IOutputVerificationService, OutputVerificationService>();
+        builder.Services.AddScoped<IErrorFixService, ErrorFixService>();
+        builder.Services.AddScoped<IEnvironmentValidator, EnvironmentValidator>();
+        builder.Services.AddScoped<IResultValidator, ResultValidator>();
         builder.Services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
         builder.Services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
         builder.Services.AddScoped<ITranslationService, TranslationService>();
@@ -354,7 +361,10 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
             postTaskLearning: provider.GetService<IPostTaskLearningService>(),
             learningFromExecution: provider.GetService<ILearningFromExecutionService>(),
             knowledgeQueryService: provider.GetService<IKnowledgeQueryService>(),
-            learningEngine: provider.GetService<ILearningEngine>()));
+            learningEngine: provider.GetService<ILearningEngine>(),
+            errorFixService: provider.GetService<IErrorFixService>(),
+            environmentValidator: provider.GetService<IEnvironmentValidator>(),
+            resultValidator: provider.GetService<IResultValidator>()));
         builder.Services.AddScoped<IManager>(provider => new Manager(
             provider.GetRequiredService<ILlamaClient>(),
             provider.GetRequiredService<IShellExecutor>(),

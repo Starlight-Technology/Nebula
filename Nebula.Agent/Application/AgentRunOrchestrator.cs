@@ -104,13 +104,13 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
 
     public async Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, CancellationToken cancellationToken = default)
     {
-        return await RunApprovedCommandAsync(command, scope, Guid.NewGuid(), null, cancellationToken);
+        return await RunApprovedCommandAsync(command, scope, Guid.Empty, null, cancellationToken);
     }
 
     public async Task<Guid> RunApprovedCommandAsync(CommandExecution command, ApprovalScope scope, Guid conversationId, string? workspaceRoot, CancellationToken cancellationToken = default)
     {
         var runId = Guid.NewGuid();
-        var effectiveConversationId = conversationId == Guid.Empty ? Guid.NewGuid() : conversationId;
+        var effectiveConversationId = conversationId == Guid.Empty ? Guid.Empty : conversationId;
         var request = new AgentActionRunRequest
         {
             ConversationId = effectiveConversationId,

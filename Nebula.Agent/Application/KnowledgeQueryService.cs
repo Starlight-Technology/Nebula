@@ -1,4 +1,5 @@
 using System.Globalization;
+using Nebula.Core.Learning; // for ErrorFix record
 
 using Nebula.Core.Learning;
 
@@ -123,4 +124,57 @@ public sealed class KnowledgeQueryService(
 
     private static double AgeDays(KnowledgeItem item) =>
         (DateTimeOffset.UtcNow - item.LastSeenAt).TotalDays;
+
+    public async Task<IReadOnlyList<ErrorFix>> SearchErrorFixesAsync(
+        string errorSignature,
+        string? stack = null,
+        string? workspace = null,
+        int maxResults = 5,
+        CancellationToken cancellationToken = default)
+    {
+        var query = $"error fix {errorSignature}";
+        if (!string.IsNullOrWhiteSpace(stack))
+        {
+            query += $" {stack}";
+        }
+
+        var results = await store.FindDetailsAsync(
+            query.Trim(),
+            minimumScore: 0.50,
+            cancellationToken);
+
+        var fixes = results
+            .Where(r => r.Item.Kind == KnowledgeItemKind.ErrorFix ||
+                        (r.Item.Kind == KnowledgeItemKind.Warning && r.Item.Content.Contains(errorSignature, StringComparison.OrdinalIgnoreCase)))
+            .Select(r => new ErrorFix(
+                Source: "KnowledgeBase",
+                Description: r.Item.Summary ?? r.Item.Title,
+                SuggestedCommand: r.Item.NormalizedCommand ?? ExtractCommandFromContent(r.Item.Content),
+                Confidence: r.Item.FinalScore,
+                EvidenceHash: r.Item.Hash))
+            .Where(f => !string.IsNullOrWhiteSpace(f.SuggestedCommand))
+            .OrderByDescending(f => f.Confidence)
+            .Take(maxResults)
+            .ToList();
+
+        return fixes;
+    }
+
+    private static string ExtractCommandFromContent(string content)
+    {
+        var lines = content.Split('\n');
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 3 && (trimmed.StartsWith("dotnet ") || trimmed.StartsWith("python ") ||
+                trimmed.StartsWith("npm ") || trimmed.StartsWith("git ") ||
+                trimmed.StartsWith("ls ") || trimmed.StartsWith("cat ") ||
+                trimmed.StartsWith("mkdir ") || trimmed.StartsWith("cd ") ||
+                trimmed.StartsWith("test ") || trimmed.StartsWith("build ")))
+            {
+                return trimmed;
+            }
+        }
+        return string.Empty;
+    }
 }

@@ -1,6 +1,6 @@
 # AGENTS.md - Nebula Repository Guide
 
-Last verified: 2026-09-18.
+Last verified (build and agent-validation entries): 2026-10-14.
 
 This guide is for coding agents working in the Nebula repository. It is based on
 the current code, project files, docs, tests, Docker files, and local validation
@@ -29,7 +29,7 @@ on 2026-09-18 (see `git status` below) has been verified and included as impleme
 - Orchestration (finalized 2026-09-18, previously untracked): `Nebula.Agent/Application/AgentRunOrchestrator.cs:13`, `IAgentRunOrchestrator.cs:11`, `IAgentRunQueue.cs:11`, `Background/BackgroundTaskHostedService.cs:7`, `Application/Events/*`, `Infrastructure/Events/ChannelAgentRunEventPublisher.cs:7`, `Infrastructure/Execution/AgentRunBackgroundService.cs:12`, `Nebula.Core/Background/*`, `Nebula.Services/Learning/FreeTextSearchProvider.cs:11`.
 - UI: `Nebula.App.Shared/Pages/Chat.razor:1` + `State/NebulaWorkspaceState.cs:38` (`nebula.quick-settings.v1`).
 - Persistência: `Nebula.Postgres.Context/PostgresContext.cs:7` (tabelas `requests`, `commands`, `knowledge_*`, `workspace_memory` `{workspace,kind,key}`, `user_memory`, `agent_runs`...). `PostgresDatabaseInitializer` + 14 migrations são autoridade; `PostgresAgentRunStore.cs:16` agora usa `BeginTransactionAsync` com bypass InMemory.
-- Build/Test: `global.json 10.0.111` → `dotnet restore Nebula.slnx` → `dotnet build` (pode travar em podman rootless; usar `/tmp` cópia se overlay negar `obj/`). Testes: 526 casos `Nebula.Agent.Test` (DI fix `Manager.cs:78` adiciona `AddLogging()`), 19 `Nebula.App.Test`, 49 `Corona.Tests`. CI: `.github/workflows/ci.yml:1` (restore/build/test/compose config) em `10.0.400`. Docker: `docker-compose.yml:1` (`ollama`, `postgres`, `mongodb`, `searxng`, `nebula-web` com `Nebula.Core/Services` no `COPY`); SearXNG precisa `secret_key` trocado.
+- Build/Test (validado em 2026-10-14): `global.json 10.0.111`; build completo requer `maui-android`, Java 17 e Android SDK no Linux. Comandos locais e status da CI estao em [Build, Test, and Run Commands](#build-test-and-run-commands). Testes: 569 `Nebula.Agent.Test`, 19 `Nebula.App.Test`, 41 `Corona.Tests` (629 aprovados). CI: `.github/workflows/ci.yml:1` usa SDK `10.0.400` e instala prerequisitos MAUI Android. Docker: `docker-compose.yml:1` (`ollama`, `postgres`, `mongodb`, `searxng`, `nebula-web` com `Nebula.Core/Services` no `COPY`); SearXNG precisa `secret_key` trocado.
 
 ## Table of Contents
 
@@ -130,6 +130,7 @@ Use these categories when describing Nebula:
 | Aprendizado pos-tarefa via sintese LLM | Implemented | `IPostTaskLearningService`/`PostTaskLearningService` (`Nebula.Agent/Application/PostTaskLearningService.cs`): apos `session.Complete` no `RunCoreAsync`, hook `TryLearnFromPostTaskAsync` monta `PostTaskRunSnapshot` (comandos bem-sucedidos + artefatos criados), sintetiza resumo com o LLM (`LlamaKnowledgeExtractor`-style, com fallback deterministico) e persiste `KnowledgeItem` Kind `Procedure` (tags `task-summary,post-task,auto-learned`) via `IKnowledgeStore.SaveAsync`; hook nao-fatal (try/catch). |
 | Revalidacao de conhecimento antigo | Implemented | `KnowledgeQueryService` (default offset de 90 dias via `stalenessThreshold`): `AnswerForAutomationAsync` exclui itens stale (`LastSeenAt` antigo) e avisa que existem itens desatualizados; `AnswerAsync` (Chat) mantem itens stale mas adiciona linha "Alerta: conhecimento desatualizado"; teste em `KnowledgeAutomationLearningTest`. |
 | Automation policy ligada | Implemented | `IKnowledgeAutomationPolicy`/`KnowledgeAutomationPolicy` agora e consultada: `IKnowledgeQueryService.AnswerForAutomationAsync` filtra por `CanUseAutomatically` (FinalScore >= 0.75, nao-dangerous) e `AgentActionRunner.QueryRelevantKnowledgeAsync` usa essa rota para injetar conhecimento automatico no planner do Agent. |
+| Result validation, environment checks, and error recovery | Implemented | `ResultValidator` valida evidencias com o LLM e pode propor uma acao corretiva; ela entra no retry normal da sessao com `RequiresSafetyReview=true`, portanto continua sujeita aos classificadores e politicas. `EnvironmentValidator` fornece avisos advisory antes da execucao, controlado por `Nebula:EnableEnvironmentValidation`. `ErrorFixService` agrega estrategias do workspace, conhecimento e sugestoes deterministicas. As validacoes podem ser desligadas por `Nebula:EnableResultValidation` e `Nebula:EnableEnvironmentValidation`; `MaxConsecutiveErrorRetries` limita repeticoes do mesmo erro. |
 | Web research | Implemented | Direct docs, SearXNG, Bing HTML, Brave optional, configurable/free providers. |
 | Safe experiment runner | Implemented | `ISafeExperimentRunner`/`SafeExperimentRunner` registado via DI nas 3 raizes (`AddScoped`); `LearningOrchestrator` aceita por construtor injection e `CreateExperimentAsync` invoca `TryVerifyAsync` quando o experimentador nao e nulo e o item nao e perigoso; `LearningEngine` injeta o experimentador no orchestrator. Experimentos perigosos sao corretamente pulados com anotacao "Dangerous". |
 | Project templates/scaffolding | Implemented | `IProjectTemplateCatalog`/`ProjectTemplateCatalog` (dotnet-console, dotnet-api, python-script, python-package, node-cli), `IProjectScaffolder`/`ProjectScaffolder` (raiz restrita a workspace/temp), `OperationKind.ProjectScaffold` + `AgentToolAction.TemplateId` + JSON schema, dispatch em `ExecuteProjectScaffoldAsync`. |
@@ -880,6 +881,9 @@ contain local secrets and should be treated carefully.
 | `Nebula:CommandTimeoutSeconds` | Max runtime for terminal commands before kill + retry | 300 (env: `NEBULA_COMMAND_TIMEOUT_SECONDS`; 0 disables) |
 | `Nebula:ScriptTimeoutSeconds` | Max runtime for script executions before kill + retry | 300 (env: `NEBULA_SCRIPT_TIMEOUT_SECONDS`; 0 disables) |
 | `Nebula:MaxVerificationRetries` | Repair loop limit: consecutive DoD verification failures allowed before failing the run | 2 (env: `NEBULA_MAX_VERIFICATION_RETRIES`; 0 = no dedicated limit) |
+| `Nebula:MaxConsecutiveErrorRetries` | Max consecutive retries for the same error signature before escalation | 3 (env: `Nebula__MaxConsecutiveErrorRetries`) |
+| `Nebula:EnableResultValidation` | Enable LLM validation of action evidence and safety-checked corrective retries | true (env: `Nebula__EnableResultValidation`) |
+| `Nebula:EnableEnvironmentValidation` | Enable advisory checks for required tools before command execution | true (env: `Nebula__EnableEnvironmentValidation`) |
 | `Nebula:Sandbox:Mode` | Docker sandbox switch for approval-required terminal commands (`Disabled`/`Docker`) | `Disabled` (env: `NEBULA_SANDBOX_MODE`) |
 | `Nebula:Sandbox:Image` | Sandbox container image | `mcr.microsoft.com/powershell:lts` (env: `NEBULA_SANDBOX_IMAGE`) |
 | `Nebula:Sandbox:MemoryLimitMb` | Optional sandbox memory limit in MB (0 = no limit) | 0 (env: `NEBULA_SANDBOX_MEMORY_LIMIT_MB`) |
@@ -980,6 +984,34 @@ diagnostic. Targeted builds below passed.
 
 Validation result on 2026-08-04: full solution build succeeded with 0 warnings and
 0 errors.
+
+Validation result on 2026-10-14 (toolbox, .NET SDK 10.0.111): full solution
+build succeeded, including `Nebula.App` for `net10.0-android`, after installing
+Java 17 and Android SDK dependencies. In the toolbox, pass both SDK paths to
+MSBuild explicitly:
+
+```bash
+dotnet build Nebula.slnx --no-restore -v minimal \
+  -p:JavaSdkDirectory="$HOME/.local/jdk-17" \
+  -p:AndroidSdkDirectory="$ANDROID_HOME"
+```
+
+The same validation run passed 569 `Nebula.Agent.Test`, 19 `Nebula.App.Test`,
+and 41 `Corona.Tests` tests (629 total).
+
+Linux builds that include `Nebula.App` require the `maui-android` .NET workload,
+Java 17, and an Android SDK. CI installs these prerequisites explicitly. On a
+local Linux machine, `XA5300` means the Android SDK path is missing; install the
+Android SDK and configure `ANDROID_HOME` before treating the MAUI target as
+validated. The web, CLI, and test projects can be built independently without
+that mobile SDK. After installing Java and the Android command-line tools, the
+SDK dependencies can be prepared with:
+
+```bash
+dotnet build Nebula.App/Nebula.App/Nebula.App.csproj -t:InstallAndroidDependencies \
+  -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" \
+  -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSDKLicenses=True
+```
 
 ```powershell
 dotnet build Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-restore -v minimal
@@ -1434,7 +1466,7 @@ dotnet test Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-build -v minimal
 dotnet test Nebula.App.Test/Nebula.App.Test.csproj --no-build -v minimal
 dotnet test Corona/Corona.Tests/Corona.Tests.csproj --no-build -v minimal
 
-# Expected: 566 + 19 + 41 = 626 tests passing
+# Last verified 2026-10-14: 569 + 19 + 41 = 629 tests passing
 
 # Start services
 podman compose down

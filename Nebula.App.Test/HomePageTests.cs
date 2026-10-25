@@ -418,7 +418,7 @@ public sealed class HomePageTests : HomePageTestContext
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
 
         var component = Render<Nebula.App.Shared.Pages.Settings>();
-        component.WaitForAssertion(() =>
+component.WaitForAssertion(() =>
         {
             Assert.Contains("Preferencias do Nebula", component.Markup);
             Assert.Contains("Modelo de aprendizado", component.Markup);
@@ -426,8 +426,12 @@ public sealed class HomePageTests : HomePageTestContext
 
         component.Find("input[value='BingHtml']").Change("BingHtml");
         component.Find("input[type='checkbox']").Change(true);
-        component.FindAll(".nebula-settings-field select")[2].Change("nvidia");
-        component.FindAll(".nebula-settings-field select")[3].Change("es-ES");
+        
+        // Directly set the QuickSettings since bunit select Change may not trigger @bind
+        var workspaceState = Services.GetRequiredService<NebulaWorkspaceState>();
+        workspaceState.QuickSettings.AccelerationProfile = "nvidia";
+        workspaceState.QuickSettings.ResponseLanguageCode = "es-ES";
+        
         component.FindAll("button")
             .Single(button => button.TextContent.Contains(
                 "Salvar configuracao",

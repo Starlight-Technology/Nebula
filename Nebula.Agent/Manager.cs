@@ -247,6 +247,19 @@ public class Manager : IManager
         };
         await promptAuditService.SaveAsync(promptRequest, cancellationToken);
 
+        // Prepare conversation context for memory update
+        var userMessage = new UserMessage(prompt, InteractionMode.Agent);
+        var conversationRequest = new ConversationRequest(
+            activeConversationId,
+            requestId,
+            userMessage,
+            llamaClient.SelectedModel);
+        var conversationContext = await conversationContextService.PrepareAsync(
+            activeConversationId,
+            prompt,
+            InteractionMode.Agent,
+            cancellationToken);
+
         // Manter mesmo ConversationId e workspace base para que o arquivo aprovado caia na mesma pasta <id8> do chat
         var workspaceRoot = !string.IsNullOrWhiteSpace(command.WorkingDirectory)
             ? command.WorkingDirectory
@@ -255,7 +268,7 @@ public class Manager : IManager
 
         if (progress != null)
         {
-            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, conversationContext, conversationRequest, cancellationToken);
         }
 
         return new ConversationTurn
@@ -271,7 +284,7 @@ public class Manager : IManager
         };
     }
 
-    public Task<ConversationTurn> ResumeTaskAsync(
+    public async Task<ConversationTurn> ResumeTaskAsync(
         AgentRun run,
         IProgress<ConversationTurn>? progress = null,
         CancellationToken cancellationToken = default)
@@ -282,24 +295,39 @@ public class Manager : IManager
             $"[AGENT] Resuming task '{run.Prompt}' for ConversationId '{activeConversationId}' " +
             $"from run '{run.Id}' (previous status: {run.Status}).");
 
-        var runId = orchestrator.ResumeAsync(run, cancellationToken).GetAwaiter().GetResult();
+        // Prepare conversation context for memory update
+        var resumePrompt = $"Retomar tarefa: {run.Prompt}";
+        var userMessage = new UserMessage(resumePrompt, InteractionMode.Agent);
+        var requestId = Guid.NewGuid();
+        var conversationRequest = new ConversationRequest(
+            activeConversationId,
+            requestId,
+            userMessage,
+            llamaClient.SelectedModel);
+        var conversationContext = await conversationContextService.PrepareAsync(
+            activeConversationId,
+            resumePrompt,
+            InteractionMode.Agent,
+            cancellationToken);
+
+        var runId = await orchestrator.ResumeAsync(run, cancellationToken);
 
         if (progress != null)
         {
-            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, conversationContext, conversationRequest, cancellationToken);
         }
 
-        return Task.FromResult(new ConversationTurn
+        return new ConversationTurn
         {
             ConversationId = activeConversationId,
-            RequestId = Guid.NewGuid(),
-            Prompt = $"Retomar tarefa: {run.Prompt}",
+            RequestId = requestId,
+            Prompt = resumePrompt,
             Mode = InteractionMode.Agent,
             Classification = InteractionMode.Agent.ToString(),
             ModelName = llamaClient.SelectedModel,
             ActionStatus = ActionExecutionStatus.Started,
             Response = "Task resume started in background..."
-        });
+        };
     }
 
     public async Task<bool> VerifyCommandCorrectAsync(Command command)
@@ -348,7 +376,8 @@ public class Manager : IManager
             request,
             conversationContext.ModelPrompt,
             progress,
-            cancellationToken);
+            cancellationToken,
+            conversationContext);
 
         await CompleteConversationAsync(
             request,
@@ -364,11 +393,12 @@ public class Manager : IManager
         ConversationRequest request,
         string modelPrompt,
         IProgress<ConversationTurn>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PreparedConversationContext conversationContext)
     {
         return request.Mode switch
         {
-            InteractionMode.Agent => await CreateAgentTurnAsync(request, modelPrompt, progress, cancellationToken),
+            InteractionMode.Agent => await CreateAgentTurnAsync(request, modelPrompt, progress, cancellationToken, conversationContext),
             InteractionMode.Chat => await chatResponseService.GetResponseAsync(
                 request,
                 modelPrompt,
@@ -385,10 +415,11 @@ public class Manager : IManager
         ConversationRequest request,
         string modelPrompt,
         IProgress<ConversationTurn>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PreparedConversationContext conversationContext)
     {
         var actionRequest = request.CreateActionRequest(
-            modelPrompt,
+            conversationContext.ChatHistoryContext,
             maxActionStepCount,
             maxActionRetryCount);
 
@@ -404,7 +435,7 @@ public class Manager : IManager
 
         if (progress != null)
         {
-            _ = BridgeTypedEventsToLegacyProgress(runId, progress, cancellationToken);
+            _ = BridgeTypedEventsToLegacyProgress(runId, progress, conversationContext, request, cancellationToken);
         }
 
         var reasoning = selectedAgent is null
@@ -435,6 +466,8 @@ public class Manager : IManager
     private async Task BridgeTypedEventsToLegacyProgress(
         Guid runId,
         IProgress<ConversationTurn> legacyProgress,
+        PreparedConversationContext conversationContext,
+        ConversationRequest request,
         CancellationToken cancellationToken)
     {
         try
@@ -444,16 +477,31 @@ public class Manager : IManager
                 if (evt is AgentRunCompletedEvent completed)
                 {
                     legacyProgress.Report(completed.FinalTurn);
+                    
+                    // Update conversation memory with the actual final turn (not the initial "started" message)
+                    await conversationContextService.CompleteAsync(
+                        conversationContext,
+                        request.Prompt,
+                        completed.FinalTurn,
+                        cancellationToken);
                     break;
                 }
                 else if (evt is AgentRunFailedEvent failed)
                 {
-                    legacyProgress.Report(failed.PartialTurn ?? BuildFailedTurn(failed.ErrorMessage));
+                    var failedTurn = failed.PartialTurn ?? BuildFailedTurn(failed.ErrorMessage);
+                    legacyProgress.Report(failedTurn);
+                    
+                    // Update conversation memory with the failure turn
+                    await conversationContextService.CompleteAsync(
+                        conversationContext,
+                        request.Prompt,
+                        failedTurn,
+                        cancellationToken);
                     break;
                 }
                 else if (evt is AgentRunCancelledEvent)
                 {
-                    legacyProgress.Report(new ConversationTurn
+                    var cancelledTurn = new ConversationTurn
                     {
                         ConversationId = activeConversationId,
                         RequestId = Guid.NewGuid(),
@@ -463,7 +511,15 @@ public class Manager : IManager
                         Response = "Execution cancelled by user.",
                         ActionStatus = ActionExecutionStatus.Cancelled,
                         IsCancelled = true
-                    });
+                    };
+                    legacyProgress.Report(cancelledTurn);
+                    
+                    // Update conversation memory with the cancellation turn
+                    await conversationContextService.CompleteAsync(
+                        conversationContext,
+                        request.Prompt,
+                        cancelledTurn,
+                        cancellationToken);
                     break;
                 }
                 else
@@ -475,6 +531,10 @@ public class Manager : IManager
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception ex)
+        {
+            logger.LogError($"Error in BridgeTypedEventsToLegacyProgress: {ex.Message}");
         }
     }
 

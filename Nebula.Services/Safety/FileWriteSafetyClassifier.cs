@@ -16,20 +16,20 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
         "access_token", "auth_token", "api_key", "apikey", "password"
     ];
 
-    private readonly string workspaceRoot;
-    private readonly string controlledTempRoot;
+    private readonly string defaultWorkspaceRoot;
+    private readonly string defaultControlledTempRoot;
 
     public FileWriteSafetyClassifier(
         string? workspaceRoot = null,
         string? controlledTempRoot = null)
     {
-        this.workspaceRoot = Path.GetFullPath(
+        this.defaultWorkspaceRoot = Path.GetFullPath(
             workspaceRoot ?? Environment.CurrentDirectory);
-        this.controlledTempRoot = Path.GetFullPath(
+        this.defaultControlledTempRoot = Path.GetFullPath(
             controlledTempRoot ?? Path.Combine(Path.GetTempPath(), "Nebula"));
     }
 
-    public CommandClassification Classify(string targetPath)
+    public CommandClassification Classify(string targetPath, string? workspaceRoot = null, string? controlledTempRoot = null)
     {
         if (string.IsNullOrWhiteSpace(targetPath))
         {
@@ -40,7 +40,12 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
                 "A file write requires a target path.");
         }
 
-        var fullPath = ResolvePath(targetPath);
+        var effectiveWorkspaceRoot = Path.GetFullPath(
+            workspaceRoot ?? defaultWorkspaceRoot);
+        var effectiveControlledTempRoot = Path.GetFullPath(
+            controlledTempRoot ?? defaultControlledTempRoot);
+
+        var fullPath = ResolvePath(targetPath, effectiveWorkspaceRoot);
         if (SensitiveSegments.Any(segment =>
             fullPath.Contains(
                 segment,
@@ -53,8 +58,8 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
                 "The write target is a credential, token, .env, or SSH file.");
         }
 
-        if (!IsUnder(fullPath, workspaceRoot) &&
-            !IsUnder(fullPath, controlledTempRoot))
+        if (!IsUnder(fullPath, effectiveWorkspaceRoot) &&
+            !IsUnder(fullPath, effectiveControlledTempRoot))
         {
             return Result(
                 targetPath,
@@ -90,7 +95,7 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
             "The target is an allowed file inside the workspace or controlled temp directory.");
     }
 
-    private string ResolvePath(string path)
+    private static string ResolvePath(string path, string workspaceRoot)
     {
         var normalized = NormalizePathSeparators(path);
         return Path.IsPathRooted(normalized)

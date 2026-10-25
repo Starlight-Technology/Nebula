@@ -31,6 +31,12 @@ namespace Nebula.Agent;
 
 public sealed class AgentActionRunner : IAgentActionRunner
 {
+    /// <summary>
+    /// When true, disables workspace path redirection (workspace/<id8>/) for testing.
+    /// This allows tests to write files to the exact paths they specify.
+    /// </summary>
+    public static bool TestModeDisablePathRedirection { get; set; } = false;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -171,6 +177,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly ILearningFromExecutionService? learningFromExecution;
     private readonly IPostTaskLearningService? postTaskLearning;
     private readonly IOutputVerificationService? outputVerificationService;
+    private readonly IResultValidator? resultValidator;
     private readonly ITranslationService? translationService;
     private readonly IAgentRunStore? agentRunStore;
     private readonly IDeterministicVerificationService? deterministicVerification;
@@ -189,6 +196,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IKnowledgeSearchService? knowledgeSearchService;
     private readonly IProjectDocumentationIndexer? projectDocumentationIndexer;
     private readonly IUserMemoryService? userMemoryService;
+    private readonly IErrorFixService? errorFixService;
+    private readonly IEnvironmentValidator? environmentValidator;
     private readonly int defaultMaxRetriesPerStep;
     private readonly int defaultMaxSteps;
     private static readonly IWorkspaceStackDetector StackDetector =
@@ -216,6 +225,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         ILearningFromExecutionService? learningFromExecution = null,
         IPostTaskLearningService? postTaskLearning = null,
         IOutputVerificationService? outputVerificationService = null,
+        IResultValidator? resultValidator = null,
         ITranslationService? translationService = null,
         NebulaRuntimeSettings? runtimeSettings = null,
         IAgentRunStore? agentRunStore = null,
@@ -233,7 +243,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
         IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
         IKnowledgeSearchService? knowledgeSearchService = null,
         IProjectDocumentationIndexer? projectDocumentationIndexer = null,
-        IUserMemoryService? userMemoryService = null)
+        IUserMemoryService? userMemoryService = null,
+        IErrorFixService? errorFixService = null,
+        IEnvironmentValidator? environmentValidator = null)
     {
         this.llamaClient = llamaClient;
         this.executor = executor;
@@ -278,6 +290,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.learningFromExecution = learningFromExecution;
         this.postTaskLearning = postTaskLearning;
         this.outputVerificationService = outputVerificationService;
+        this.resultValidator = resultValidator;
         this.translationService = translationService;
         this.agentRunStore = agentRunStore;
         this.deterministicVerification = deterministicVerificationService;
@@ -295,6 +308,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.knowledgeSearchService = knowledgeSearchService;
         this.projectDocumentationIndexer = projectDocumentationIndexer;
         this.userMemoryService = userMemoryService;
+        this.errorFixService = errorFixService;
+        this.environmentValidator = environmentValidator;
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -401,8 +416,44 @@ public sealed class AgentActionRunner : IAgentActionRunner
         var strategyContext = await BuildStrategyContextAsync(
             workspaceRoot.Root,
             cancellationToken);
-        var userPreferencesContext = await BuildUserPreferencesAsync(
+        var userPreferencesContext = await BuildUserPreferencesAsync(cancellationToken);
+        var previousRunsContext = await BuildPreviousAgentRunsContextAsync(
+            request.ConversationId,
             cancellationToken);
+
+        // Populate ErrorContext with known fixes if there's a previous error
+        if (request.ErrorContext is not null && 
+            !string.IsNullOrWhiteSpace(request.ErrorContext.ErrorSignature) &&
+            errorFixService is not null)
+        {
+            try
+            {
+                var stack = StackDetector.Detect(workspaceRoot.Root).Kind.ToString();
+                var fixes = await errorFixService.SearchFixesAsync(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    stack,
+                    workspaceRoot.Root,
+                    cancellationToken);
+                
+                var hypothesis = request.ErrorContext.Hypothesis;
+                if (string.IsNullOrWhiteSpace(hypothesis) && fixes.Count > 0)
+                {
+                    hypothesis = $"Likely cause: {fixes[0].Description}";
+                }
+
+                request.ErrorContext = new ErrorContext(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    fixes,
+                    hypothesis);
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed in GenerateNextStepAsync: {ex.Message}");
+            }
+        }
+
         var decisionPrompt = CreateDecisionPrompt(
             request,
             environmentDetector.Detect(workspaceRoot.Root),
@@ -411,7 +462,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             workspaceContext,
             templateContext,
             strategyContext,
-            userPreferencesContext);
+            userPreferencesContext,
+            previousRunsContext);
         var rawResponse = await llamaClient.GetStructuredResponseAsync(
             decisionPrompt,
             DecisionJsonSchema,
@@ -489,6 +541,87 @@ public sealed class AgentActionRunner : IAgentActionRunner
         catch (Exception ex)
         {
             logger.Log($"[AGENT] User preferences context failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    private async Task<string> BuildPreviousAgentRunsContextAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        if (agentRunStore is null || conversationId == Guid.Empty)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var runs = await agentRunStore.GetRunsByConversationAsync(conversationId, cancellationToken);
+            if (runs is null || runs.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            // Get the last 2 completed runs (excluding the current one if it's in progress)
+            var completedRuns = runs
+                .Where(r => r.Status == "Completed" || r.Status == "Failed")
+                .OrderByDescending(r => r.StartedAt)
+                .Take(2)
+                .ToList();
+
+            if (completedRuns.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var sections = new List<string>();
+            foreach (var run in completedRuns)
+            {
+                var runSection = new StringBuilder();
+                runSection.AppendLine($"--- Previous Agent Run ({run.StartedAt:yyyy-MM-dd HH:mm}) ---");
+                runSection.AppendLine($"Objective: {run.Prompt}");
+                runSection.AppendLine($"Status: {run.Status}");
+
+                if (!string.IsNullOrWhiteSpace(run.CurrentPlan))
+                {
+                    runSection.AppendLine($"Plan: {run.CurrentPlan}");
+                }
+
+                if (run.Artifacts is { Count: > 0 })
+                {
+                    runSection.AppendLine("Artifacts created:");
+                    foreach (var artifact in run.Artifacts)
+                    {
+                        runSection.AppendLine($"  - {artifact.Name}: {artifact.Path}");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(run.Response))
+                {
+                    var summary = run.Response.Length > 500
+                        ? run.Response[..500] + "..."
+                        : run.Response;
+                    runSection.AppendLine($"Summary: {summary}");
+                }
+
+                sections.Add(runSection.ToString());
+            }
+
+            return $$"""
+                
+                Previous agent runs in this conversation:
+                {{string.Join(Environment.NewLine + Environment.NewLine, sections)}}
+                
+                Use this context to understand what files were created and what was accomplished. When the user asks to modify existing files, use PlannedPatch with the exact file paths shown above.
+                """;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Previous agent runs context failed (non-fatal): {ex.Message}");
             return string.Empty;
         }
     }
@@ -699,6 +832,24 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
 
             if (actionResult.RequiresRetry)
             {
+                // Track consecutive failures for escalation
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    session.RecordFailure(lastEntry.ErrorSignature);
+                    var consecutiveFailures = session.GetConsecutiveFailures(lastEntry.ErrorSignature);
+                    
+                    // Escalate after configured max consecutive failures
+                    if (consecutiveFailures >= runtimeSettings.MaxConsecutiveErrorRetries)
+                    {
+                        var escalationMsg = $"Same error '{lastEntry.ErrorSignature}' failed {consecutiveFailures} times. " +
+                            "Known fixes exhausted. Requesting human input or alternative approach.";
+                        logger.Log($"[ESCALATION] {escalationMsg}");
+                        return await TranslateTurnResponseAsync(
+                            session.FailRetryLimit(escalationMsg), cancellationToken);
+                    }
+                }
+
                 var terminalTurn = ScheduleRetryOrFail(session, actionResult.Observation);
                 if (terminalTurn is not null)
                 {
@@ -706,7 +857,21 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                         terminalTurn, cancellationToken);
                 }
 
+                if (actionResult.RecoveryAction is not null)
+                {
+                    session.QueueRecoveryAction(
+                        actionResult.RecoveryAction,
+                        actionResult.Observation);
+                }
+
                 continue;
+            }
+
+            // Reset failure count on success
+            var successEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (successEntry is not null && !string.IsNullOrWhiteSpace(successEntry.ErrorSignature))
+            {
+                session.ResetFailureCount(successEntry.ErrorSignature);
             }
 
             session.CompleteStep(decision.Action!.Objective, actionResult.Observation);
@@ -1011,11 +1176,13 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 classification = scriptContentClassifier.Classify(
                     action.Content ?? string.Empty,
                     action.Language ?? string.Empty,
-                    targetPath);
+                    targetPath,
+                    session.WorkspaceRoot.Root,
+                    null);
             }
             else
             {
-                classification = fileWriteSafetyClassifier.Classify(targetPath);
+                classification = fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
             }
 
             operationRequest = new OperationPolicyRequest(
@@ -1233,6 +1400,36 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     $"{string.Join(", ", validation.MissingEssentialFiles)}");
             }
 
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validationResult = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validationResult.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validationResult.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validationResult.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validationResult.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validationResult.Verdict}; reason={reason}");
+
+                    if (validationResult.Verdict == ValidationVerdict.Mismatch && validationResult.CorrectedAction is not null)
+                    {
+                        var correctedAction = validationResult.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validationResult.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1290,6 +1487,28 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         execution.OriginalCommand = action.Command;
         execution.Notes = BuildPatchSummary(targetDirectory, files);
         session.Commands.Add(execution);
+
+        // ENFORCE READ-BEFORE-WRITE: Check each file in the patch that already exists
+        var unreadExistingFiles = new List<string>();
+        foreach (var file in files)
+        {
+            var fullPath = Path.GetFullPath(Path.Combine(targetDirectory, file.RelativePath));
+            if (File.Exists(fullPath) && !session.FilesReadThisSession.Contains(fullPath))
+            {
+                unreadExistingFiles.Add(file.RelativePath);
+            }
+        }
+
+        if (unreadExistingFiles.Count > 0)
+        {
+            var observation =
+                $"The following files in the patch already exist but have not been read in this session: {string.Join(", ", unreadExistingFiles)}. " +
+                "You MUST read each file first using FileRead before applying a patch to modify them. " +
+                "Use FileRead for each file, then retry the PlannedPatch.";
+            session.RecordObservation(execution.Run, observation);
+            session.EmitActionCompleted(execution);
+            return ActionAttemptResult.Retry(observation);
+        }
 
         var classification = ClassifyPlannedPatch(
             session,
@@ -1409,6 +1628,37 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 observation,
                 execution.StandardOutput);
             session.RecordObservation(execution.Run, observation);
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1479,7 +1729,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     session,
                     path);
                 return concurrentModification ??
-                       fileWriteSafetyClassifier.Classify(path);
+                       fileWriteSafetyClassifier.Classify(path, session.WorkspaceRoot.Root, null);
             })
             .ToList();
 
@@ -1593,6 +1843,24 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
         var validation = await commandValidationService.ValidateAsync(
             execution,
             cancellationToken);
+
+        // Advisory environment validation
+        if (environmentValidator is not null && runtimeSettings.EnableEnvironmentValidation)
+        {
+            var envValidation = await environmentValidator.ValidateAsync(
+                operationKind,
+                execution.Run,
+                execution.WorkingDirectory,
+                cancellationToken);
+            if (!envValidation.IsValid)
+            {
+                var advisoryMessage = string.Join("\n", envValidation.Issues.Select(i =>
+                    $"[Environment] {i.Severity}: {i.Message}" +
+                    (i.SuggestedAction != null ? $" — Suggestion: {i.SuggestedAction}" : "")));
+                session.RecordCommandObservation(execution.Run, advisoryMessage);
+                logger.Log($"[ENV_VALIDATE] Advisory issues for {execution.Run}: {advisoryMessage}");
+            }
+        }
 
         var operationDecision = await operationPolicyEngine.EvaluateAsync(
             new OperationPolicyRequest(
@@ -1802,6 +2070,36 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 }
             }
 
+            // Result validation gate - runs on ALL operations
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var resultValidation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observationMessage,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (resultValidation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = resultValidation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {resultValidation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {resultValidation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={resultValidation.Verdict}; reason={reason}");
+
+                    if (resultValidation.Verdict == ValidationVerdict.Mismatch && resultValidation.CorrectedAction is not null)
+                    {
+                        var correctedAction = resultValidation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {resultValidation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observationMessage);
         }
 
@@ -1875,13 +2173,27 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             {
                 content = $"// Script gerado para {session.Request.Prompt}{Environment.NewLine}console.log('Nebula');";
             }
-            else
-            {
-                content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
+else
+                {
+                    content = $"Arquivo de teste criado pelo Nebula.{Environment.NewLine}Prompt: {session.Request.Prompt}{Environment.NewLine}Gerado em {DateTimeOffset.UtcNow:O}";
+                }
             }
-        }
 
-        execution.TargetPath = targetPath;
+            // ENFORCE READ-BEFORE-WRITE: If target file exists and hasn't been read in this session,
+            // block the write and instruct the agent to read it first
+            var fullTargetPath = Path.GetFullPath(targetPath);
+            if (File.Exists(fullTargetPath) && !session.FilesReadThisSession.Contains(fullTargetPath))
+            {
+                var observation =
+                    $"File {targetPath} already exists but has not been read in this session. " +
+                    "You MUST read the file first using FileRead before modifying it. " +
+                    "Use PlannedPatch for modifications to existing files.";
+                session.RecordObservation(execution.Run, observation);
+                session.EmitActionCompleted(execution);
+                return ActionAttemptResult.Retry(observation);
+            }
+
+            execution.TargetPath = targetPath;
         execution.Run = $"write-file \"{targetPath}\"";
         execution.OriginalCommand = action.Command;
         execution.Content = content;
@@ -1891,8 +2203,10 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             ? scriptContentClassifier.Classify(
                 content,
                 action.Language ?? string.Empty,
-                targetPath)
-            : fileWriteSafetyClassifier.Classify(targetPath);
+                targetPath,
+                session.WorkspaceRoot.Root,
+                null)
+            : fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
         var concurrentModification = TryDetectConcurrentModification(
             session,
             targetPath);
@@ -2017,6 +2331,36 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 ? observation
                 : $"{observation}{Environment.NewLine}{verifyResult}";
 
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    finalObservation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(finalObservation);
         }
         catch (Exception ex) when (
@@ -2123,6 +2467,38 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 $"Read {content.Length} character(s) from {targetPath}.";
             session.EmitToolObservation(execution, observation, content);
             session.RecordObservation(execution.Run, observation);
+            session.FilesReadThisSession.Add(Path.GetFullPath(targetPath));
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (Exception ex) when (
@@ -2436,6 +2812,46 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             environmentSnapshot,
             cancellationToken);
 
+        // Result validation gate
+        if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+        {
+            // Need to get the original action for validation - create a minimal action from execution
+            var sandboxAction = new AgentToolAction
+            {
+                Objective = execution.Objective,
+                Command = execution.Run,
+                OperationKind = operationKind,
+                TargetPath = execution.TargetPath,
+                WorkingDirectory = execution.WorkingDirectory
+            };
+
+            var validation = await resultValidator.ValidateAsync(
+                session.Request.Prompt,
+                sandboxAction,
+                observationMessage,
+                execution.WorkingDirectory,
+                cancellationToken);
+
+            if (validation.Verdict != ValidationVerdict.Sufficient)
+            {
+                var reason = validation.Verdict == ValidationVerdict.Mismatch
+                    ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                    : $"Insufficient result: {validation.Reason}";
+
+                logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                {
+                    var correctedAction = validation.CorrectedAction;
+                    correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                    correctedAction.RequiresSafetyReview = true;
+                    return ActionAttemptResult.Retry(reason, correctedAction);
+                }
+
+                return ActionAttemptResult.Retry(reason);
+            }
+        }
+
         if (execution.Executed)
         {
             return ActionAttemptResult.Completed(observationMessage);
@@ -2448,7 +2864,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         AgentActionSession session,
         CancellationToken cancellationToken)
     {
-        if (workspaceMemoryService is null)
+        if (workspaceMemoryService is null && learningFromExecution is null)
         {
             return;
         }
@@ -2475,12 +2891,31 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             }
 
             var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
-            await workspaceMemoryService.RecordWorkingStrategyAsync(
-                session.WorkspaceRoot.Root,
-                stack,
-                previous.ErrorSignature,
-                current.Command,
-                cancellationToken);
+            var workspace = session.WorkspaceRoot.Root;
+
+            if (workspaceMemoryService is not null)
+            {
+                await workspaceMemoryService.RecordWorkingStrategyAsync(
+                    workspace,
+                    stack,
+                    previous.ErrorSignature,
+                    current.Command,
+                    cancellationToken);
+            }
+
+            // Also record as ErrorFix for global learning
+            if (learningFromExecution is not null)
+            {
+                await learningFromExecution.RecordErrorFixAsync(
+                    previous.ErrorSignature,
+                    previous.Command,
+                    current.Command,
+                    stack,
+                    workspace,
+                    session.Request.ConversationId,
+                    Guid.NewGuid(),
+                    cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2525,6 +2960,44 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         string command,
         string baseObservation)
     {
+        // First, try to get error-specific fixes
+        if (errorFixService is not null)
+        {
+            try
+            {
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                    var fixes = await errorFixService.SearchFixesAsync(
+                        lastEntry.ErrorSignature,
+                        command,
+                        stack,
+                        session.WorkspaceRoot.Root);
+                    
+                    if (fixes.Count > 0)
+                    {
+                        var fixBlock = new StringBuilder();
+                        fixBlock.AppendLine();
+                        fixBlock.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+                        foreach (var fix in fixes.Take(5))
+                        {
+                            fixBlock.AppendLine(
+                                $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+                        }
+                        var fixText = fixBlock.ToString().Trim();
+                        var suffix = fixText.Length > 2000 ? fixText[..2000] : fixText;
+                        return $"{baseObservation}\n{suffix}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        // Fallback to general knowledge search
         if (knowledgeSearchService is null)
         {
             return baseObservation;
@@ -3044,12 +3517,41 @@ return (observationMessage, historyEntry);
     {
         try
         {
+            // Get known fixes for this error
+            IReadOnlyList<ErrorFix> knownFixes = [];
+            string errorSignature = string.Empty;
+            
+            var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+            {
+                errorSignature = lastEntry.ErrorSignature;
+                if (errorFixService is not null)
+                {
+                    try
+                    {
+                        var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                        knownFixes = await errorFixService.SearchFixesAsync(
+                            errorSignature,
+                            execution.Run,
+                            stack,
+                            session.WorkspaceRoot.Root,
+                            cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Log($"[AGENT] Error fix retrieval failed in reflection: {ex.Message}");
+                    }
+                }
+            }
+
             var decisionRequest = session.CreateDecisionRequest();
             var reflectionPrompt = CreateErrorReflectionPrompt(
                 execution,
                 decisionRequest.CurrentPlan,
                 session.ExecutionHistory.Entries,
-                runtimeSettings.BuildResponseLanguageInstruction());
+                runtimeSettings.BuildResponseLanguageInstruction(),
+                errorSignature,
+                knownFixes);
             var rawResponse = await llamaClient.GetResponseAsync(
                 reflectionPrompt,
                 progress: null,
@@ -3101,8 +3603,24 @@ return (observationMessage, historyEntry);
         CommandExecution execution,
         string currentPlan,
         IReadOnlyList<ExecutionHistoryEntry> history,
-        string responseLanguageInstruction)
+        string responseLanguageInstruction,
+        string errorSignature,
+        IReadOnlyList<ErrorFix> knownFixes)
     {
+        var fixesSection = string.Empty;
+        if (knownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+            foreach (var fix in knownFixes.Take(5))
+            {
+                fixesLines.AppendLine(
+                    $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesSection = fixesLines.ToString();
+        }
+
         return $$"""
             You are Nebula's ErrorReflectionStep.
 
@@ -3135,6 +3653,10 @@ return (observationMessage, historyEntry);
             Exit code:
             {{execution.ExitCode?.ToString() ?? "unknown"}}
 
+            Error signature:
+            {{errorSignature}}
+            {{fixesSection}}
+
             Current plan:
             {{currentPlan}}
 
@@ -3143,6 +3665,7 @@ return (observationMessage, historyEntry);
 
             Mandatory question:
             Qual hipótese explica esse erro e qual comando diferente deve ser tentado agora?
+            Prefer known fixes above if applicable. The next command MUST be different from the failed command.
             """;
     }
 
@@ -3407,18 +3930,20 @@ return (observationMessage, historyEntry);
         var trimmed = rawTarget.Trim();
         var hadDrive = trimmed.Length >= 2 && char.IsLetter(trimmed[0]) && trimmed[1] == ':';
 
+        // Normalize all separators to forward slash first
         var normalized = rawTarget.Replace('\\', '/').Trim();
 
         if (hadDrive)
         {
-            // Windows absolute path: don't invent Users/Name/... just keep file name.
+            // Windows absolute path (C:/Users/...): strip drive letter, keep only the file name
+            // to avoid inventing Users/Name/... paths on Linux
             normalized = normalized.Substring(2).TrimStart('/', '\\');
             var fileName = Path.GetFileName(normalized);
             return string.IsNullOrWhiteSpace(fileName) ? "teste.txt" : fileName;
         }
 
-        // Se LLM copiou caminho absoluto do host visto em Evidence ("File written: /tmp/nebula-workspace/..."),
-        // remover prefixo até nebula-workspace para não aninhar tmp/nebula-workspace dentro do id.
+        // If LLM copied an absolute host path from Evidence ("File written: /tmp/nebula-workspace/..."),
+        // remove the nebula-workspace prefix to avoid nesting tmp/nebula-workspace inside the conversation id.
         var idx = normalized.IndexOf("nebula-workspace", StringComparison.OrdinalIgnoreCase);
         if (idx >= 0)
         {
@@ -3434,6 +3959,12 @@ return (observationMessage, historyEntry);
             normalized = normalized.TrimStart('/');
         }
 
+        // On Linux/macOS, reject any remaining backslashes or Windows-style paths
+        if (!OperatingSystem.IsWindows())
+        {
+            normalized = normalized.Replace('\\', '/');
+        }
+
         var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Where(p => p != "." && p != ".." && !p.Contains(':'))
             .ToArray();
@@ -3443,7 +3974,7 @@ return (observationMessage, historyEntry);
             return "teste.txt";
         }
 
-        // Remover id curto antigo copiado do histórico (ex: 0862f1aa/arquivo.txt -> arquivo.txt)
+        // Remove old short id copied from history (e.g., 0862f1aa/file.txt -> file.txt)
         if (parts.Length > 1 && parts[0].Length == 8 && parts[0].All(c => Uri.IsHexDigit(c)))
         {
             parts = parts.Skip(1).ToArray();
@@ -3458,6 +3989,22 @@ return (observationMessage, historyEntry);
 
     private static string BuildWorkspaceTargetPath(AgentActionSession session, string? rawTarget)
     {
+        // In test mode, allow writing to exact specified paths without redirection or sanitization
+        if (TestModeDisablePathRedirection)
+        {
+            if (string.IsNullOrWhiteSpace(rawTarget))
+            {
+                return "teste.txt";
+            }
+            // For absolute paths in test mode, use them directly
+            if (Path.IsPathRooted(rawTarget))
+            {
+                return rawTarget;
+            }
+            // For relative paths, just sanitize minimally
+            return rawTarget.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+        }
+
         var sanitized = SanitizeRelativePath(rawTarget);
         var id8 = session.Request.ConversationId.ToString("N")[..8];
         return Path.Combine(session.WorkspaceRoot.Root, id8, sanitized);
@@ -4062,8 +4609,28 @@ return (observationMessage, historyEntry);
         string workspaceContext = "",
         string templateContext = "",
         string strategyContext = "",
-        string userPreferencesContext = "")
+        string userPreferencesContext = "",
+        string previousRunsContext = "")
     {
+        var isWindows = environment.OS == OperatingSystemKind.Windows;
+        var pathExample = isWindows ? "C:/Users/Name/file.txt" : "/home/user/file.txt";
+        var projectPathExample = isWindows ? "C:/Users/Name/MyProject" : "/home/user/MyProject";
+        var listCmd = isWindows ? "Get-ChildItem" : "ls -la";
+        var readCmd = isWindows ? "Get-Content" : "cat";
+        var verifyCmd = isWindows ? "Test-Path" : "test -f";
+        var shellExample = isWindows ? "PowerShell" : "bash";
+        var pathSeparatorNote = isWindows
+            ? "Use forward slashes in all paths (C:/Users/Name/file.py not C:\\Users\\Name\\file.py)."
+            : "Use forward slashes in all paths (/home/user/file.py).";
+
+        var verifyExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Users/Name/hello.py\""
+            : "ls -la /home/user/hello.py";
+
+        var listExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Dev/Backup\" -Force | Select-Object Name, Length, Extension"
+            : "ls -la /home/user/Dev/Backup";
+
         var knowledgeSection = string.IsNullOrWhiteSpace(knowledgeContext)
             ? string.Empty
             : $"""
@@ -4076,8 +4643,15 @@ return (observationMessage, historyEntry);
             ? string.Empty
             : $"""
 
-            Current workspace context:
+            Current workspace context (files in conversation folder workspace/{request.ConversationId.ToString("N")[..8]}/):
             {workspaceContext}
+            """;
+
+        var previousRunsSection = string.IsNullOrWhiteSpace(previousRunsContext)
+            ? string.Empty
+            : $"""
+
+            {previousRunsContext}
             """;
 
         var templatesSection = string.IsNullOrWhiteSpace(templateContext)
@@ -4103,6 +4677,24 @@ return (observationMessage, historyEntry);
             {userPreferencesContext}
             """;
 
+        var errorContextSection = string.Empty;
+        if (request.ErrorContext is not null && request.ErrorContext.KnownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("ERROR CONTEXT FROM PREVIOUS FAILED STEP:");
+            fixesLines.AppendLine($"Error signature: {request.ErrorContext.ErrorSignature}");
+            fixesLines.AppendLine($"Failed command: {request.ErrorContext.FailedCommand}");
+            fixesLines.AppendLine($"Hypothesis: {request.ErrorContext.Hypothesis}");
+            fixesLines.AppendLine("KNOWN FIXES (try these first):");
+            foreach (var fix in request.ErrorContext.KnownFixes.Take(5))
+            {
+                fixesLines.AppendLine($"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesLines.AppendLine("Your next action MUST be different from the failed command. Prefer one of the known fixes above if applicable.");
+            errorContextSection = fixesLines.ToString();
+        }
+
         var dryRunSection = request.DryRun
             ? $"""
 
@@ -4121,24 +4713,33 @@ return (observationMessage, historyEntry);
             Output reasoningSummary and completionMessage in English only.
             - You MUST execute actions to complete the objective. Thinking alone does nothing.
             - Execute ONE action per response using the action field below.
-            - After FileWrite/ScriptContent, run Test-Path or Get-ChildItem to verify.
+            - After FileWrite/ScriptContent, run {{verifyCmd}} to verify.
             - After TerminalCommand, verify the output matches the objective.
             - Set isComplete=true ONLY after at least one action was executed and verified with real output.
             - Never set isComplete=true on the first response - you must execute steps first.
             - Never repeat the exact same failed command.
+            - CRITICAL: When the user says to modify, alter, adjust, change, update, patch, fix, or edit an existing file, you MUST:
+              1. FIRST read the file using FileRead with the exact targetPath
+              2. THEN use PlannedPatch with the same conversation folder (workspace/{{request.ConversationId.ToString("N")[..8]}}/) and relative paths
+              3. NEVER use FileWrite for modifications - it creates duplicate files
+            - ALWAYS use PlannedPatch for any modification to existing files, even single-file changes
+            - When creating new files in the same chat, use the same conversation folder
+            - Do not spawn a new folder unless the user explicitly asks for a new project or different target
             {{knowledgeSection}}
+            {{previousRunsSection}}
             {{workspaceSection}}
             {{templatesSection}}
             {{strategiesSection}}
             {{userPreferencesSection}}
+            {{errorContextSection}}
             {{dryRunSection}}
             Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
             For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
-            For FileWrite (text/markdown/json): provide content, targetPath with actual .txt/.md/.json path.
+            For FileWrite (text/markdown/json - NEW files only): provide content, targetPath with actual .txt/.md/.json path.
             For FileRead: provide targetPath with the absolute file path (command is optional).
             For TerminalCommand/ScriptExecution: provide the command.
             For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
-            For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Prefer PlannedPatch over many separate FileWrite steps.
+            For PlannedPatch (MODIFICATIONS and multi-file changes): provide targetPath as the conversation folder root and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Use PlannedPatch for ALL modifications to existing files.
             For large projects, first create a PROJECT_SPEC.md file (FileWrite) with requirements and architecture BEFORE writing code files.
             For large tasks, decompose them into subtasks in the plan and mark milestone steps as checkpoints (isCheckpoint: true), for example right after scaffolding, after tests build, and after verification succeeds. Each checkpoint must have a deterministic way to confirm it (build, test or file listing).
             Before implementing a large change (new module, architecture decision, major refactor), provide an architectureComparison: an array of at least 2 options (name, pros, cons, recommendation, risk) comparing the viable approaches. Emit it in the same decision that starts the change, before the first implementation action, so the user can review the trade-offs. For small or localized changes, omit it.
@@ -4146,25 +4747,24 @@ return (observationMessage, historyEntry);
             targetPath must be a real absolute path.
             Do NOT use variables like $CurrentDirectory or relative paths.
             Your working directory is: {{environment.WorkingDirectory}}
-            Use forward slashes in all paths (C:/Users/Name/file.py not C:\Users\Name\file.py).
-            Use Windows PowerShell commands (Get-ChildItem, Test-Path, New-Item, etc.).
-            Do not use Unix commands (ls, rm, grep, cat, chmod) on Windows.
+            {{pathSeparatorNote}}
+            {{shellExample}} commands are available ({{listCmd}}, {{readCmd}}, {{verifyCmd}}, etc.).
+            {{pathSeparatorNote}}
 
             INSPECTING EXISTING CODE OR BACKUPS (read-only analysis):
             - There is NO special "analyze"/"inspect" tool. Use real commands only.
-            - To list a directory (including outside the workspace, e.g. D:/Dev/Backup): use a TerminalCommand like:
-              Get-ChildItem -LiteralPath "D:/Dev/Backup" -Force | Select-Object Name, Length, Extension
-              or Get-ChildItem -LiteralPath "D:/Dev/Backup" -Recurse -Force -File | Select-Object FullName
+            - To list a directory (including outside the workspace): use a TerminalCommand like:
+              {{listExample}}
+              or {{listCmd}} -Recurse -Force -File | Select-Object FullName
             - To read a file: prefer operationKind FileRead with targetPath set to the absolute file path (works inside and outside the workspace; sensitive files like .env, keys and credentials remain blocked).
-            - Read-only inspection never requires approval unless the target is a sensitive file or an operating system root (Windows, Program Files).
-            - Never invent tool names: if the previous attempt used a command that does not exist, retry with Get-ChildItem/Get-Content or FileRead instead.
+            - Read-only inspection never requires approval unless the target is a sensitive file or an operating system root.
+            - Never invent tool names: if the previous attempt used a command that does not exist, retry with {{listCmd}}/{{readCmd}} or FileRead instead.
 
             IMPORTANT: In JSON, escape every backslash as double backslash.
-            For example, path C:\Users\Name is written as "C:\\Users\\Name" in JSON.
 
             EXAMPLES - follow these patterns exactly:
 
-            Example 1 (create a file, then verify):
+            Example 1 (create a new file, then verify):
             {
               "reasoningSummary": "Creating hello.py and verifying it exists.",
               "isComplete": false,
@@ -4174,7 +4774,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "FileWrite",
                 "command": "",
                 "content": "print('hello world')",
-                "targetPath": "C:/Users/Name/hello.py",
+                "targetPath": "{{pathExample}}",
                 "language": "python",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4192,7 +4792,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "ProjectScaffold",
                 "command": "",
                 "templateId": "dotnet-console",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{projectPathExample}}",
                 "language": "",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4204,11 +4804,11 @@ return (observationMessage, historyEntry);
             {
               "reasoningSummary": "hello.py exists and prints hello world.",
               "isComplete": true,
-              "completionMessage": "Created hello.py and verified it with Get-ChildItem.",
+              "completionMessage": "Created hello.py and verified it with {{verifyCmd}}.",
               "action": null
             }
 
-            Example 4 (planned multi-file patch):
+            Example 4 (planned multi-file patch for modifications):
             {
               "reasoningSummary": "Applying a planned patch that updates the app and its docs.",
               "isComplete": false,
@@ -4217,7 +4817,7 @@ return (observationMessage, historyEntry);
                 "objective": "Update the app and its docs",
                 "operationKind": "PlannedPatch",
                 "command": "",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{projectPathExample}}",
                 "plannedFiles": [
                   {
                     "path": "src/App.cs",
@@ -4233,6 +4833,50 @@ return (observationMessage, historyEntry);
                 "retryJustification": "",
                 "requiresSafetyReview": true
               }
+            }
+
+            Example 5 (modify an existing file - read first, then patch):
+            {
+              "reasoningSummary": "Reading existing hello.py to modify it with a new feature.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Read hello.py before modifying",
+                "operationKind": "FileRead",
+                "command": "",
+                "targetPath": "{{pathExample}}",
+                "language": "",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+            {
+              "reasoningSummary": "Modifying hello.py to add a greeting function using PlannedPatch.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Add greeting function to hello.py",
+                "operationKind": "PlannedPatch",
+                "command": "",
+                "targetPath": "{{projectPathExample}}",
+                "plannedFiles": [
+                  {
+                    "path": "hello.py",
+                    "content": "def greet(name):\n    print(f'Hello, {name}!')\n\ngreet('world')"
+                  }
+                ],
+                "language": "python",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": true
+              }
+            }
+            {
+              "reasoningSummary": "Verifying the modified hello.py works correctly.",
+              "isComplete": true,
+              "completionMessage": "Modified hello.py and verified it runs with the new greeting function.",
+              "action": null
             }
 
             Use this format:
@@ -4257,6 +4901,8 @@ return (observationMessage, historyEntry);
             Set action to null when isComplete: true.
 
             Objective: {{request.Objective}}
+            {{previousRunsSection}}
+            {{workspaceSection}}
             Chat history:
             {{request.ChatHistoryContext}}
             Plan and progress:
@@ -4285,12 +4931,13 @@ return (observationMessage, historyEntry);
                 if (conversationId != Guid.Empty && Directory.Exists(conversationFolderForEmpty))
                 {
                     var files = Directory.GetFiles(conversationFolderForEmpty, "*", SearchOption.AllDirectories)
-                        .Select(f => Path.GetRelativePath(conversationFolderForEmpty, f))
+                        .Select(f => new { Relative = Path.GetRelativePath(conversationFolderForEmpty, f), Absolute = f })
                         .Take(30)
                         .ToList();
                     if (files.Count > 0)
                     {
-                        return $"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{string.Join(Environment.NewLine, files.Select(f => $"- {f}"))}{Environment.NewLine}Always modify existing files in this folder with PlannedPatch when the user says 'modificar', 'alterar' ou 'mudar'.";
+                        var fileList = string.Join(Environment.NewLine, files.Select(f => $"- {f.Relative} (absolute: {f.Absolute})"));
+                        return $"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{fileList}{Environment.NewLine}Always modify existing files in this folder with PlannedPatch when the user says 'modificar', 'alterar', 'ajustar', 'mudar', 'atualizar', 'patch', 'fix', or 'editar'.";
                     }
                 }
             }
@@ -4329,12 +4976,13 @@ return (observationMessage, historyEntry);
                             else
                             {
                                 var files = Directory.GetFiles(conversationFolder, "*", SearchOption.AllDirectories)
-                                    .Select(f => Path.GetRelativePath(conversationFolder, f))
+                                    .Select(f => new { Relative = Path.GetRelativePath(conversationFolder, f), Absolute = f })
                                     .Take(30)
                                     .ToList();
                                 if (files.Count > 0)
                                 {
-                                    sections.Add($"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{string.Join(Environment.NewLine, files.Select(f => $"- {f}"))}");
+                                    var fileList = string.Join(Environment.NewLine, files.Select(f => $"- {f.Relative} (absolute: {f.Absolute})"));
+                                    sections.Add($"Files in current conversation folder (workspace/{conversationId.ToString("N")[..8]}/):{Environment.NewLine}{fileList}");
                                 }
                             }
                             // Instrução explícita para modificações
@@ -4627,16 +5275,23 @@ return (observationMessage, historyEntry);
     private sealed record ActionAttemptResult(
         string Observation,
         bool RequiresRetry,
-        ConversationTurn? TerminalTurn)
+        ConversationTurn? TerminalTurn,
+        AgentToolAction? RecoveryAction = null)
     {
         public static ActionAttemptResult Completed(string observation)
         {
             return new ActionAttemptResult(observation, RequiresRetry: false, TerminalTurn: null);
         }
 
-        public static ActionAttemptResult Retry(string observation)
+        public static ActionAttemptResult Retry(
+            string observation,
+            AgentToolAction? recoveryAction = null)
         {
-            return new ActionAttemptResult(observation, RequiresRetry: true, TerminalTurn: null);
+            return new ActionAttemptResult(
+                observation,
+                RequiresRetry: true,
+                TerminalTurn: null,
+                recoveryAction);
         }
 
         public static ActionAttemptResult Terminal(ConversationTurn turn)

@@ -45,6 +45,12 @@ public sealed class ReferenceWorkspaceTest
     [Fact]
     public void resolve_must_create_fresh_empty_workspace_when_not_specified()
     {
+        // Clean up any existing default workspace to ensure test isolation
+        var defaultWorkspaceRoot = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            ReferenceWorkspace.DefaultWorkspaceFolderName);
+        TryDelete(defaultWorkspaceRoot);
+
         var workspace = ReferenceWorkspace.Resolve(null);
 
         Assert.True(Directory.Exists(workspace.Root));

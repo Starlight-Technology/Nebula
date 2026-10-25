@@ -365,6 +365,23 @@ pre {
     gap: 1rem;
 }
 
+.nebula-chat-main {
+    flex: 1;
+    min-height: 0;
+}
+
+.nebula-transcript {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    max-height: calc(100vh - 28rem);
+}
+
+/* .nebula-chat-main{
+    overflow-y: auto;
+    max-height: 50%;
+} */
+
 .nebula-model-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

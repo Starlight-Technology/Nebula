@@ -23,6 +23,8 @@ using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
 using Nebula.Core.Learning;
 using Nebula.Core.Memory;
+using Microsoft.AspNetCore.Components.Server;
+
 using Nebula.Core.MachineLearning;
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
@@ -42,7 +44,23 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
-builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
+builder.Services.AddServerSideBlazor(options =>
+{
+    options.DisconnectedCircuitMaxRetained = 100;
+    options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(10);
+});
+
+builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(options =>
+{
+    options.DetailedErrors = true;
+    options.JSInteropDefaultCallTimeout = TimeSpan.FromMinutes(5);
+});
+
+builder.Services.AddSingleton<ILlamaClient>(provider =>
+{
+    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
+    return new LlamaClient(timeoutSeconds: settings.LlmTimeoutSeconds);
+});
 builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
 builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Web app"));
 builder.Services.AddSingleton<IOllamaUpdateService, OllamaUpdateService>();
@@ -244,6 +262,9 @@ builder.Services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
 builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
 builder.Services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
 builder.Services.AddScoped<IOutputVerificationService, OutputVerificationService>();
+builder.Services.AddScoped<IErrorFixService, ErrorFixService>();
+builder.Services.AddScoped<IEnvironmentValidator, EnvironmentValidator>();
+builder.Services.AddScoped<IResultValidator, ResultValidator>();
 builder.Services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
 builder.Services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
 builder.Services.AddScoped<ITranslationService, TranslationService>();
@@ -299,7 +320,10 @@ builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner
     postTaskLearning: provider.GetService<IPostTaskLearningService>(),
     learningFromExecution: provider.GetService<ILearningFromExecutionService>(),
     knowledgeQueryService: provider.GetService<IKnowledgeQueryService>(),
-    learningEngine: provider.GetService<ILearningEngine>()));
+    learningEngine: provider.GetService<ILearningEngine>(),
+    errorFixService: provider.GetService<IErrorFixService>(),
+    environmentValidator: provider.GetService<IEnvironmentValidator>(),
+    resultValidator: provider.GetService<IResultValidator>()));
 builder.Services.AddScoped<IManager>(provider => new Manager(
     provider.GetRequiredService<ILlamaClient>(),
     provider.GetRequiredService<IShellExecutor>(),

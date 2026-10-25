@@ -278,4 +278,93 @@ public sealed class LearningFromExecutionService(
     private static string Truncate(string? value, int maxLength) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty :
         value.Length <= maxLength ? value : value[..maxLength] + "...";
+
+    public async Task RecordErrorFixAsync(
+        string errorSignature,
+        string failedCommand,
+        string workingFix,
+        string stack,
+        string workspace,
+        Guid sessionId,
+        Guid stepId,
+        CancellationToken cancellationToken = default)
+    {
+        var topic = $"Error fix: {errorSignature}";
+        var content = $"Error Signature: {errorSignature}\nFailed Command: {failedCommand}\nWorking Fix: {workingFix}\nStack: {stack}\nWorkspace: {workspace}";
+        var hash = KnowledgeHash.Create(
+            KnowledgeDomain.General,
+            topic,
+            content,
+            content);
+
+        var existing = await FindByHashAsync(hash, cancellationToken);
+        if (existing is not null)
+        {
+            var item = existing.Item;
+            item.LastSeenAt = DateTimeOffset.UtcNow;
+            item.ObservationCount++;
+            item.VerificationScore = Math.Min(1.0, item.VerificationScore + 0.05);
+            item.UpdatedAt = DateTimeOffset.UtcNow;
+            item.FinalScore = scoreEngine.Calculate(item);
+
+            var updateExperiment = new KnowledgeExperiment
+            {
+                KnowledgeItemId = item.Id,
+                VerificationKind = VerificationKind.SafeExecution,
+                CommandExecuted = workingFix,
+                ResolvedCommand = workingFix,
+                ExitCode = 0,
+                StdOut = $"Fix applied for {errorSignature}",
+                Success = true,
+                EvidenceHash = hash
+            };
+
+            await knowledgeStore.SaveAsync(item, [], [], updateExperiment, cancellationToken);
+            logger.Log($"[LEARN] Updated error fix: {errorSignature} (observations={item.ObservationCount})");
+            return;
+        }
+
+        var newItem = new KnowledgeItem
+        {
+            Domain = KnowledgeDomain.General,
+            Kind = KnowledgeItemKind.ErrorFix,
+            Topic = topic,
+            Title = topic,
+            Content = content,
+            Summary = $"Fix for error '{errorSignature}': {workingFix}",
+            Tags = "error-fix,auto-learned",
+            NormalizedCommand = workingFix,
+            SourceUrl = $"session://{sessionId}/step-{stepId}",
+            SourceType = LearningSourceType.ExistingKnowledgeBase,
+            SourceName = "LearningFromExecutionService",
+            RiskLevel = KnowledgeRiskLevel.Safe,
+            ConfidenceScore = 0.85,
+            SourceScore = 0.90,
+            ClassificationConfidence = 0.85,
+            SafetyScore = 1.0,
+            VerificationScore = 0.80,
+            Hash = hash,
+            IsExecutableAdvice = true,
+            IsDangerousInstruction = false,
+            IsValidated = true,
+            ValidationNotes = "Learned from agent execution: failed command followed by working fix.",
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        newItem.FinalScore = scoreEngine.Calculate(newItem);
+
+        var experiment = new KnowledgeExperiment
+        {
+            KnowledgeItemId = newItem.Id,
+            VerificationKind = VerificationKind.SafeExecution,
+            CommandExecuted = workingFix,
+            ResolvedCommand = workingFix,
+            ExitCode = 0,
+            StdOut = $"Fix for {errorSignature}: {workingFix}",
+            Success = true,
+            EvidenceHash = hash
+        };
+
+        await knowledgeStore.SaveAsync(newItem, [], [], experiment, cancellationToken);
+        logger.Log($"[LEARN] Recorded error fix: {errorSignature} → {workingFix} (hash={hash[..8]}...)");
+    }
 }

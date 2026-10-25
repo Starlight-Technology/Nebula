@@ -140,7 +140,11 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             ? sandboxCpuLimit
             : 0
 });
-services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
+services.AddSingleton<ILlamaClient>(provider =>
+{
+    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
+    return new LlamaClient(timeoutSeconds: settings.LlmTimeoutSeconds);
+});
 services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddScoped<ICommandSandbox>(provider =>
     new DockerCommandSandbox(
@@ -249,6 +253,9 @@ services.AddScoped<IFetchedPageCache, PostgresFetchedPageCache>();
 services.AddScoped<ILearningEngine, LearningEngine>();
 services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
 services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
+services.AddScoped<IErrorFixService, ErrorFixService>();
+services.AddScoped<IEnvironmentValidator, EnvironmentValidator>();
+services.AddScoped<IResultValidator, ResultValidator>();
 services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
 services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
 services.AddScoped<IProjectTemplateCatalog, ProjectTemplateCatalog>();

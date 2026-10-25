@@ -34,4 +34,14 @@ public interface ILearningFromExecutionService
         Guid sessionId,
         Guid stepId,
         CancellationToken cancellationToken = default);
+
+    Task RecordErrorFixAsync(
+        string errorSignature,
+        string failedCommand,
+        string workingFix,
+        string stack,
+        string workspace,
+        Guid sessionId,
+        Guid stepId,
+        CancellationToken cancellationToken = default);
 }

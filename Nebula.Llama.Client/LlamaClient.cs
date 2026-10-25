@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Nebula.Core.Configuration;
+
 namespace Nebula.Llama.Client;
 
 public class LlamaClient : ILlamaClient
@@ -21,11 +23,12 @@ public class LlamaClient : ILlamaClient
     private string selectedModel;
     private bool modelNotFoundFallbackAttempted;
 
-    public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null)
+    public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null, int timeoutSeconds = 0)
     {
+        var timeout = timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : DefaultRequestTimeout;
         this.httpClient = httpClient ?? new HttpClient
         {
-            Timeout = DefaultRequestTimeout
+            Timeout = timeout
         };
         LlamaUrl = llamaUrl
             ?? Environment.GetEnvironmentVariable("LLAMA_URL")

@@ -76,4 +76,8 @@ public interface IAgentRunStore
     Task<IReadOnlyList<AgentRun>> GetUnfinishedRunsAsync(
         Guid conversationId,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
 }
