@@ -100,6 +100,19 @@ A central em `Nebula.App` mostra:
 - troca de modelo na sessao
 - resposta, raciocinio e passos executados
 - perfis de aceleracao disponiveis
+- CPU, memoria, disco e GPU do host no header e na pagina Runtime
+
+## Telemetria do host
+
+O servico `nebula-telemetry` le CPU, memoria, discos e GPUs diretamente do host
+(`/proc`, `/sys` e raiz montada somente leitura) e expoe `/snapshot` e `/health`
+na rede interna do Compose. O container `nebula-web` consome esse sidecar por
+`NEBULA_TELEMETRY_URL` e, se ele nao estiver disponivel, tenta a leitura local.
+
+O sidecar nao publica porta e nao recebe o socket do Docker/Podman por padrao; o
+acesso ao socket e opcional e serve apenas para estatisticas de containers. Para
+GPU NVIDIA, use o override `docker-compose.nvidia.yml`; AMD/Intel exigem os
+devices correspondentes e validacao no host.
 
 ## Workspace por conversa
 

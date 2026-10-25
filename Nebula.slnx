@@ -27,4 +27,5 @@
   <Project Path="Nebula.Postgres.Context/Nebula.Postgres.Context.csproj" />
   <Project Path="Nebula.Runner/Nebula.Runner.csproj" />
   <Project Path="Nebula.Services/Nebula.Services.csproj" />
+  <Project Path="Nebula.Telemetry/Nebula.Telemetry.csproj" />
 </Solution>

@@ -48,7 +48,8 @@
 }
 
 @media (max-width: 1160px) {
-    ::deep .nebula-header-metric--gpu {
+    ::deep .nebula-header-metric--gpu,
+    ::deep .nebula-header-metric--disk {
         display: none;
     }
 }

@@ -75,6 +75,12 @@
                              Color="@GetMetricColor(runtimeTelemetry.Gpu)" />
             </span>
 
+            <span title="@runtimeTelemetry.Disk.DetailValue" class="nebula-header-metric nebula-header-metric--disk">
+                <CoronaBadge Content="@($"DISCO {runtimeTelemetry.Disk.ShortValue}")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetMetricColor(runtimeTelemetry.Disk)" />
+            </span>
+
             <CoronaButton Size="CoronaComponentSize.Small"
                           Variant="CoronaButtonVariant.Outlined"
                           Color="CoronaColorSemantic.Neutral"
