@@ -9,7 +9,7 @@ public class LlamaClient : ILlamaClient
 {
     private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
     private const string DefaultModel = "deepseek-r1:7b";
-    private static readonly TimeSpan DefaultRequestTimeout = Timeout.InfiniteTimeSpan;
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(300);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

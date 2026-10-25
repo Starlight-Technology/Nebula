@@ -4,6 +4,8 @@ namespace Nebula.Services.Memory;
 
 public sealed class InMemoryWorkspaceMemoryStore : IWorkspaceMemoryStore
 {
+    private const int MaxEntries = 2000;
+
     private readonly List<WorkspaceMemoryEntry> entries = [];
     private readonly object sync = new();
 
@@ -14,7 +16,39 @@ public sealed class InMemoryWorkspaceMemoryStore : IWorkspaceMemoryStore
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            entries.Add(entry);
+            var index = entries.FindIndex(value => value.Matches(entry));
+            if (index < 0)
+            {
+                entries.Add(entry);
+            }
+            else
+            {
+                // Upsert por {workspace, kind, key} (mesma semantica do
+                // PostgresWorkspaceMemoryStore): mantem o Id original e
+                // atualiza valor, evidencia e data.
+                var existing = entries[index];
+                entries[index] = existing with
+                {
+                    Value = entry.Value,
+                    Evidence = entry.Evidence,
+                    CreatedAt = entry.CreatedAt
+                };
+            }
+
+            // Teto anti-crescimento ilimitado: remove os mais antigos.
+            while (entries.Count > MaxEntries)
+            {
+                var oldest = 0;
+                for (var i = 1; i < entries.Count; i++)
+                {
+                    if (entries[i].CreatedAt < entries[oldest].CreatedAt)
+                    {
+                        oldest = i;
+                    }
+                }
+
+                entries.RemoveAt(oldest);
+            }
         }
 
         return Task.CompletedTask;

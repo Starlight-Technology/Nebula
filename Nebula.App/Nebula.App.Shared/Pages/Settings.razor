@@ -265,6 +265,35 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Provider e usuario</h3>
+                        <p>Define o modo local-first e a identidade usada na memoria do usuario.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Provider mode</span>
+                        <select @bind="WorkspaceState.QuickSettings.ProviderMode"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            <option value="@ProviderMode.LocalOnly">Local only</option>
+                            <option value="@ProviderMode.LocalPreferred">Local preferred</option>
+                            <option value="@ProviderMode.RemoteAllowed">Remote allowed</option>
+                            <option value="@ProviderMode.RemoteOnly">Remote only</option>
+                        </select>
+                        <small>Define o preferencial local-first e a permissao de fallback remoto.</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>User ID</span>
+                        <input @bind="WorkspaceState.QuickSettings.UserId"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               placeholder="user id (opcional)" />
+                        <small>Usado para user_memory e workspace_memory.</small>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>Idioma das respostas</h3>
                         <p>Esta preferencia entra no prompt de sistema e nos prompts internos de agente e aprendizado.</p>
                     </div>

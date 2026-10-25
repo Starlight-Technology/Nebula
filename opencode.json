@@ -1,0 +1,85 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/muse-spark-1.2-contributor-free",
+  "small_model": "opencode/muse-spark-1.2-contributor-free",
+  "default_agent": "build",
+  "username": "nebula-dev",
+  "autoupdate": "notify",
+  "share": "manual",
+  "instructions": ["AGENTS.md", "plan.md", "README.md"],
+  "references": {
+    "docs": {
+      "path": "./docs",
+      "description": "Use for Nebula product behavior and AGENTS.md conventions"
+    },
+    "corona": {
+      "path": "./Corona",
+      "description": "Use for Corona design system (submodule) implementation details"
+    }
+  },
+  "agent": {
+    "nebula-safety": {
+      "description": "Reviews Nebula safety layers (deterministic classifier, sandbox, SSRF) for bypasses. Use when touching Safety, ShellExecutor, CommandSandbox, or FileWrite.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "write": "deny"
+      }
+    },
+    "nebula-arch": {
+      "description": "Reviews Nebula architecture (Agent loop, 3 roots, Postgres, orchestration) before large changes.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "ask",
+        "bash": "ask"
+      }
+    }
+  },
+  "command": {
+    "audit-nebula": {
+      "description": "Run Nebula safety and architecture audit (mirrors /tmp manual tests)",
+      "template": "Faça uma auditoria do Nebula verificando Safety, Persistência, LLM e Docker. Use toolbox dotnet-dev se disponível. $ARGUMENTS"
+    },
+    "test-nebula": {
+      "description": "Run Nebula tests via toolbox (bypasses overlay restrictions)",
+      "template": "toolbox run -c dotnet-dev -- bash -c 'dotnet test Nebula.Agent.Test --no-build -v minimal && dotnet test Nebula.App.Test --no-build -v minimal' $ARGUMENTS"
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "dotnet build*": "allow",
+      "dotnet test*": "allow",
+      "dotnet restore*": "allow",
+      "toolbox run*": "allow",
+      "rm -rf /tmp/*": "ask",
+      "rm -rf /*": "deny",
+      "curl *| sh": "deny",
+      "wget *| sh": "deny",
+      "*": "ask"
+    },
+    "external_directory": {
+      "/tmp/**": "allow",
+      "~/.config/**": "allow",
+      "*": "ask"
+    }
+  },
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": false
+    }
+  },
+  "experimental": {
+    "mcp_timeout": 30000
+  },
+  "tool_output": {
+    "max_lines": 300,
+    "max_bytes": 16384
+  }
+}

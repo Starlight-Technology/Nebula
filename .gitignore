@@ -364,8 +364,12 @@ FodyWeavers.xsd
 # Locally trained command safety models
 models/*.zip
 
-# Local environment (keep .env.example tracked)
+# Nebula local secrets and build outputs
+/.env
 .env
-
-# Local build/test output
 *.out
+*.binlog
+.codex-temp/
+%USERPROFILE%/
+hello.py
+New\ Text\ Document.txt

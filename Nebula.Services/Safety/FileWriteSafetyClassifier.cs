@@ -5,7 +5,7 @@ namespace Nebula.Services.Safety;
 public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
 {
     private static readonly string[] AllowedExtensions =
-        [".txt", ".md", ".json", ".cs", ".py"];
+        [".txt", ".md", ".json", ".cs", ".py", ".html", ".htm", ".css", ".js"];
 
     private static readonly string[] ApprovalExtensions =
         [".ps1", ".bat", ".cmd"];
@@ -42,7 +42,7 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
 
         var fullPath = ResolvePath(targetPath);
         if (SensitiveSegments.Any(segment =>
-            Path.GetFileName(fullPath).Contains(
+            fullPath.Contains(
                 segment,
                 StringComparison.OrdinalIgnoreCase)))
         {
@@ -117,15 +117,8 @@ public sealed class FileWriteSafetyClassifier : IFileWriteSafetyClassifier
             : path.Replace('/', '\\');
     }
 
-    private static bool IsUnder(string candidate, string root)
-    {
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith(
-                   $"..{Path.DirectorySeparatorChar}",
-                   StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative);
-    }
+    private static bool IsUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static CommandClassification Result(
         string text,

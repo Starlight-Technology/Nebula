@@ -59,6 +59,23 @@ public sealed class AgentActionRunRequest
     /// </summary>
     public IReadOnlyCollection<string>? ConversationApprovedCommands { get; set; }
 
+    /// <summary>
+    /// Provider mode selected for this invocation. The runtime should prefer
+    /// local execution unless the user explicitly allows remote behavior.
+    /// </summary>
+    public Nebula.Core.Configuration.ProviderMode ProviderMode { get; set; } =
+        Nebula.Core.Configuration.ProviderMode.LocalPreferred;
+
+    /// <summary>
+    /// Agent selected by the provider policy for the current task. This is the
+    /// effective runtime choice used to keep local-first behaviour as default.
+    /// </summary>
+    public string? SelectedAgentId { get; set; }
+
+    public string? SelectedAgentName { get; set; }
+
+    public string? SelectedAgentDescription { get; set; }
+
     [Obsolete("Use MaxRetriesPerStep instead.")]
     public int? MaxRetries { get; set; }
 }

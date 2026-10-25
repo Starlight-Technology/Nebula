@@ -284,13 +284,8 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
                IsUnder(candidate, controlledTempRoot);
     }
 
-    private static bool IsUnder(string candidate, string root)
-    {
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".."
-            && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-            && !Path.IsPathRooted(relative);
-    }
+    private static bool IsUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static bool TryGetWriteTarget(string command, out string target)
     {
@@ -346,7 +341,7 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
     [GeneratedRegex(@"(?:ignore|bypass|disable|evade|circumvent|burle|ignore|desative).{0,30}(?:policy|safety|seguran[cç]a|prote[cç][aã]o)|(?:sem|without).{0,15}(?:approval|confirma[cç][aã]o)", RegexOptions.IgnoreCase)]
     private static partial Regex PolicyBypassRegex();
 
-    [GeneratedRegex(@"(?:curl|wget|invoke-webrequest|iwr|invoke-restmethod)[^\r\n|;&]*https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|iex|invoke-expression)\b|https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|iex|invoke-expression)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:curl|wget|invoke-webrequest|iwr|invoke-restmethod)[^\r\n|;&]*https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|python|python3|py|perl|ruby|node|php|iex|invoke-expression)\b|https?://[^\r\n|;&]*\|\s*(?:sh|bash|zsh|fish|powershell|pwsh|python|python3|py|perl|ruby|node|php|iex|invoke-expression)\b", RegexOptions.IgnoreCase)]
     private static partial Regex RemoteScriptExecutionRegex();
 
     [GeneratedRegex(@"(?:rm\s+-[^\r\n]*r[^\r\n]*f[^\r\n]*(?:/\s*$|~|\$home|/home)|del\s+/s\s+/q\s+[a-z]:\\(?:users?|documents and settings|windows|system32)?(?:\\|\s|$)|remove-item[^\r\n]*-recurse[^\r\n]*-force[^\r\n]*[a-z]:\\(?:users?|documents and settings|windows|system32)?(?:\\|\s|$)|(?:rm|del|remove-item)[^\r\n]*(?:/etc|/usr|/var|windows\\system32|home inteiro|entire home))", RegexOptions.IgnoreCase)]
@@ -361,10 +356,10 @@ public sealed partial class DeterministicCommandClassifier : ICommandClassifier
     [GeneratedRegex(@"^(?:pip(?:3)?\s+install|python\s+-m\s+pip\s+install|npm\s+(?:i|install)|yarn\s+add|pnpm\s+(?:add|install)|dotnet\s+add\s+.+\s+package|apt(?:-get)?\s+install|brew\s+install)\b", RegexOptions.IgnoreCase)]
     private static partial Regex PackageInstallRegex();
 
-    [GeneratedRegex(@"(?:^|\s|[;&|])(?:curl|wget|Invoke-WebRequest|iwr|Invoke-RestMethod|scp|ftp|ssh)\b|https?://|acesso\s+(?:a|à)\s+internet|access\s+the\s+internet", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:^|\s|[;&|])(?:curl|wget|Invoke-WebRequest|iwr|Invoke-RestMethod|scp|ftp|ssh|nc|ncat|netcat|telnet|socat)\b|https?://|acesso\s+(?:a|à)\s+internet|access\s+the\s+internet", RegexOptions.IgnoreCase)]
     private static partial Regex NetworkRegex();
 
-    [GeneratedRegex(@"(?:^|\s|[;&|])sudo\b|(?:^|\s|[;&|])(?:chmod|chown)\b|runas\b|start-process[^\r\n]*-verb\s+runas", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:^|\s|[;&|])sudo\b|(?:^|\s|[;&|])(?:chmod|chown|su|doas|pkexec|gsudo|setcap)\b|runas\b|start-process[^\r\n]*-verb\s+runas", RegexOptions.IgnoreCase)]
     private static partial Regex PrivilegedRegex();
 
     [GeneratedRegex(@"\b(?:nohup|disown|systemctl\s+enable|schtasks|crontab|new-service|sc\.exe\s+create)\b|(?:^|\s)&\s*$", RegexOptions.IgnoreCase)]

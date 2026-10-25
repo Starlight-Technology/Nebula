@@ -5,9 +5,14 @@ using Microsoft.EntityFrameworkCore;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Background;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Core.Agent;
+using Nebula.Core.Background;
 using Nebula.Core.Commands;
 using Nebula.Core.Interactions;
 using Nebula.Core.Learning;
@@ -95,6 +100,27 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
     AutoApproveCategories = ParseCategoryList(
         configuration["Nebula:AutoApproveCategories"]),
     WorkspaceRoot = configuration["Nebula:WorkspaceRoot"] ?? string.Empty,
+    UserId = configuration["Nebula:UserId"] ?? string.Empty,
+    AutonomyProfile =
+        Enum.TryParse<AutonomyProfile>(
+            configuration["Nebula:AutonomyProfile"],
+            ignoreCase: true,
+            out var autonomyProfile)
+            ? autonomyProfile
+            : AutonomyProfile.Standard,
+    ProviderMode =
+        Enum.TryParse<ProviderMode>(
+            configuration["Nebula:ProviderMode"],
+            ignoreCase: true,
+            out var providerMode)
+            ? providerMode
+            : NebulaRuntimeSettings.GetDefaultProviderModeForProfile(
+                Enum.TryParse<AutonomyProfile>(
+                    configuration["Nebula:AutonomyProfile"],
+                    ignoreCase: true,
+                    out var profile)
+                    ? profile
+                    : AutonomyProfile.Standard),
     SandboxMode =
         Enum.TryParse<SandboxMode>(
             configuration["Nebula:Sandbox:Mode"],
@@ -172,6 +198,8 @@ services.AddScoped<IKnowledgeExtractor>(provider =>
         fallbackExtractor: new KnowledgeExtractor(),
         log: provider.GetRequiredService<ILogger>().Log));
 services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
+services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+services.AddHostedService<BackgroundTaskHostedService>();
 services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
 services.AddScoped<NebulaContextBuilder>();
 services.AddScoped<IConversationContextService, ConversationContextService>();
@@ -185,7 +213,8 @@ try
     mongoSettings.ConnectTimeout = TimeSpan.FromSeconds(3);
     var testClient = new MongoClient(mongoSettings);
     var testDb = testClient.GetDatabase(mongoDb);
-    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token).GetAwaiter().GetResult();
 
     services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
     services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
@@ -194,6 +223,11 @@ try
 catch (MongoAuthenticationException ex)
 {
     Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
+    services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("Warning: MongoDB ping timed out after 2s. Falling back to NoOpPromptRequestRepository.");
     services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 catch (Exception ex)
@@ -235,7 +269,16 @@ services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
 services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-services.AddScoped<IPolicySimulator, PolicySimulator>();
+services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+    provider.GetRequiredService<ICommandIntentParser>(),
+    provider.GetRequiredService<ICommandResolver>(),
+    provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    provider.GetRequiredService<IOperationKindDetector>(),
+    provider.GetRequiredService<ICommandPolicyEngine>(),
+    provider.GetRequiredService<IOperationPolicyEngine>(),
+    provider.GetRequiredService<ICommandApprovalService>(),
+    provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    provider.GetRequiredService<NebulaRuntimeSettings>()));
 services.AddScoped<IGitDiffService, GitDiffService>();
 services.AddScoped<Nebula.Core.Agent.IGitService, Nebula.Agent.Infrastructure.GitService>();
 services.AddScoped<Nebula.Core.Agent.ITestRunnerService, Nebula.Agent.Infrastructure.TestRunnerService>();

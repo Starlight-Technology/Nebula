@@ -396,6 +396,9 @@ public sealed class NebulaWorkspaceState(
                 ResponseLanguageCode = language.Code,
                 ResponseLanguageName = language.Name,
                 WorkspaceRoot = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty,
+                UserId = QuickSettings.UserId?.Trim() ?? string.Empty,
+                AutonomyProfile = ParseAutonomyProfile(QuickSettings.AutonomyProfile),
+                ProviderMode = QuickSettings.ProviderMode,
                 AutoApproveCommands = QuickSettings.AutoApproveCommands
             };
 
@@ -482,6 +485,8 @@ public sealed class NebulaWorkspaceState(
             return;
         }
 
+        await EnsureSettingsLoadedAsync();
+
         var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
@@ -521,6 +526,8 @@ public sealed class NebulaWorkspaceState(
         {
             return;
         }
+
+        await EnsureSettingsLoadedAsync();
 
         var turn = new ConversationEntryViewModel
         {
@@ -1061,7 +1068,9 @@ public sealed class NebulaWorkspaceState(
         return run.FinishedAt is null &&
                run.Status != nameof(ActionExecutionStatus.Completed) &&
                run.Status != nameof(ActionExecutionStatus.Failed) &&
-               run.Status != nameof(ActionExecutionStatus.Unsafe);
+               run.Status != nameof(ActionExecutionStatus.Unsafe) &&
+               run.Status != nameof(ActionExecutionStatus.Blocked) &&
+               run.Status != nameof(ActionExecutionStatus.Cancelled);
     }
 
     public ConversationEntryViewModel? ActiveMissionTurn
@@ -1703,12 +1712,47 @@ public sealed class NebulaWorkspaceState(
 
     public static IReadOnlyList<ActionExecutionEvent> GetActionEvents(ConversationEntryViewModel turn)
     {
-        return turn.Result?.ActionEvents ?? turn.StreamingActionEvents;
+        if (turn.Result is null)
+        {
+            return turn.StreamingActionEvents;
+        }
+
+        // While background is still streaming (Result is just Started placeholder), show live streaming events.
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingActionEvents.Count > 0)
+        {
+            if (turn.Result.ActionEvents.Count == 0)
+            {
+                return turn.StreamingActionEvents;
+            }
+
+            var merged = new List<ActionExecutionEvent>(turn.Result.ActionEvents);
+            merged.AddRange(turn.StreamingActionEvents.Where(e => merged.All(m => m.Id != e.Id)));
+            return merged;
+        }
+
+        return turn.Result.ActionEvents;
     }
 
     public static IReadOnlyList<CommandExecution> GetVisibleCommands(ConversationEntryViewModel turn)
     {
-        return turn.Result?.Commands ?? turn.StreamingCommands;
+        if (turn.Result is null)
+        {
+            return turn.StreamingCommands;
+        }
+
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingCommands.Count > 0)
+        {
+            if (turn.Result.Commands.Count == 0)
+            {
+                return turn.StreamingCommands;
+            }
+
+            var merged = new List<CommandExecution>(turn.Result.Commands);
+            merged.AddRange(turn.StreamingCommands.Where(c => merged.All(m => m.Id != c.Id)));
+            return merged;
+        }
+
+        return turn.Result.Commands;
     }
 
     public static CoronaColorSemantic GetActionStatusColor(ActionExecutionStatus status)
@@ -1797,13 +1841,36 @@ public sealed class NebulaWorkspaceState(
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -1815,17 +1882,12 @@ public sealed class NebulaWorkspaceState(
                 new UserMessage(
                     normalizedPrompt,
                     turn.Mode,
-                    WorkspaceRoot: QuickSettings.WorkspaceRoot,
+                    WorkspaceRoot: ResolvedWorkspace.Root,
                     IsDryRun: isDryRun),
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Keep IsSending true while background run streams progress; terminal status will set it false.
+            // Streaming fields are managed by the progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -1922,12 +1984,34 @@ public sealed class NebulaWorkspaceState(
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                }
 
                 if (!isDisposed)
                 {
@@ -1940,12 +2024,7 @@ public sealed class NebulaWorkspaceState(
                 progress,
                 scope,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
+            // Streaming managed by progress handler; terminal status promotes to Result.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -2003,13 +2082,36 @@ public sealed class NebulaWorkspaceState(
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -2021,13 +2123,7 @@ public sealed class NebulaWorkspaceState(
                 run,
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Streaming managed by progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -2119,9 +2215,11 @@ public sealed class NebulaWorkspaceState(
         QuickSettings.AccelerationProfile = RuntimeSettings.AccelerationProfile;
         QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
         QuickSettings.WorkspaceRoot = RuntimeSettings.WorkspaceRoot;
+        QuickSettings.UserId = RuntimeSettings.UserId;
+        QuickSettings.AutonomyProfile = FormatAutonomyProfile(RuntimeSettings.AutonomyProfile);
+        QuickSettings.ProviderMode = RuntimeSettings.ProviderMode;
         QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
         QuickSettings.CompactMode = RuntimeSettings.CompactMode;
-        QuickSettings.AutonomyProfile = RuntimeSettings.AutonomyProfile.ToString().ToLowerInvariant();
         QuickSettings.ScreenshotEnabled = RuntimeSettings.ScreenshotEnabled;
         QuickSettings.ScreenshotDiffThresholdPercent = RuntimeSettings.ScreenshotDiffThresholdPercent;
         QuickSettings.ScreenshotViewportsText = RuntimeSettings.ScreenshotViewportsText;
@@ -2141,6 +2239,28 @@ public sealed class NebulaWorkspaceState(
         new("autonomous", "Autonomo", "Alta autonomia, auto-aprova acoes de baixo risco."),
         new("yolo", "YOLO", "Autonomia maxima, executa sem perguntar (use com cuidado).")
     ];
+
+    private static AutonomyProfile ParseAutonomyProfile(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "conservative" => AutonomyProfile.Conservative,
+            "autonomous" => AutonomyProfile.Autonomous,
+            "yolo" or "lab" or "laboratory" => AutonomyProfile.Lab,
+            _ => AutonomyProfile.Standard
+        };
+    }
+
+    private static string FormatAutonomyProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => "conservative",
+            AutonomyProfile.Autonomous => "autonomous",
+            AutonomyProfile.Lab => "yolo",
+            _ => "normal"
+        };
+    }
 
     public void ApplyAutonomyProfileDefaults()
     {
@@ -2301,6 +2421,10 @@ public sealed class QuickSettingsDraft
         NebulaRuntimeSettings.DefaultLanguageCode;
 
     public string WorkspaceRoot { get; set; } = string.Empty;
+
+    public string UserId { get; set; } = string.Empty;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
 
     public bool AutoApproveCommands { get; set; }
 

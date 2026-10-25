@@ -88,7 +88,7 @@ public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
             var stderrBuilder = new StringBuilder();
             var aborted = 0;
 
-            void KillIfPrompted(StringBuilder builder)
+            async Task KillIfPromptedAsync(StringBuilder builder)
             {
                 if (!promptDetector.EndsWithInteractivePrompt(builder))
                 {
@@ -100,7 +100,15 @@ public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
                     return;
                 }
 
-                Task.Delay(InteractivePromptGracePeriod).Wait();
+                try
+                {
+                    await Task.Delay(InteractivePromptGracePeriod, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
                 if (process.HasExited)
                 {
                     return;
@@ -119,14 +127,14 @@ public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
             var outputTask = ReadStreamWithPromptDetectionAsync(
                 process.StandardOutput,
                 stdoutBuilder,
-                KillIfPrompted,
+                KillIfPromptedAsync,
                 cancellationToken,
                 observer,
                 isError: false);
             var errorTask = ReadStreamWithPromptDetectionAsync(
                 process.StandardError,
                 stderrBuilder,
-                KillIfPrompted,
+                KillIfPromptedAsync,
                 cancellationToken,
                 observer,
                 isError: true);
@@ -184,7 +192,7 @@ public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
     private static async Task<string> ReadStreamWithPromptDetectionAsync(
         StreamReader reader,
         StringBuilder builder,
-        Action<StringBuilder> onPromptDetected,
+        Func<StringBuilder, Task> onPromptDetected,
         CancellationToken cancellationToken,
         IShellOutputObserver? observer = null,
         bool isError = false)
@@ -203,7 +211,7 @@ public class ShellExecutor : IResolvedCommandExecutor, IStreamingShellExecutor
             var chunk = encoding.GetString(buffer, 0, read);
             builder.Append(chunk);
             pending.Append(chunk);
-            onPromptDetected(builder);
+            await onPromptDetected(builder);
 
             if (observer is not null)
             {

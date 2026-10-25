@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.400'
+
+      - name: Restore (Nebula.slnx)
+        run: dotnet restore Nebula.slnx
+
+      - name: Build (Nebula.slnx)
+        run: dotnet build Nebula.slnx --no-restore -v minimal
+
+      - name: Test Agent
+        run: dotnet test Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-build -v minimal
+
+      - name: Test App
+        run: dotnet test Nebula.App.Test/Nebula.App.Test.csproj --no-build -v minimal
+
+      - name: Validate docker compose
+        run: docker compose config >/dev/null && echo "compose OK"

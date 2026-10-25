@@ -47,7 +47,8 @@ internal sealed record ConversationRequest(
             MaxRetriesPerStep = maxRetriesPerStep,
             WorkspaceRoot = WorkspaceRoot,
             DryRun = IsDryRun,
-            ConversationApprovedCommands = ConversationApprovedCommands
+            ConversationApprovedCommands = ConversationApprovedCommands,
+            ProviderMode = Message.ProviderMode
         };
     }
 }

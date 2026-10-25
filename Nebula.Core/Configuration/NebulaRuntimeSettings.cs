@@ -4,10 +4,18 @@ namespace Nebula.Core.Configuration;
 
 public enum AutonomyProfile
 {
-    Conservative,
-    Standard,
-    Autonomous,
-    Lab
+    Conservative = 0,
+    Standard = 1,
+    Autonomous = 2,
+    Lab = 3
+}
+
+public enum ProviderMode
+{
+    LocalOnly = 0,
+    LocalPreferred = 1,
+    RemoteAllowed = 2,
+    RemoteOnly = 3
 }
 
 public sealed class NebulaRuntimeSettings
@@ -37,6 +45,16 @@ public sealed class NebulaRuntimeSettings
 
     public string UserId { get; set; } = string.Empty;
 
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
+
+    public bool AllowsLocal => ProviderMode is not ProviderMode.RemoteOnly;
+
+    public bool AllowsRemote => ProviderMode is ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
+
+    public bool CanUseRemoteFallback => ProviderMode is ProviderMode.LocalPreferred or ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
+
     public bool RequireDeterministicVerification { get; set; } = true;
 
     public int CommandTimeoutSeconds { get; set; } = 300;
@@ -52,8 +70,6 @@ public sealed class NebulaRuntimeSettings
     public long SandboxMemoryLimitMb { get; set; }
 
     public double SandboxCpuLimit { get; set; }
-
-    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
 
     public bool CompactMode { get; set; }
 
@@ -97,6 +113,8 @@ public sealed class NebulaRuntimeSettings
         AutoApproveCategories = snapshot.AutoApproveCategories?.ToList() ?? [];
         WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
         UserId = snapshot.UserId?.Trim() ?? string.Empty;
+        AutonomyProfile = snapshot.AutonomyProfile;
+        ProviderMode = snapshot.ProviderMode;
         RequireDeterministicVerification = snapshot.RequireDeterministicVerification;
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
@@ -105,7 +123,6 @@ public sealed class NebulaRuntimeSettings
         SandboxImage = NormalizeOrDefault(snapshot.SandboxImage, "mcr.microsoft.com/powershell:lts");
         SandboxMemoryLimitMb = Math.Max(0, snapshot.SandboxMemoryLimitMb);
         SandboxCpuLimit = Math.Max(0, snapshot.SandboxCpuLimit);
-        AutonomyProfile = snapshot.AutonomyProfile;
         CompactMode = snapshot.CompactMode;
         ScreenshotEnabled = snapshot.ScreenshotEnabled;
         ScreenshotDiffThresholdPercent = snapshot.ScreenshotDiffThresholdPercent;
@@ -127,6 +144,8 @@ public sealed class NebulaRuntimeSettings
             AutoApproveCategories = AutoApproveCategories.ToList(),
             WorkspaceRoot = WorkspaceRoot,
             UserId = UserId,
+            AutonomyProfile = AutonomyProfile,
+            ProviderMode = ProviderMode,
             RequireDeterministicVerification = RequireDeterministicVerification,
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
@@ -135,7 +154,6 @@ public sealed class NebulaRuntimeSettings
             SandboxImage = SandboxImage,
             SandboxMemoryLimitMb = SandboxMemoryLimitMb,
             SandboxCpuLimit = SandboxCpuLimit,
-            AutonomyProfile = AutonomyProfile,
             CompactMode = CompactMode,
             ScreenshotEnabled = ScreenshotEnabled,
             ScreenshotDiffThresholdPercent = ScreenshotDiffThresholdPercent,
@@ -158,6 +176,40 @@ public sealed class NebulaRuntimeSettings
         return string.IsNullOrWhiteSpace(value)
             ? defaultValue
             : value.Trim();
+    }
+
+    public static IReadOnlyList<string> GetDefaultCategoriesForProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => [],
+            AutonomyProfile.Standard => ["read-only", "write-local"],
+            AutonomyProfile.Autonomous => ["read-only", "write-local", "execute-local", "network-access"],
+            AutonomyProfile.Lab => ["read-only", "write-local", "execute-local", "network-access", "package-install", "privileged-operation"],
+            _ => []
+        };
+    }
+
+    public static bool GetDefaultAutoApproveForProfile(AutonomyProfile profile)
+    {
+        return profile is AutonomyProfile.Autonomous or AutonomyProfile.Lab;
+    }
+
+    public static SandboxMode GetDefaultSandboxForProfile(AutonomyProfile profile)
+    {
+        return profile is AutonomyProfile.Lab ? SandboxMode.Docker : SandboxMode.Disabled;
+    }
+
+    public static ProviderMode GetDefaultProviderModeForProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => ProviderMode.LocalOnly,
+            AutonomyProfile.Standard => ProviderMode.LocalPreferred,
+            AutonomyProfile.Autonomous => ProviderMode.LocalPreferred,
+            AutonomyProfile.Lab => ProviderMode.RemoteAllowed,
+            _ => ProviderMode.LocalPreferred
+        };
     }
 }
 
@@ -187,6 +239,10 @@ public sealed class NebulaRuntimeSettingsSnapshot
 
     public string UserId { get; set; } = string.Empty;
 
+    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
+
     public bool RequireDeterministicVerification { get; set; } = true;
 
     public int CommandTimeoutSeconds { get; set; } = 300;
@@ -202,8 +258,6 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public long SandboxMemoryLimitMb { get; set; }
 
     public double SandboxCpuLimit { get; set; }
-
-    public AutonomyProfile AutonomyProfile { get; set; } = AutonomyProfile.Standard;
 
     public bool CompactMode { get; set; }
 

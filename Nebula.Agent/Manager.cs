@@ -1,10 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Nebula.Agent.Application;
 using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Memory;
@@ -71,6 +75,17 @@ public class Manager : IManager
         promptAuditService = new PromptRequestAuditService(promptRepository, logger);
         maxActionRetryCount = Math.Max(0, maxActionRetries);
         maxActionStepCount = Math.Max(1, maxActionSteps);
+    }
+
+    private IAgentRunOrchestrator CreateDefaultOrchestrator()
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IAgentRunEventPublisher, ChannelAgentRunEventPublisher>()
+            .AddSingleton<IAgentRunQueue, AgentRunBackgroundService>()
+            .AddScoped<IAgentRunOrchestrator, AgentRunOrchestrator>();
+        var serviceProvider = services.BuildServiceProvider();
+        return serviceProvider.GetRequiredService<IAgentRunOrchestrator>();
     }
 
     public Guid ActiveConversationId => activeConversationId;
@@ -398,6 +413,14 @@ public class Manager : IManager
             maxActionStepCount,
             maxActionRetryCount);
 
+        actionRequest.ProviderMode = request.Message.ProviderMode;
+
+        var selector = new AgentProviderSelector();
+        var selectedAgent = selector.Select(AgentCapability.Coding, actionRequest.ProviderMode);
+        actionRequest.SelectedAgentId = selectedAgent?.Id;
+        actionRequest.SelectedAgentName = selectedAgent?.Name;
+        actionRequest.SelectedAgentDescription = selectedAgent?.Description;
+
         if (orchestrator is null)
         {
             return await actionRunner.RunAsync(actionRequest, progress, cancellationToken);
@@ -419,12 +442,14 @@ public class Manager : IManager
                 legacyProgress?.Report(completed.FinalTurn);
                 return completed.FinalTurn;
             }
+
             if (evt is AgentRunFailedEvent failed)
             {
                 var failedTurn = failed.PartialTurn ?? BuildFailedTurn(failed.ErrorMessage);
                 legacyProgress?.Report(failedTurn);
                 return failedTurn;
             }
+
             if (evt is AgentRunCancelledEvent)
             {
                 var cancelledTurn = new ConversationTurn

@@ -7,6 +7,7 @@ using MongoDB.Driver;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Background;
 using Nebula.Agent.Application.Events;
 using Nebula.Agent.Infrastructure;
 using Nebula.Agent.Infrastructure.Events;
@@ -16,6 +17,7 @@ using Nebula.App.Shared.State;
 using Nebula.App.Web.Components;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Agent;
+using Nebula.Core.Background;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
@@ -89,6 +91,15 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     WorkspaceRoot =
         builder.Configuration["Nebula:WorkspaceRoot"] ??
         string.Empty,
+    UserId =
+        builder.Configuration["Nebula:UserId"] ??
+        string.Empty,
+    AutonomyProfile =
+        RuntimeSettingsBinding.ParseAutonomyProfile(
+            builder.Configuration["Nebula:AutonomyProfile"]),
+    ProviderMode =
+        RuntimeSettingsBinding.ParseProviderMode(
+            builder.Configuration["Nebula:ProviderMode"]),
     SandboxMode =
         RuntimeSettingsBinding.ParseSandboxMode(
             builder.Configuration["Nebula:Sandbox:Mode"]),
@@ -164,6 +175,8 @@ builder.Services.AddScoped<IKnowledgeExtractor>(provider =>
         log: provider.GetRequiredService<Nebula.Agent.ILogger>().Log));
 builder.Services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
 builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
+builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+builder.Services.AddHostedService<BackgroundTaskHostedService>();
 builder.Services.AddScoped<NebulaContextBuilder>();
 
 var mongoConn = builder.Configuration["MONGO_CONNECTION"] ?? "mongodb://admin:password@localhost:27017/nebula?authSource=admin";
@@ -173,7 +186,8 @@ try
 {
     var testClient = new MongoClient(mongoConn);
     var testDb = testClient.GetDatabase(mongoDb);
-    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+    testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token).GetAwaiter().GetResult();
 
     builder.Services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
     builder.Services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
@@ -182,6 +196,11 @@ try
 catch (MongoAuthenticationException ex)
 {
     Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
+    builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("Warning: MongoDB ping timed out after 2s. Falling back to NoOpPromptRequestRepository.");
     builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
 }
 catch (Exception ex)
@@ -210,7 +229,16 @@ builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
 builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
 builder.Services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
 builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();
+builder.Services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+    provider.GetRequiredService<ICommandIntentParser>(),
+    provider.GetRequiredService<ICommandResolver>(),
+    provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    provider.GetRequiredService<IOperationKindDetector>(),
+    provider.GetRequiredService<ICommandPolicyEngine>(),
+    provider.GetRequiredService<IOperationPolicyEngine>(),
+    provider.GetRequiredService<ICommandApprovalService>(),
+    provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    provider.GetRequiredService<NebulaRuntimeSettings>()));
 builder.Services.AddScoped<ILearningEngine, LearningEngine>();
 builder.Services.AddScoped<IKnowledgeQueryService, KnowledgeQueryService>();
 builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
@@ -399,6 +427,20 @@ internal static class RuntimeSettingsBinding
         return Enum.TryParse<SandboxMode>(value, ignoreCase: true, out var mode)
             ? mode
             : SandboxMode.Disabled;
+    }
+
+    public static AutonomyProfile ParseAutonomyProfile(string? value)
+    {
+        return Enum.TryParse<AutonomyProfile>(value, ignoreCase: true, out var profile)
+            ? profile
+            : AutonomyProfile.Standard;
+    }
+
+    public static ProviderMode ParseProviderMode(string? value)
+    {
+        return Enum.TryParse<ProviderMode>(value, ignoreCase: true, out var providerMode)
+            ? providerMode
+            : ProviderMode.LocalPreferred;
     }
 
     public static List<string> ParseCategoryList(string? value)

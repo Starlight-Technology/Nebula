@@ -2062,13 +2062,13 @@ public sealed class AgentActionRunnerTest
     public async Task run_async_must_request_approval_for_non_allowlisted_write_without_sandbox()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
 
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to create the web page.",
-                "Create index.html",
+                "Create index.xml",
                 OperationKind.FileWrite,
                 content: "<!doctype html><title>Olá</title>",
                 targetPath: targetPath,
@@ -2082,7 +2082,7 @@ public sealed class AgentActionRunnerTest
             executorMock: CreateExecutorMock());
 
         var result = await runner.RunAsync(
-            CreateRequest("Create an index.html in the workspace."),
+            CreateRequest("Create an index.xml in the workspace."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
@@ -2096,21 +2096,21 @@ public sealed class AgentActionRunnerTest
     public async Task run_async_must_auto_approve_non_allowlisted_write_when_auto_approval_enabled()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
         const string content = "<!doctype html><title>Olá</title>";
 
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to create the web page.",
-                "Create index.html",
+                "Create index.xml",
                 OperationKind.FileWrite,
                 content: content,
                 targetPath: targetPath,
                 workingDirectory: workspace.Path),
             CompleteDecision(
                 "The web page was created.",
-                "Created index.html.")
+                "Created index.xml.")
         ]);
         var llamaClientMock = CreateLlamaClientMock();
         SetupDecisionSequence(llamaClientMock, decisions);
@@ -2124,7 +2124,7 @@ public sealed class AgentActionRunnerTest
             });
 
         var result = await runner.RunAsync(
-            CreateRequest("Create an index.html in the workspace."),
+            CreateRequest("Create an index.xml in the workspace."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
@@ -2141,7 +2141,7 @@ public sealed class AgentActionRunnerTest
     public async Task run_async_must_execute_explicitly_approved_write_replaying_original_content()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
         const string content = "<!doctype html><title>Aprovado</title>";
 
         var llamaClientMock = CreateLlamaClientMock();
@@ -2150,12 +2150,12 @@ public sealed class AgentActionRunnerTest
             llamaClientMock,
             executorMock: CreateExecutorMock());
 
-        var request = CreateRequest("Aprovar e executar: gravar index.html");
+        var request = CreateRequest("Aprovar e executar: gravar index.xml");
         request.MaxSteps = 1;
         request.MaxRetriesPerStep = 0;
         request.ApprovedAction = new AgentApprovedAction
         {
-            Objective = "Create index.html",
+            Objective = "Create index.xml",
             Command = $"write-file \"{targetPath}\"",
             OperationKind = OperationKind.FileWrite,
             TargetPath = targetPath,

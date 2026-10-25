@@ -15,10 +15,14 @@ public sealed class PolicySimulator(
     IOperationPolicyEngine operationPolicyEngine,
     ICommandApprovalService? approvalService = null,
     IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
+    NebulaRuntimeSettings? runtimeSettings = null,
     ILogger? logger = null) : IPolicySimulator
 {
     private readonly ICommandApprovalService approvalService =
         approvalService ?? new CommandApprovalService();
+
+    private readonly NebulaRuntimeSettings runtimeSettings =
+        runtimeSettings ?? new NebulaRuntimeSettings();
 
     public async Task<PolicySimulationResult> SimulateAsync(
         string text,
@@ -112,14 +116,22 @@ public sealed class PolicySimulator(
                             cancellationToken);
                 }
 
+                var profileCategories = NebulaRuntimeSettings.GetDefaultCategoriesForProfile(runtimeSettings.AutonomyProfile);
+                var combinedCategories = runtimeSettings.AutoApproveCategories
+                    .Concat(profileCategories)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var autoApproveEnabled = runtimeSettings.AutoApproveCommands ||
+                    NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(runtimeSettings.AutonomyProfile);
+
                 var overrideResult = approvalService.EvaluateOverride(
                     operationDecision,
                     OperationKind.TerminalCommand,
                     new ApprovalOverrideInput(
                         HasUserApprovedAction: false,
                         IsApprovedForConversation: false,
-                        AutoApproveEnabled: false,
-                        AutoApproveCategories: [],
+                        AutoApproveEnabled: autoApproveEnabled,
+                        AutoApproveCategories: combinedCategories,
                         WorkspaceAutoApproveCategories: workspaceCategories
                             .Select(entry => entry.Value)
                             .ToList()));

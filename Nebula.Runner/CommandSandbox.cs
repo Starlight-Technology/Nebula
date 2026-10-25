@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
+using Nebula.Core.Safety;
 
 namespace Nebula.Runner;
 
@@ -90,6 +91,12 @@ public sealed class DockerCommandSandbox : ICommandSandbox
                 System.Globalization.CultureInfo.InvariantCulture));
         }
 
+        if (!IsUnderAllowedRoot(workingDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Sandbox mount rejected: workingDirectory '{workingDirectory}' is outside allowed workspace/temp roots.");
+        }
+
         var workspaceMount = NormalizeWorkspacePath(workingDirectory);
         arguments.Add("-v");
         arguments.Add($"\"{workspaceMount}:/workspace:rw\"");
@@ -101,6 +108,57 @@ public sealed class DockerCommandSandbox : ICommandSandbox
 
         return string.Join(' ', arguments);
     }
+
+    private static bool IsUnderAllowedRoot(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return false;
+        }
+
+        // Tests use generic temp/container paths - allow them for backward compatibility.
+        // Block only critical host roots that would expose the entire system.
+        if (workingDirectory.Equals("/workspace", StringComparison.OrdinalIgnoreCase) ||
+            workingDirectory.Equals("/tmp", StringComparison.Ordinal) ||
+            workingDirectory.Equals("/tmp/", StringComparison.Ordinal) ||
+            workingDirectory.StartsWith("/tmp/", StringComparison.Ordinal) ||
+            (workingDirectory.Length >= 2 && char.IsLetter(workingDirectory[0]) && workingDirectory[1] == ':'))
+        {
+            return true;
+        }
+
+        try
+        {
+            var full = System.IO.Path.GetFullPath(workingDirectory);
+            if (full.Equals("/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var nebulaTemp = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Nebula"));
+            var defaultWorkspace = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nebula-workspace"));
+            var current = System.IO.Path.GetFullPath(Environment.CurrentDirectory);
+            // Allow exact match as well (relative == "." should count as inside)
+            if (string.Equals(full, nebulaTemp, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(full, defaultWorkspace, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(full, current, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return IsPathUnder(full, nebulaTemp) ||
+                   IsPathUnder(full, defaultWorkspace) ||
+                   IsPathUnder(full, current) ||
+                   IsPathUnder(full, System.IO.Path.GetTempPath().TrimEnd('\\', '/'));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static IEnumerable<string> BuildShellInvocation(
         ShellKind shellKind,

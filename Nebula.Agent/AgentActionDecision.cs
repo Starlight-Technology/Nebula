@@ -29,6 +29,11 @@ public sealed class AgentActionDecisionRequest
     public string? WorkspaceRoot { get; set; }
 
     /// <summary>
+    /// Conversation id for per-chat folder (workspace/&lt;id8&gt;/). Used to inject existing files for modify tasks.
+    /// </summary>
+    public Guid ConversationId { get; set; }
+
+    /// <summary>
     /// True when this decision is a dry-run preview: nothing may be executed or written.
     /// </summary>
     public bool DryRun { get; set; }
