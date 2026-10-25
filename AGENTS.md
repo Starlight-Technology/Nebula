@@ -118,7 +118,8 @@ Use these categories when describing Nebula:
 | OpenClaw integration | Not found | No `OpenClaw` references were found outside the user request. |
 | Redis/SQLite/queues/background worker | Partial | `BackgroundService`/`IHostedService` implemented via `AgentRunBackgroundService` for agent run queue. No Redis, SQLite, Hangfire, Quartz, or general queue worker. |
 | Web app Docker service | Implemented | `nebula-web` service is active in `docker-compose.yml` (container runs the built web app). Docker daemon was unavailable on some machines during build validation. |
-| GPU acceleration profiles | Experimental/configured | Compose override files exist for NVIDIA, AMD ROCm, and Intel Vulkan. Runtime telemetry mainly supports Docker stats and optional NVIDIA metrics. |
+| GPU acceleration profiles | Experimental/configured | Compose override files exist for NVIDIA, AMD ROCm, and Intel Vulkan. Runtime telemetry uses the host telemetry sidecar for CPU/RAM/disk/GPU discovery; real-time GPU utilization/VRAM depends on the sidecar image and host tooling. |
+| Host telemetry sidecar | Implemented | `Nebula.Telemetry` exposes `/snapshot` and `/health`; `HostHardwareProbe` reads host `/proc`, `/sys`, and host root read-only. `nebula-web` consumes it via `NEBULA_TELEMETRY_URL` and falls back to local probing. Docker/Podman API access is optional and only in the sidecar. |
 | Corona design system | Implemented dependency/submodule | `Corona/Corona/Corona.csproj` is in the solution; `Corona/Corona.Tests` exists outside `Nebula.slnx`. |
 | Nebula.Shell | Legacy/placeholder | `Nebula.Shell` exists as an empty class library and is not included in `Nebula.slnx`. |
 
@@ -167,6 +168,7 @@ Nebula.Postgres.Context/
 Nebula.Runner/
 Nebula.Services/
 Nebula.Shell/
+Nebula.Telemetry/
 ```
 
 Projects included in `Nebula.slnx`:
@@ -186,6 +188,7 @@ Projects included in `Nebula.slnx`:
 - `Nebula.Postgres.Context/Nebula.Postgres.Context.csproj`
 - `Nebula.Runner/Nebula.Runner.csproj`
 - `Nebula.Services/Nebula.Services.csproj`
+- `Nebula.Telemetry/Nebula.Telemetry.csproj`
 
 Projects found but not included in `Nebula.slnx`:
 
@@ -642,9 +645,16 @@ The client:
 
 Runtime telemetry:
 
-- `LlamaRuntimeTelemetryService` reads Docker container stats.
-- It can parse NVIDIA metrics when `nvidia-smi` output is available.
-- AMD/Intel telemetry is mostly configuration-level at this point.
+- `LlamaRuntimeTelemetryService` prefers `ITelemetrySource` (`HttpTelemetrySource`,
+  sidecar URL from `NEBULA_TELEMETRY_URL`) and falls back to local probing.
+- `HostHardwareProbe` reads CPU/memory from `/proc`, GPUs from
+  `/proc/driver/nvidia`, `/sys/class/drm`, and `nvidia-smi` when available, and
+  disks from the host root (including the host `/var` data mount).
+- The `Nebula.Telemetry` sidecar exposes `/snapshot` and `/health`; it reads
+  host `/proc`, `/sys`, and host root read-only. Docker/Podman stats are optional
+  and only the sidecar receives a socket (when configured).
+- NVIDIA is the validated sidecar path; AMD/Intel GPU utilization/VRAM is not
+  confirmed beyond device/sysfs discovery.
 
 No alternative LLM provider abstraction beyond `ILlamaClient` was found. Adding
 a non-Ollama provider currently requires an implementation and DI changes in the
@@ -860,6 +870,13 @@ contain local secrets and should be treated carefully.
 | `Nebula:Sandbox:Image` | Sandbox container image | `mcr.microsoft.com/powershell:lts` (env: `NEBULA_SANDBOX_IMAGE`) |
 | `Nebula:Sandbox:MemoryLimitMb` | Optional sandbox memory limit in MB (0 = no limit) | 0 (env: `NEBULA_SANDBOX_MEMORY_LIMIT_MB`) |
 | `Nebula:Sandbox:CpuLimit` | Optional sandbox CPU limit (0 = no limit) | 0 (env: `NEBULA_SANDBOX_CPU_LIMIT`) |
+| `NEBULA_TELEMETRY_URL` | Web/MAUI sidecar base URL | Empty disables sidecar; compose uses `http://nebula-telemetry:8090` |
+| `TELEMETRY_PROC_ROOT` | Sidecar host `/proc` mount | `/host/proc` in compose |
+| `TELEMETRY_SYS_ROOT` | Sidecar host `/sys` mount | `/host/sys` in compose |
+| `TELEMETRY_HOST_ROOT` | Sidecar host root mount | `/host/root` in compose |
+| `TELEMETRY_DOCKER_SOCKET` | Optional Docker/Podman Unix socket for container stats | Empty disables Docker stats; never mounted into `nebula-web` |
+| `TELEMETRY_INTERVAL_MS` | Sidecar sampling interval | 1000 |
+| `OLLAMA_CONTAINER_NAME` | Container name used for Ollama container stats | `ollama` |
 | `COMMAND_SAFETY_TRAINING_DATA` | Command safety CSV path | `Nebula.Services/Safety/Training/command-training-data.csv` |
 | `COMMAND_SAFETY_MODEL` | Optional fallback ML model path | Used by trainer/classifier fallback |
 | `COMMAND_SAFETY_MODEL_VERSION` | Optional trained model version | Timestamp fallback |
@@ -883,26 +900,34 @@ of colon-separated configuration keys.
 
 ## Docker and Local Services
 
-`docker-compose.yml` defines four active services:
+`docker-compose.yml` defines these active services:
 
 - `ollama`
 - `mongodb`
 - `postgres`
 - `searxng`
+- `nebula-telemetry`
+- `nebula-web`
 
-It also contains a `nebula-web` service that builds and runs the web app container.
-`docker compose up -d` starts it alongside the other services (validated under
-Podman rootless; the SearXNG service requires SELinux relabel for bind mounts —
-see the Compose `:Z` flag).
+`nebula-web` builds and runs the web app container. `nebula-telemetry` is the
+host telemetry sidecar; it mounts host `/proc`, `/sys`, and `/` read-only, has no
+public port, and is reached by the web container through
+`NEBULA_TELEMETRY_URL=http://nebula-telemetry:8090`. Docker/Podman stats are
+optional and only the sidecar receives a socket when configured. `docker compose
+up -d` starts the services (validated under Podman rootless; SearXNG bind mounts
+use the Compose `:Z` flag).
 
-Validation result on 2026-06-22:
+Validation result on 2026-06-22 and 2026-10-24:
 
-- `docker compose config` succeeded and resolved all four active services.
-- `docker compose -f docker-compose.yml -f docker-compose.nvidia.yml config` succeeded.
-- `docker compose -f docker-compose.yml -f docker-compose.amd.yml config` succeeded.
-- `docker compose -f docker-compose.yml -f docker-compose.intel.yml config` succeeded.
+- `docker compose config` (and `podman-compose config`) succeeded with the base
+  compose file and all three GPU overrides.
+- `podman build -f Nebula.Telemetry/Dockerfile --target telemetry` succeeded and
+  the sidecar returned CPU, memory, NVIDIA/Intel GPU discovery, and host `/var`
+  disk data from `/snapshot` under Podman rootless.
+- The NVIDIA sidecar target (`telemetry-nvidia`) has not been built or run yet;
+  verify the CUDA base tag and `gpus: all` support on the host.
 - `docker build -f Nebula.App/Nebula.App.Web/Dockerfile --target build ...` could
-  not run because Docker Desktop's Linux engine was not available on the machine.
+  not be validated when the Docker engine was unavailable.
 
 Important Docker notes:
 
@@ -1156,6 +1181,8 @@ These are current gaps or cautions confirmed by inspection.
   could not be validated because Docker Desktop's Linux engine was unavailable.
 - The `nebula-web` compose service is active (not commented). Its Docker image
   build could not be fully validated when the Docker engine was unavailable.
+- The `nebula-telemetry` sidecar is built and smoke-tested under Podman rootless;
+  its NVIDIA image and the web UI consumption still need runtime validation.
 - `ollama-start.sh` is mounted but not invoked by the default compose entrypoint.
 - The Dockerfile should be revalidated when Docker is available. It copies several
   project files before restore; confirm every transitive project reference is copied
@@ -1200,6 +1227,8 @@ Points needing human confirmation:
 - `Nebula.Agent/Safety/*`: safety-critical policy.
 - `Nebula.Runner/ShellExecutor.cs`: process execution.
 - `Nebula.Runner/CommandSandbox.cs`: Docker sandbox execution for approval-required terminal commands.
+- `Nebula.Telemetry/`: host telemetry sidecar; mounts host `/proc`, `/sys`, and `/` read-only.
+- `Nebula.Llama.Client/Telemetry/HostHardwareProbe.cs`: host hardware probing used by the sidecar and local fallback.
 - `Nebula.App/Nebula.App.Shared/State/NebulaWorkspaceState.cs`: UI orchestration and local settings.
 - `Corona/`: git submodule; avoid accidental broad edits.
 

@@ -1,9 +1,81 @@
+using Nebula.Core.Telemetry;
 using Nebula.Llama.Client;
+using Nebula.Llama.Client.Telemetry;
 
 namespace Nebula.Agent.Test;
 
 public class LlamaRuntimeTelemetryServiceTest
 {
+
+    [Fact]
+    public async Task get_snapshot_async_must_use_sidecar_hardware_and_disk()
+    {
+        var runner = new FakeRuntimeCommandRunner();
+        runner.Add(
+            "docker",
+            ["stats", "--no-stream", "--format", "{{json .}}", "ollama"],
+            new RuntimeCommandResult(1, string.Empty, "No such container: ollama"));
+
+        var hardware = new HostTelemetrySnapshot
+        {
+            Source = "sidecar",
+            Cpu = new HostCpuTelemetry
+            {
+                Model = "12th Gen Intel(R) Core(TM) i7-12700H",
+                LogicalCores = 20,
+                UsagePercent = 18.4,
+                Detail = "12th Gen Intel(R) Core(TM) i7-12700H | 20 threads"
+            },
+            Memory = new HostMemoryTelemetry
+            {
+                TotalBytes = 24L * 1024 * 1024 * 1024,
+                UsedBytes = 12L * 1024 * 1024 * 1024,
+                AvailableBytes = 12L * 1024 * 1024 * 1024,
+                UsagePercent = 50,
+                Detail = "12.0 GiB / 24.0 GiB (50%)"
+            },
+            Gpus =
+            [
+                new HostGpuTelemetry
+                {
+                    Vendor = "nvidia",
+                    Name = "NVIDIA GeForce RTX 3050 Laptop GPU",
+                    UtilizationPercent = 42,
+                    MemoryUsedBytes = 3530L * 1024 * 1024,
+                    MemoryTotalBytes = 4096L * 1024 * 1024,
+                    Source = "nvidia-smi"
+                }
+            ],
+            Disks =
+            [
+                new HostDiskTelemetry
+                {
+                    Name = "overlay",
+                    MountPoint = "/host/root",
+                    UsedBytes = 731L * 1024 * 1024 * 1024,
+                    TotalBytes = 952L * 1024 * 1024 * 1024,
+                    FreeBytes = 215L * 1024 * 1024 * 1024,
+                    UsagePercent = 76.8,
+                    IsHost = true
+                }
+            ]
+        };
+
+        var service = new LlamaRuntimeTelemetryService(
+            runner,
+            hardwareProbe: new FakeHardwareProbe(new HostTelemetrySnapshot()),
+            telemetrySource: new FakeTelemetrySource(hardware));
+
+        var snapshot = await service.GetSnapshotAsync();
+
+        Assert.False(snapshot.IsAvailable);
+        Assert.Equal("sidecar", snapshot.MetricsSource);
+        Assert.Contains("i7-12700H", snapshot.Cpu.DetailValue, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("76.8%", snapshot.Disk.ShortValue, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(snapshot.Gpus);
+        Assert.Contains("RTX 3050", snapshot.Gpu.DetailValue, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task get_snapshot_async_must_parse_docker_and_nvidia_metrics()
     {
@@ -30,7 +102,9 @@ public class LlamaRuntimeTelemetryServiceTest
                 "NVIDIA GeForce RTX 3050 Laptop GPU, 39, 3530, 4096",
                 string.Empty));
 
-        var service = new LlamaRuntimeTelemetryService(runner);
+        var service = new LlamaRuntimeTelemetryService(
+            runner,
+            hardwareProbe: new FakeHardwareProbe(new HostTelemetrySnapshot()));
 
         var snapshot = await service.GetSnapshotAsync();
 
@@ -52,7 +126,9 @@ public class LlamaRuntimeTelemetryServiceTest
             ["stats", "--no-stream", "--format", "{{json .}}", "ollama"],
             new RuntimeCommandResult(1, string.Empty, "No such container: ollama"));
 
-        var service = new LlamaRuntimeTelemetryService(runner);
+        var service = new LlamaRuntimeTelemetryService(
+            runner,
+            hardwareProbe: new FakeHardwareProbe(new HostTelemetrySnapshot()));
 
         var snapshot = await service.GetSnapshotAsync();
 
@@ -81,7 +157,9 @@ public class LlamaRuntimeTelemetryServiceTest
                 """["OLLAMA_ACCELERATION_MODE=cpu"]""",
                 string.Empty));
 
-        var service = new LlamaRuntimeTelemetryService(runner);
+        var service = new LlamaRuntimeTelemetryService(
+            runner,
+            hardwareProbe: new FakeHardwareProbe(new HostTelemetrySnapshot()));
 
         var snapshot = await service.GetSnapshotAsync();
 
@@ -89,6 +167,17 @@ public class LlamaRuntimeTelemetryServiceTest
         Assert.Equal("CPU runtime", snapshot.RuntimeModeLabel);
         Assert.False(snapshot.Gpu.IsAvailable);
         Assert.Contains("CPU", snapshot.Gpu.DetailValue, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class FakeHardwareProbe(HostTelemetrySnapshot snapshot) : IHostHardwareProbe
+    {
+        public HostTelemetrySnapshot Probe() => snapshot;
+    }
+
+    private sealed class FakeTelemetrySource(HostTelemetrySnapshot snapshot) : ITelemetrySource
+    {
+        public Task<HostTelemetrySnapshot?> GetSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<HostTelemetrySnapshot?>(snapshot);
     }
 
     private sealed class FakeRuntimeCommandRunner : IRuntimeCommandRunner

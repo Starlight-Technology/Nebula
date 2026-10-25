@@ -1,3 +1,5 @@
+using Nebula.Core.Telemetry;
+
 namespace Nebula.Llama.Client;
 
 public interface ILlamaRuntimeTelemetryService
@@ -22,6 +24,14 @@ public sealed class LlamaRuntimeTelemetrySnapshot
     public LlamaRuntimeMetric Memory { get; init; } = LlamaRuntimeMetric.Unavailable("Sem leitura de memoria.");
 
     public LlamaRuntimeMetric Gpu { get; init; } = LlamaRuntimeMetric.Unavailable("Sem leitura de GPU.");
+
+    public LlamaRuntimeMetric Disk { get; init; } = LlamaRuntimeMetric.Unavailable("Sem leitura de disco.");
+
+    public IReadOnlyList<HostGpuTelemetry> Gpus { get; init; } = [];
+
+    public HostTelemetrySnapshot? Hardware { get; init; }
+
+    public string MetricsSource { get; init; } = "local";
 
     public string ContainerName { get; init; } = "ollama";
 

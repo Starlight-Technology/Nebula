@@ -26,6 +26,7 @@ using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
+using Nebula.Llama.Client.Telemetry;
 using Nebula.Mongo.Context;
 using Nebula.Postgres.Context;
 using Nebula.Runner;
@@ -57,8 +58,19 @@ public static class MauiProgram
 #endif
 
         builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
+        builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
+            commandRunner: new ProcessRuntimeCommandRunner()));
+
+        var telemetryUrl = Environment.GetEnvironmentVariable("NEBULA_TELEMETRY_URL");
+        if (!string.IsNullOrWhiteSpace(telemetryUrl))
+        {
+            builder.Services.AddSingleton<ITelemetrySource>(_ => new HttpTelemetrySource(telemetryUrl));
+        }
+
         builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
-        builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
+        builder.Services.AddSingleton<IRuntimeSetupAdvisor>(sp => new RuntimeSetupAdvisor(
+            "Native app",
+            sp.GetRequiredService<IHostHardwareProbe>()));
         builder.Services.AddSingleton<IOllamaUpdateService, OllamaUpdateService>();
         builder.Services.AddSingleton<IProjectDoctorService, ProjectDoctorService>();
         builder.Services.AddScoped(_ => new NebulaRuntimeSettings

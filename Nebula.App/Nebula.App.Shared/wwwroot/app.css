@@ -479,7 +479,7 @@ pre {
 }
 
 .nebula-chat-layout {
-    grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr) minmax(18rem, 22rem);
+    grid-template-columns: minmax(13rem, 30rem) minmax(0, 1fr) minmax(18rem, 48rem);
 }
 
 .nebula-history-rail {

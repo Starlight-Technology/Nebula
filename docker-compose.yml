@@ -95,6 +95,32 @@ services:
       retries: 3
       start_period: 20s
 
+  nebula-telemetry:
+    build:
+      context: .
+      dockerfile: Nebula.Telemetry/Dockerfile
+      target: telemetry
+    container_name: nebula_telemetry
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8090"
+      TELEMETRY_PROC_ROOT: "/host/proc"
+      TELEMETRY_SYS_ROOT: "/host/sys"
+      TELEMETRY_HOST_ROOT: "/host/root"
+      TELEMETRY_INTERVAL_MS: "1000"
+      OLLAMA_CONTAINER_NAME: "ollama"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    tmpfs:
+      - /tmp
+
   nebula-web:
     build:
       context: .
@@ -107,6 +133,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      nebula-telemetry:
+        condition: service_started
     ports:
       - "8081:8081"
     environment:
@@ -119,6 +147,7 @@ services:
       POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
       Research__SearXng__BaseUrl: "http://searxng:8080"
       TMPDIR: "/tmp"
+      NEBULA_TELEMETRY_URL: "http://nebula-telemetry:8090"
     volumes:
       - ${HOME}/nebula-tmp:/tmp:z
     restart: unless-stopped
