@@ -367,6 +367,7 @@ pre {
 
 .nebula-chat-main {
     flex: 1;
+    min-width: 0;
     min-height: 0;
 }
 
@@ -376,11 +377,6 @@ pre {
     min-height: 0;
     max-height: calc(100vh - 28rem);
 }
-
-/* .nebula-chat-main{
-    overflow-y: auto;
-    max-height: 50%;
-} */
 
 .nebula-model-grid {
     display: grid;
@@ -496,7 +492,7 @@ pre {
 }
 
 .nebula-chat-layout {
-    grid-template-columns: minmax(13rem, 30rem) minmax(0, 1fr) minmax(18rem, 48rem);
+    grid-template-columns: minmax(13rem, 18rem) minmax(24rem, 1fr) minmax(18rem, 24rem);
 }
 
 .nebula-history-rail {
@@ -1410,7 +1406,7 @@ pre {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-.nebula-chat-layout,
+    .nebula-chat-layout,
     .nebula-runtime-layout,
     .nebula-settings-layout {
         grid-template-columns: 1fr;
