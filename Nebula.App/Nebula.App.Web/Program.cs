@@ -149,14 +149,14 @@ builder.Services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
 builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
 builder.Services.AddSingleton<IOperationKindDetector, OperationKindDetector>();
 builder.Services.AddSingleton<IExecutionEvidenceCollector, ExecutionEvidenceCollector>();
-builder.Services.AddSingleton<IFileWriteSafetyClassifier>(provider =>
+builder.Services.AddScoped<IFileWriteSafetyClassifier>(provider =>
     new FileWriteSafetyClassifier(
         ReferenceWorkspace.Resolve(
             provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root));
-builder.Services.AddSingleton<IScriptContentSafetyClassifier, ScriptContentSafetyClassifier>();
+builder.Services.AddScoped<IScriptContentSafetyClassifier, ScriptContentSafetyClassifier>();
 builder.Services.AddSingleton<IJsonExtractor, JsonExtractor>();
 builder.Services.AddSingleton<Nebula.Agent.ILogger, ConsoleLogger>();
-builder.Services.AddSingleton<DeterministicCommandClassifier>(provider =>
+builder.Services.AddScoped<DeterministicCommandClassifier>(provider =>
     new DeterministicCommandClassifier(
         ReferenceWorkspace.Resolve(
             provider.GetRequiredService<NebulaRuntimeSettings>().WorkspaceRoot).Root,
