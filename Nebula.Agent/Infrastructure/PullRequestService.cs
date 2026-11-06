@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Options;
 using Nebula.Core.Agent;
 using Nebula.Runner;
 using System.Net.Http.Headers;
@@ -9,8 +11,36 @@ namespace Nebula.Agent.Infrastructure;
 public sealed class PullRequestService(
     IShellExecutor executor,
     ILogger logger,
-    IHttpClientFactory httpClientFactory) : IPullRequestService
+    IHttpClientFactory httpClientFactory,
+    IOptions<PullRequestOptions>? options = null) : IPullRequestService
 {
+    private PullRequestOptions Options => options?.Value ?? new PullRequestOptions();
+
+    public string DefaultTargetBranch
+    {
+        get
+        {
+            var branch = Options.DefaultTargetBranch?.Trim();
+            return string.IsNullOrWhiteSpace(branch) ? "main" : branch;
+        }
+    }
+
+    public bool IsProviderConfigured(PullRequestProvider provider)
+    {
+        var current = Options;
+        return provider switch
+        {
+            PullRequestProvider.GitHub =>
+                !string.IsNullOrWhiteSpace(current.GitHubToken),
+            PullRequestProvider.GitLab =>
+                !string.IsNullOrWhiteSpace(current.GitLabToken),
+            PullRequestProvider.Auto =>
+                !string.IsNullOrWhiteSpace(current.GitHubToken) ||
+                !string.IsNullOrWhiteSpace(current.GitLabToken),
+            _ => false
+        };
+    }
+
     public async Task<PullRequestResult> CreatePullRequestAsync(PullRequestRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.WorkingDirectory) || !Directory.Exists(request.WorkingDirectory))
@@ -18,38 +48,104 @@ public sealed class PullRequestService(
             return new PullRequestResult(false, null, null, "Working directory does not exist.");
         }
 
-        var repoInfo = await GetRepositoryInfoAsync(request.WorkingDirectory, cancellationToken);
+        var currentOptions = Options;
+        var effectiveRequest = request with
+        {
+            SourceBranch = request.SourceBranch?.Trim() ?? string.Empty,
+            TargetBranch = string.IsNullOrWhiteSpace(request.TargetBranch)
+                ? DefaultTargetBranch
+                : request.TargetBranch.Trim(),
+            GitHubToken = string.IsNullOrWhiteSpace(request.GitHubToken)
+                ? currentOptions.GitHubToken
+                : request.GitHubToken,
+            GitLabToken = string.IsNullOrWhiteSpace(request.GitLabToken)
+                ? currentOptions.GitLabToken
+                : request.GitLabToken,
+            GitLabProjectId = string.IsNullOrWhiteSpace(request.GitLabProjectId)
+                ? currentOptions.GitLabProjectId
+                : request.GitLabProjectId
+        };
+
+        if (!IsValidBranchName(effectiveRequest.SourceBranch))
+        {
+            return new PullRequestResult(false, null, null, "Source branch name is invalid.");
+        }
+
+        if (!IsValidBranchName(effectiveRequest.TargetBranch))
+        {
+            return new PullRequestResult(false, null, null, "Target branch name is invalid.");
+        }
+
+        if (string.Equals(
+                effectiveRequest.SourceBranch,
+                effectiveRequest.TargetBranch,
+                StringComparison.Ordinal))
+        {
+            return new PullRequestResult(false, null, null, "Source and target branches must be different.");
+        }
+
+        var repoInfo = await GetRepositoryInfoAsync(effectiveRequest.WorkingDirectory, cancellationToken);
         if (!repoInfo.IsRepository)
         {
             return new PullRequestResult(false, null, null, "Not a git repository.");
         }
 
-        var provider = request.Provider;
+        var provider = effectiveRequest.Provider;
         if (provider == PullRequestProvider.Auto)
         {
             provider = DetectProvider(repoInfo.RemoteUrl);
         }
 
-        var hasChanges = await HasUncommittedChangesAsync(request.WorkingDirectory, cancellationToken);
+        var providerToken = provider == PullRequestProvider.GitLab
+            ? effectiveRequest.GitLabToken
+            : effectiveRequest.GitHubToken;
+        if (string.IsNullOrWhiteSpace(providerToken))
+        {
+            var key = provider == PullRequestProvider.GitLab
+                ? "Nebula:PullRequest:GitLabToken"
+                : "Nebula:PullRequest:GitHubToken";
+            return new PullRequestResult(
+                false,
+                null,
+                null,
+                $"{provider} is not configured. Set {key} on the server.");
+        }
+
+        var hasChanges = await HasUncommittedChangesAsync(effectiveRequest.WorkingDirectory, cancellationToken);
         if (hasChanges)
         {
             return new PullRequestResult(false, null, null, "There are uncommitted changes. Commit or stash them first.");
         }
 
-        var isPushed = await IsBranchPushedAsync(request.WorkingDirectory, request.SourceBranch, cancellationToken);
+        var isPushed = await IsBranchPushedAsync(
+            effectiveRequest.WorkingDirectory,
+            effectiveRequest.SourceBranch,
+            cancellationToken);
         if (!isPushed)
         {
-            var pushResult = await PushBranchAsync(request.WorkingDirectory, request.SourceBranch, cancellationToken);
+            if (!currentOptions.PushBranchIfNeeded)
+            {
+                return new PullRequestResult(
+                    false,
+                    null,
+                    null,
+                    $"Branch '{effectiveRequest.SourceBranch}' is not pushed to origin and automatic push is disabled.");
+            }
+
+            var pushResult = await PushBranchAsync(
+                effectiveRequest.WorkingDirectory,
+                effectiveRequest.SourceBranch,
+                cancellationToken);
             if (!pushResult)
             {
-                return new PullRequestResult(false, null, null, $"Failed to push branch '{request.SourceBranch}' to remote.");
+                return new PullRequestResult(false, null, null, $"Failed to push branch '{effectiveRequest.SourceBranch}' to remote.");
             }
         }
 
         return provider switch
         {
-            PullRequestProvider.GitHub => await CreateGitHubPullRequestAsync(request, repoInfo, cancellationToken),
-            PullRequestProvider.GitLab => await CreateGitLabPullRequestAsync(request, repoInfo, cancellationToken),
+            PullRequestProvider.GitHub => await CreateGitHubPullRequestAsync(effectiveRequest, repoInfo, cancellationToken),
+            PullRequestProvider.GitLab => await CreateGitLabPullRequestAsync(effectiveRequest, repoInfo, cancellationToken),
             _ => new PullRequestResult(false, null, null, "Unsupported provider. Use GitHub or GitLab.")
         };
     }
@@ -173,7 +269,11 @@ public sealed class PullRequestService(
             return new PullRequestResult(false, null, null, "GitLab project ID is required (or repository name must be parseable from remote).");
         }
 
-        var projectId = request.GitLabProjectId ?? $"{repoInfo.Owner}%2F{repoInfo.Name}";
+        var projectId = string.IsNullOrWhiteSpace(request.GitLabProjectId)
+            ? $"{repoInfo.Owner}/{repoInfo.Name}"
+            : request.GitLabProjectId;
+        projectId = Uri.EscapeDataString(
+            projectId.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase));
 
         try
         {
@@ -211,6 +311,28 @@ public sealed class PullRequestService(
         }
     }
 
+    private static bool IsValidBranchName(string branchName)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+        {
+            return false;
+        }
+
+        var branch = branchName.Trim();
+        if (branch.Length > 200 ||
+            branch.StartsWith("-", StringComparison.Ordinal) ||
+            branch.EndsWith("/", StringComparison.Ordinal) ||
+            branch.EndsWith(".", StringComparison.Ordinal) ||
+            branch.Contains("..", StringComparison.Ordinal) ||
+            branch.Contains("//", StringComparison.Ordinal) ||
+            branch.Contains("@{", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(branch, @"^[A-Za-z0-9._/-]+$");
+    }
+
     private static PullRequestProvider DetectProvider(string? remoteUrl)
     {
         if (string.IsNullOrWhiteSpace(remoteUrl))
@@ -235,7 +357,11 @@ public sealed class PullRequestService(
                 var parts = remoteUrl.Split(':', 2);
                 if (parts.Length == 2)
                 {
-                    var path = parts[1].TrimEnd('.', 'g', 'i', 't');
+                    var path = parts[1].TrimEnd('/');
+                    if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                    {
+                        path = path[..^4];
+                    }
                     var pathParts = path.Split('/', 2);
                     if (pathParts.Length == 2)
                         return (pathParts[0], pathParts[1]);
@@ -246,7 +372,11 @@ public sealed class PullRequestService(
             if (remoteUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
                 var uri = new Uri(remoteUrl);
-                var path = uri.AbsolutePath.Trim('/').TrimEnd(".git".ToCharArray());
+                var path = uri.AbsolutePath.Trim('/');
+                if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                {
+                    path = path[..^4];
+                }
                 var pathParts = path.Split('/', 2);
                 if (pathParts.Length == 2)
                     return (pathParts[0], pathParts[1]);
@@ -262,7 +392,7 @@ public sealed class PullRequestService(
 
     private async Task<bool> PushBranchAsync(string workingDirectory, string branchName, CancellationToken cancellationToken)
     {
-        var result = await RunGitAsync(workingDirectory, $"git push origin {branchName}", cancellationToken);
+        var result = await RunGitAsync(workingDirectory, $"git push origin \"{branchName}\"", cancellationToken);
         return result.Success;
     }
 

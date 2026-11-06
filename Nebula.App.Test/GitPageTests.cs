@@ -36,6 +36,7 @@ public sealed class GitPageTests : HomePageTestContext
 
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
         Services.AddSingleton<IGitService>(git);
+        Services.AddSingleton<IPullRequestService>(new FakePullRequestService());
         Services.AddSingleton<IShellExecutor>(new FakeShellExecutor());
 
         var component = Render<Git>();
@@ -87,6 +88,7 @@ public sealed class GitPageTests : HomePageTestContext
 
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
         Services.AddSingleton<IGitService>(git);
+        Services.AddSingleton<IPullRequestService>(new FakePullRequestService());
         Services.AddSingleton<IShellExecutor>(new FakeShellExecutor());
 
         var component = Render<Git>();
@@ -98,6 +100,116 @@ public sealed class GitPageTests : HomePageTestContext
             .Single(button => button.TextContent.Trim() == "Reverter");
 
         Assert.True(revertButton.HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void pull_request_uses_current_branch_and_default_target()
+    {
+        var git = new FakeGitService
+        {
+            Status = new GitStatusResult(
+                true,
+                "feature/revert",
+                false,
+                [],
+                [],
+                [],
+                null),
+            Branches = new GitBranchResult(
+                true,
+                "feature/revert",
+                ["feature/revert", "main"],
+                null)
+        };
+        var pullRequests = new FakePullRequestService();
+
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+        Services.AddSingleton<IGitService>(git);
+        Services.AddSingleton<IPullRequestService>(pullRequests);
+        Services.AddSingleton<IShellExecutor>(new FakeShellExecutor());
+
+        var component = Render<Git>();
+
+        component.WaitForAssertion(() =>
+            Assert.Contains("Criar Pull Request", component.Markup));
+
+        var inputs = component.FindAll(".nebula-git-pr input");
+        Assert.Equal("feature/revert", inputs[1].GetAttribute("value"));
+        Assert.Equal("main", inputs[2].GetAttribute("value"));
+
+        inputs[0].Input("Add selective revert");
+
+        var createButton = component.FindAll("button")
+            .Single(button =>
+                button.TextContent.Contains(
+                    "Criar Pull Request",
+                    StringComparison.Ordinal));
+        Assert.False(createButton.HasAttribute("disabled"));
+
+        createButton.Click();
+
+        component.WaitForAssertion(() =>
+        {
+            Assert.NotNull(pullRequests.LastRequest);
+            Assert.Equal(
+                "feature/revert",
+                pullRequests.LastRequest.SourceBranch);
+            Assert.Equal("main", pullRequests.LastRequest.TargetBranch);
+            Assert.Equal(
+                PullRequestProvider.GitHub,
+                pullRequests.LastRequest.Provider);
+            Assert.Contains(
+                "https://github.com/owner/repo/pull/1",
+                component.Markup);
+        });
+    }
+
+    private sealed class FakePullRequestService : IPullRequestService
+    {
+        public PullRequestRequest? LastRequest { get; private set; }
+
+        public string DefaultTargetBranch => "main";
+
+        public bool IsProviderConfigured(PullRequestProvider provider) => true;
+
+        public Task<PullRequestResult> CreatePullRequestAsync(
+            PullRequestRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new PullRequestResult(
+                true,
+                "https://github.com/owner/repo/pull/1",
+                1,
+                null));
+        }
+
+        public Task<GitRepositoryInfo> GetRepositoryInfoAsync(
+            string workingDirectory,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new GitRepositoryInfo(
+                true,
+                "git@github.com:owner/repo.git",
+                "owner",
+                "repo",
+                "GitHub"));
+        }
+
+        public Task<bool> HasUncommittedChangesAsync(
+            string workingDirectory,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> IsBranchPushedAsync(
+            string workingDirectory,
+            string branchName,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class FakeGitService : IGitService

@@ -226,6 +226,20 @@ recusa `.git`, `..`, caminhos absolutos e metacaracteres, e bloqueia a operacao
 em branches protegidas (`main`, `master`, `develop`, `release`, `production`).
 Arquivos nao rastreados nao sao alterados por esse fluxo.
 
+O card "Pull Request" cria PR/MR no GitHub ou GitLab a partir da branch atual.
+Os tokens ficam apenas no servidor, nunca no navegador:
+
+```bash
+Nebula__PullRequest__GitHubToken=ghp_...
+Nebula__PullRequest__GitLabToken=glpat-...
+Nebula__PullRequest__DefaultTargetBranch=main
+Nebula__PullRequest__PushBranchIfNeeded=true
+```
+
+O botao so fica habilitado com o provedor configurado, sem alteracoes pendentes
+e em branch de trabalho. O push automatico pode ser desligado; nesse caso a
+branch precisa ja existir no remote.
+
 ## Migrations de banco
 
 O agente pode listar, criar e aplicar migrations de banco via `OperationKind.Migration`.

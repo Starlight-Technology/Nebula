@@ -332,6 +332,8 @@ builder.Services.AddScoped<IGitDiffService, GitDiffService>();
         builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
         builder.Services.AddScoped<ISmokeTestService, SmokeTestService>();
         builder.Services.AddScoped<IPortDetectionService, PortDetectionService>();
+        builder.Services.Configure<PullRequestOptions>(
+            builder.Configuration.GetSection("Nebula:PullRequest"));
         builder.Services.AddScoped<IPullRequestService, PullRequestService>();
         builder.Services.AddScoped<IMigrationService, MigrationService>();
         builder.Services.AddScoped<IScreenshotService, ScreenshotService>();

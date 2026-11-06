@@ -1,5 +1,18 @@
 namespace Nebula.Core.Agent;
 
+public sealed class PullRequestOptions
+{
+    public string? GitHubToken { get; set; }
+
+    public string? GitLabToken { get; set; }
+
+    public string? GitLabProjectId { get; set; }
+
+    public string DefaultTargetBranch { get; set; } = "main";
+
+    public bool PushBranchIfNeeded { get; set; } = true;
+}
+
 public sealed record PullRequestRequest(
     string WorkingDirectory,
     string Title,
@@ -37,4 +50,6 @@ public interface IPullRequestService
     Task<GitRepositoryInfo> GetRepositoryInfoAsync(string workingDirectory, CancellationToken cancellationToken = default);
     Task<bool> HasUncommittedChangesAsync(string workingDirectory, CancellationToken cancellationToken = default);
     Task<bool> IsBranchPushedAsync(string workingDirectory, string branchName, CancellationToken cancellationToken = default);
+    bool IsProviderConfigured(PullRequestProvider provider);
+    string DefaultTargetBranch { get; }
 }

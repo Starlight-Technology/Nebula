@@ -101,7 +101,7 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 
 - [x] Integrar Git core: diff, status, branch, commit, amend, revert por commit, log e remotes (`GitService`); revert seletivo coberto por `GitServiceTest`, demais fluxos ainda sem teste direto.
 - [x] Adicionar revert seletivo por arquivo: `IGitService.RevertFileAsync` valida path/repo, bloqueia branches protegidas, aceita `staged` e commit de origem e e acionado com confirmacao em dois cliques na tela `/git`.
-- [~] Adicionar fluxo de PR: `PullRequestService` cobre GitHub/GitLab e esta registrado em DI, mas nao tem chamadores nem UI de PR.
+- [x] Adicionar fluxo de PR: `PullRequestService` cobre GitHub/GitLab, usa tokens server-side (`Nebula:PullRequest:*`), valida branches, faz push opcional e tem card na tela `/git`; coberto por `PullRequestServiceTest` e `GitPageTests`.
 - [x] Adicionar geracao de mensagens de commit baseadas em diff (`GitService.GenerateCommitMessageAsync` + botao em `Git.razor`); sem teste direto.
 - [x] Criar suporte a testes direcionados por arquivo alterado (`TestRunnerService.RunTargetedTestsAsync`, usado em `TestRunnerCard`/`AgentRunLive`); sem teste unitario direto do servico.
 - [~] Adicionar execucao de smoke tests de apps web locais: `SmokeTestService` registrado, sem chamadores/testes.
@@ -178,7 +178,7 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 - [~] Marco 4: Nebula altera um projeto existente seguindo padroes locais e passando testes. Workspace map/patch existem, falta prova E2E.
 - [x] Marco 5: Nebula retoma uma tarefa interrompida sem perder contexto.
 - [x] Marco 6: Nebula opera com perfil autonomo configuravel por workspace. Settings/simulator existem e o runner real aplica os defaults do perfil via `EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories`, com precedencia para a configuracao explicita.
-- [~] Marco 7: Nebula entrega mudancas prontas para commit/PR com relatorio final. Relatorio/Git diff existem; `PullRequestService` ainda nao tem UI/chamadores.
+- [x] Marco 7: Nebula entrega mudancas prontas para commit/PR com relatorio final. Relatorio/Git diff existem e a tela `/git` cria PR/MR via GitHub/GitLab com token configurado no servidor.
 
 ## Indicadores de Sucesso
 

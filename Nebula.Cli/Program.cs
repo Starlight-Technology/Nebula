@@ -329,6 +329,8 @@ services.AddScoped<Nebula.Core.Agent.IGitService, Nebula.Agent.Infrastructure.Gi
 services.AddScoped<Nebula.Core.Agent.ITestRunnerService, Nebula.Agent.Infrastructure.TestRunnerService>();
 services.AddScoped<Nebula.Core.Agent.ISmokeTestService, Nebula.Agent.Infrastructure.SmokeTestService>();
 services.AddScoped<Nebula.Core.Agent.IPortDetectionService, Nebula.Agent.Infrastructure.PortDetectionService>();
+services.Configure<Nebula.Core.Agent.PullRequestOptions>(
+    configuration.GetSection("Nebula:PullRequest"));
 services.AddScoped<Nebula.Core.Agent.IPullRequestService, Nebula.Agent.Infrastructure.PullRequestService>();
 services.AddScoped<Nebula.Core.Agent.IMigrationService, Nebula.Agent.Infrastructure.MigrationService>();
 services.AddScoped<Nebula.Core.Agent.IScreenshotService, Nebula.Agent.Infrastructure.ScreenshotService>();

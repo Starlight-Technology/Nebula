@@ -3071,9 +3071,10 @@ pre {
     margin-bottom: 0.75rem;
 }
 
+.nebula-git-commit-input input,
 .nebula-git-commit-input textarea {
     width: 100%;
-    min-height: 5rem;
+    min-height: 2.25rem;
     border-radius: 6px;
     border: 1px solid var(--nebula-border-strong);
     background: rgba(10, 12, 14, 0.86);
@@ -3081,13 +3082,37 @@ pre {
     font-family: "Cascadia Code", "Consolas", monospace;
     font-size: 0.82rem;
     padding: 0.5rem 0.75rem;
+}
+
+.nebula-git-commit-input textarea {
+    min-height: 5rem;
     resize: vertical;
 }
 
+.nebula-git-commit-input input:focus,
 .nebula-git-commit-input textarea:focus {
     outline: none;
     border-color: var(--nebula-teal);
     box-shadow: 0 0 0 3px var(--nebula-teal-soft);
+}
+
+.nebula-git-pr__hint,
+.nebula-git-pr__feedback {
+    margin: 0.5rem 0;
+    font-size: 0.82rem;
+    color: var(--nebula-muted);
+}
+
+.nebula-git-pr__link {
+    display: inline-flex;
+    margin-top: 0.5rem;
+    color: var(--nebula-teal);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.nebula-git-pr__link:hover {
+    text-decoration: underline;
 }
 
 .nebula-git-commit-input small {

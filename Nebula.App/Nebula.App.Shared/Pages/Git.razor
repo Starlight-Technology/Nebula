@@ -3,6 +3,7 @@
 @inject NebulaWorkspaceState WorkspaceState
 @inject NavigationManager NavigationManager
 @inject Core.Agent.IGitService GitService
+@inject Core.Agent.IPullRequestService PullRequestService
 @inject Nebula.Runner.IShellExecutor ShellExecutor
 @using Nebula.Core.Agent
 
@@ -420,6 +421,89 @@
                     </div>
                 </CoronaCard>
 
+                <CoronaCard Class="nebula-git-sidebar-card nebula-git-pr">
+                    <p class="nebula-kicker">Pull Request</p>
+
+                    @if (!IsPullRequestConfigured)
+                    {
+                        <CoronaBadge Content="Nao configurado"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="CoronaColorSemantic.Warning" />
+                        <p class="nebula-git-pr__hint">
+                            Configure o token do provedor no servidor
+                            (<code>Nebula:PullRequest:GitHubToken</code> ou
+                            <code>Nebula:PullRequest:GitLabToken</code>).
+                        </p>
+                    }
+                    else if (Status?.HasUncommittedChanges == true)
+                    {
+                        <CoronaBadge Content="Commit pendente"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="CoronaColorSemantic.Warning" />
+                        <p class="nebula-git-pr__hint">
+                            Faca commit ou stash das alteracoes antes de abrir o PR.
+                        </p>
+                    }
+                    else
+                    {
+                        <label class="nebula-git-commit-input">
+                            <span>Titulo</span>
+                            <input @bind="PullRequestTitle"
+                                   @bind:event="oninput"
+                                   placeholder="Resumo da mudanca"
+                                   disabled="@IsCreatingPullRequest" />
+                        </label>
+
+                        <label class="nebula-git-commit-input">
+                            <span>Descricao</span>
+                            <textarea @bind="PullRequestDescription"
+                                      @bind:event="oninput"
+                                      rows="3"
+                                      placeholder="Contexto, testes e riscos"
+                                      disabled="@IsCreatingPullRequest"></textarea>
+                        </label>
+
+                        <label class="nebula-git-commit-input">
+                            <span>Origem</span>
+                            <input @bind="PullRequestSourceBranch"
+                                   @bind:event="oninput"
+                                   disabled="@IsCreatingPullRequest" />
+                        </label>
+
+                        <label class="nebula-git-commit-input">
+                            <span>Destino</span>
+                            <input @bind="PullRequestTargetBranch"
+                                   @bind:event="oninput"
+                                   disabled="@IsCreatingPullRequest" />
+                        </label>
+
+                        <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                                      Color="CoronaColorSemantic.Primary"
+                                      FullWidth="true"
+                                      Icon="@CoronaIcons.Upload"
+                                      OnClick="CreatePullRequestAsync"
+                                      Disabled="@PullRequestDisabled"
+                                      Loading="@IsCreatingPullRequest">
+                            Criar Pull Request
+                        </CoronaButton>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(PullRequestFeedback))
+                    {
+                        <p class="nebula-git-pr__feedback">@PullRequestFeedback</p>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(PullRequestUrl))
+                    {
+                        <a class="nebula-git-pr__link"
+                           href="@PullRequestUrl"
+                           target="_blank"
+                           rel="noopener noreferrer">
+                            Abrir Pull Request
+                        </a>
+                    }
+                </CoronaCard>
+
                 <CoronaCard Class="nebula-git-sidebar-card">
                     <p class="nebula-kicker">Conventional Commits</p>
                     <div class="nebula-git-conventional">
@@ -445,6 +529,7 @@
     private GitBranchResult? Branches;
     private GitLogResult? Log;
     private GitRemoteResult? Remotes;
+    private GitRepositoryInfo? RepositoryInfo;
     private string? Diff;
     private string CommitMessage = string.Empty;
     private string Feedback = string.Empty;
@@ -455,13 +540,41 @@
     private bool IsRevertingFile;
     private string? PendingRevertKey;
     private bool IsGeneratingMessage;
+    private bool IsCreatingPullRequest;
     private bool ShowStagedDiff = false;
     private int LogCount = 10;
+    private string PullRequestTitle = string.Empty;
+    private string PullRequestDescription = string.Empty;
+    private string PullRequestSourceBranch = string.Empty;
+    private string PullRequestTargetBranch = string.Empty;
+    private string PullRequestFeedback = string.Empty;
+    private string? PullRequestUrl;
 
     private bool IsRepository => Status?.IsRepository == true;
     private bool IsProtected => Branches?.CurrentBranch != null && GitProtectedBranches.IsProtected(Branches.CurrentBranch);
     private bool PullDisabled => IsLoading || IsProtected;
     private bool PushDisabled => IsLoading || IsProtected;
+    private PullRequestProvider RemoteProvider => RepositoryInfo?.Provider switch
+    {
+        "GitHub" => PullRequestProvider.GitHub,
+        "GitLab" => PullRequestProvider.GitLab,
+        _ => PullRequestProvider.Auto
+    };
+    private bool IsPullRequestConfigured =>
+        PullRequestService.IsProviderConfigured(RemoteProvider);
+    private bool PullRequestDisabled =>
+        IsLoading ||
+        IsCreatingPullRequest ||
+        IsProtected ||
+        !IsPullRequestConfigured ||
+        Status?.HasUncommittedChanges == true ||
+        string.IsNullOrWhiteSpace(PullRequestTitle) ||
+        string.IsNullOrWhiteSpace(PullRequestSourceBranch) ||
+        string.IsNullOrWhiteSpace(PullRequestTargetBranch) ||
+        string.Equals(
+            PullRequestSourceBranch.Trim(),
+            PullRequestTargetBranch.Trim(),
+            StringComparison.Ordinal);
 
     protected override async Task OnInitializedAsync()
     {
@@ -490,6 +603,19 @@
             Branches = await GitService.GetBranchesAsync(workspace);
             Log = await GitService.GetLogAsync(workspace, LogCount);
             Remotes = await GitService.GetRemotesAsync(workspace);
+            RepositoryInfo = await PullRequestService.GetRepositoryInfoAsync(workspace);
+
+            if (string.IsNullOrWhiteSpace(PullRequestSourceBranch))
+            {
+                PullRequestSourceBranch =
+                    Branches.CurrentBranch ?? Status.CurrentBranch;
+            }
+
+            if (string.IsNullOrWhiteSpace(PullRequestTargetBranch))
+            {
+                PullRequestTargetBranch = PullRequestService.DefaultTargetBranch;
+            }
+
             Diff = await GetDiffAsync();
 
             if (Status.HasUncommittedChanges && string.IsNullOrWhiteSpace(CommitMessage))
@@ -610,6 +736,55 @@
         finally
         {
             IsCommitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CreatePullRequestAsync()
+    {
+        if (PullRequestDisabled)
+        {
+            return;
+        }
+
+        IsCreatingPullRequest = true;
+        PullRequestFeedback = string.Empty;
+        PullRequestUrl = null;
+        StateHasChanged();
+
+        try
+        {
+            var request = new PullRequestRequest(
+                WorkspaceState.ResolvedWorkspace.Root,
+                PullRequestTitle.Trim(),
+                PullRequestDescription.Trim(),
+                PullRequestSourceBranch.Trim(),
+                PullRequestTargetBranch.Trim(),
+                RemoteProvider);
+
+            var result = await PullRequestService.CreatePullRequestAsync(request);
+            if (result.Success)
+            {
+                PullRequestUrl = result.PullRequestUrl;
+                PullRequestFeedback =
+                    $"Pull Request criado: #{result.PullRequestNumber}.";
+                IsError = false;
+            }
+            else
+            {
+                PullRequestFeedback =
+                    result.Error ?? "Falha ao criar Pull Request.";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            PullRequestFeedback = $"Erro ao criar Pull Request: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsCreatingPullRequest = false;
             StateHasChanged();
         }
     }
