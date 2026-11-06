@@ -1357,6 +1357,109 @@ public sealed class AgentActionRunnerTest
     }
 
     [Fact]
+    public async Task run_async_must_apply_autonomous_profile_auto_approval_defaults()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests"),
+            CompleteDecision("The install command completed.", "Package installed.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        SetupAffirmativeVerification(llamaClientMock);
+
+        var executorMock = CreateExecutorMock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("installed");
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Autonomous
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(result.Commands[0].AutoApproved);
+        Assert.False(result.Commands[0].ApprovedByUser);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_keep_approval_with_conservative_profile()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Conservative
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        Assert.False(result.Commands[0].AutoApproved);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_async_must_respect_explicit_auto_approval_override_for_autonomous_profile()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Autonomous,
+                AutoApproveCommands = false,
+                AutoApproveCommandsConfigured = true
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        Assert.False(result.Commands[0].AutoApproved);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task run_async_must_execute_approval_required_command_in_sandbox_when_enabled()
     {
         var decisions = new Queue<string>(

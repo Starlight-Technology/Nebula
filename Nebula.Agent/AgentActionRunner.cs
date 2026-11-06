@@ -1607,7 +1607,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
-                "Patch permitido automaticamente: o sandbox Docker isola a execucao e os arquivos estao dentro do workspace.");
+                "Patch permitido automaticamente: o sandbox de containers isola a execucao e os arquivos estao dentro do workspace.");
         }
 
         session.EmitActionStarted(execution);
@@ -2311,7 +2311,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
-                "Criacao permitida automaticamente: o sandbox Docker isola a execucao e o alvo esta dentro do workspace.");
+                "Criacao permitida automaticamente: o sandbox de containers isola a execucao e o alvo esta dentro do workspace.");
         }
 
         session.EmitActionStarted(execution);
@@ -2755,7 +2755,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         execution.Sandboxed = true;
         execution.Notes = AppendApprovalNote(
             execution.Notes,
-            "Executado no sandbox Docker (sem rede, sem privilegios).");
+            "Executado no sandbox de containers (sem rede, sem privilegios).");
 
         var (observationMessage, _) = await RecordToolOutcomeAsync(
             session,
@@ -4057,8 +4057,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 approvedByUser,
                 session.ApprovedCommandsForConversation.Contains(
                     CommandNormalization.Normalize(execution.Run)),
-                runtimeSettings.AutoApproveCommands,
-                runtimeSettings.AutoApproveCategories,
+                runtimeSettings.EffectiveAutoApproveCommands,
+                runtimeSettings.EffectiveAutoApproveCategories,
                 workspaceCategoryEntries
                     .Select(entry => entry.Value)
                     .ToList()));

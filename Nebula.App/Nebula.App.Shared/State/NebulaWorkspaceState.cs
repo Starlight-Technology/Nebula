@@ -8,6 +8,7 @@ using Nebula.Agent.Data;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Agent;
 using Nebula.Core.Configuration;
+using Nebula.Core.Execution;
 using Nebula.Core.Interactions;
 using Nebula.Core.Memory;
 using Nebula.Core.Operations;
@@ -36,7 +37,8 @@ public sealed class NebulaWorkspaceState(
     IPolicySimulator? policySimulator = null,
     IUserMemoryService? userMemoryService = null,
     Core.Agent.IGitService? gitService = null,
-    Nebula.Runner.IShellExecutor? shellExecutor = null) : IDisposable, IAsyncDisposable
+    Nebula.Runner.IShellExecutor? shellExecutor = null,
+    ISandboxSettingsStore? sandboxSettingsStore = null) : IDisposable, IAsyncDisposable
 {
     private const string QuickSettingsStorageKey = "nebula.quick-settings.v1";
 
@@ -49,6 +51,8 @@ public sealed class NebulaWorkspaceState(
     private IJSObjectReference? environmentModule;
     private CancellationTokenSource? activeTurnCancellationSource;
     private bool settingsLoaded;
+    private bool sandboxInheritedFromGlobal;
+    private string sandboxSettingsOrigin = "server";
     private bool isDisposed;
 
     private readonly Core.Agent.IGitService? _gitService = gitService;
@@ -155,7 +159,23 @@ public sealed class NebulaWorkspaceState(
         AccelerationProfile = runtimeSettings.AccelerationProfile,
         ResponseLanguageCode = runtimeSettings.ResponseLanguageCode,
         WorkspaceRoot = runtimeSettings.WorkspaceRoot,
-        AutoApproveCommands = runtimeSettings.AutoApproveCommands
+        UserId = runtimeSettings.UserId,
+        AutonomyProfile = FormatAutonomyProfile(runtimeSettings.AutonomyProfile),
+        ProviderMode = runtimeSettings.ProviderMode,
+        AutoApproveCommands = runtimeSettings.EffectiveAutoApproveCommands,
+        AutoApproveCommandsConfigured = runtimeSettings.AutoApproveCommandsConfigured,
+        CompactMode = runtimeSettings.CompactMode,
+        ScreenshotEnabled = runtimeSettings.ScreenshotEnabled,
+        ScreenshotDiffThresholdPercent = runtimeSettings.ScreenshotDiffThresholdPercent,
+        ScreenshotViewportsText = runtimeSettings.ScreenshotViewportsText,
+        ScreenshotCaptureDelayMs = runtimeSettings.ScreenshotCaptureDelayMs,
+        SandboxMode = FormatSandboxMode(runtimeSettings.SandboxMode),
+        SandboxImage = runtimeSettings.SandboxImage,
+        SandboxMemoryLimitMb = runtimeSettings.SandboxMemoryLimitMb,
+        SandboxCpuLimit = runtimeSettings.SandboxCpuLimit,
+        SandboxScope = string.IsNullOrWhiteSpace(runtimeSettings.WorkspaceRoot)
+            ? "global"
+            : "workspace"
     };
 
     public LlamaRuntimeState? RuntimeState { get; private set; }
@@ -246,6 +266,35 @@ public sealed class NebulaWorkspaceState(
 
     public bool IsSavingSettings { get; private set; }
 
+    public bool IsSandboxInheritedFromGlobal => sandboxInheritedFromGlobal;
+
+    public string SandboxSettingsOrigin => sandboxSettingsOrigin;
+
+    public bool IsSandboxModeLockedForSelectedProfile =>
+        RuntimeSettings.SandboxModeFloor == SandboxMode.Docker &&
+        ParseAutonomyProfile(QuickSettings.AutonomyProfile) is
+            AutonomyProfile.Conservative or AutonomyProfile.Standard;
+
+    public string SandboxPolicyHint
+    {
+        get
+        {
+            if (IsSandboxModeLockedForSelectedProfile)
+            {
+                return "O perfil atual exige o sandbox Docker configurado no servidor e nao permite desativa-lo.";
+            }
+
+            if (RuntimeSettings.SandboxModeFloor == SandboxMode.Docker &&
+                ParseAutonomyProfile(QuickSettings.AutonomyProfile) is
+                    AutonomyProfile.Autonomous or AutonomyProfile.Lab)
+            {
+                return "Este perfil pode desativar o sandbox, mas isso reduz o isolamento configurado no servidor.";
+            }
+
+            return "O modo Docker exige o binario docker disponivel no host. Comandos elegiveis rodam sem rede e sem privilegios.";
+        }
+    }
+
     public bool IsRuntimeOnline => RuntimeState?.IsAvailable == true;
 
     public bool CanSend => !IsSending && !string.IsNullOrWhiteSpace(ComposerText);
@@ -323,20 +372,48 @@ public sealed class NebulaWorkspaceState(
         }
 
         IsLoadingSettings = true;
+        SettingsFeedback = null;
         NotifyChanged();
 
         try
         {
-            var json = await jsRuntime.InvokeAsync<string?>(
-                "localStorage.getItem",
-                QuickSettingsStorageKey);
-            if (!string.IsNullOrWhiteSpace(json))
+            var serverSandboxMode = RuntimeSettings.SandboxMode;
+            var serverSandboxImage = RuntimeSettings.SandboxImage;
+            var serverSandboxMemoryLimitMb = RuntimeSettings.SandboxMemoryLimitMb;
+            var serverSandboxCpuLimit = RuntimeSettings.SandboxCpuLimit;
+            var usedLocalSandbox = false;
+            var localSandboxScope = string.Empty;
+
+            try
             {
-                var snapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(json);
-                if (snapshot is not null)
+                var json = await jsRuntime.InvokeAsync<string?>(
+                    "localStorage.getItem",
+                    QuickSettingsStorageKey);
+                if (!string.IsNullOrWhiteSpace(json))
                 {
-                    RuntimeSettings.Apply(snapshot);
+                    var snapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(json);
+                    if (snapshot is not null)
+                    {
+                        RuntimeSettings.Apply(snapshot);
+                        if (snapshot.SandboxConfigured)
+                        {
+                            usedLocalSandbox = true;
+                            localSandboxScope = snapshot.SandboxScope;
+                        }
+                        else
+                        {
+                            RuntimeSettings.SandboxMode = serverSandboxMode;
+                            RuntimeSettings.SandboxImage = serverSandboxImage;
+                            RuntimeSettings.SandboxMemoryLimitMb = serverSandboxMemoryLimitMb;
+                            RuntimeSettings.SandboxCpuLimit = serverSandboxCpuLimit;
+                        }
+                    }
                 }
+            }
+            catch (Exception ex) when (ex is JSException or InvalidOperationException or JsonException)
+            {
+                SettingsFeedback =
+                    "Nao consegui carregar as preferencias locais. Tentando a configuracao persistida.";
             }
 
             if (string.IsNullOrWhiteSpace(RuntimeSettings.MainModel))
@@ -349,14 +426,62 @@ public sealed class NebulaWorkspaceState(
                 RuntimeSettings.LearningModel = RuntimeSettings.MainModel;
             }
 
+            var workspace = RuntimeSettings.WorkspaceRoot?.Trim() ?? string.Empty;
+            var usedDatabaseSandbox = false;
+            if (sandboxSettingsStore is not null)
+            {
+                try
+                {
+                    var stored = await sandboxSettingsStore.GetEffectiveAsync(
+                        NormalizeSandboxUserId(RuntimeSettings.UserId),
+                        workspace);
+                    if (stored is not null)
+                    {
+                        usedDatabaseSandbox = true;
+                        RuntimeSettings.SandboxMode = stored.Mode;
+                        RuntimeSettings.SandboxImage = stored.Image;
+                        RuntimeSettings.SandboxMemoryLimitMb = stored.MemoryLimitMb;
+                        RuntimeSettings.SandboxCpuLimit = stored.CpuLimit;
+                        sandboxInheritedFromGlobal =
+                            stored.Workspace.Length == 0 && workspace.Length > 0;
+                        sandboxSettingsOrigin = stored.Workspace.Length == 0
+                            ? "global"
+                            : "workspace";
+                        QuickSettings.SandboxScope = stored.Workspace.Length == 0
+                            ? "global"
+                            : "workspace";
+                    }
+                }
+                catch (Exception)
+                {
+                    SettingsFeedback =
+                        "Nao consegui carregar o sandbox persistido. Usando a configuracao local.";
+                }
+            }
+
+            if (!usedDatabaseSandbox)
+            {
+                sandboxInheritedFromGlobal = false;
+                sandboxSettingsOrigin = usedLocalSandbox ? "local" : "server";
+                QuickSettings.SandboxScope = usedLocalSandbox
+                    ? NormalizeSandboxScope(localSandboxScope, workspace)
+                    : workspace.Length == 0
+                        ? "global"
+                        : "workspace";
+            }
+
+            RuntimeSettings.SandboxMode = NebulaRuntimeSettings.ResolveSandboxMode(
+                RuntimeSettings.AutonomyProfile,
+                RuntimeSettings.SandboxModeFloor,
+                RuntimeSettings.SandboxMode);
+            RuntimeSettings.SandboxImage = NebulaRuntimeSettings.NormalizeSandboxImage(
+                RuntimeSettings.SandboxImage);
+            RuntimeSettings.SandboxMemoryLimitMb = Math.Max(0, RuntimeSettings.SandboxMemoryLimitMb);
+            RuntimeSettings.SandboxCpuLimit = Math.Max(0, RuntimeSettings.SandboxCpuLimit);
+
             SyncQuickSettingsDraft();
             await ApplyConfiguredMainModelAsync();
             settingsLoaded = true;
-        }
-        catch (Exception ex) when (ex is JSException or InvalidOperationException or JsonException)
-        {
-            SettingsFeedback =
-                "Nao consegui carregar as preferencias salvas. Os valores padrao continuam ativos.";
         }
         finally
         {
@@ -383,6 +508,21 @@ public sealed class NebulaWorkspaceState(
                         QuickSettings.ResponseLanguageCode,
                         StringComparison.OrdinalIgnoreCase))
                 ?? ResponseLanguages[0];
+            var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+            var requestedSandboxMode = ParseSandboxMode(QuickSettings.SandboxMode);
+            var effectiveSandboxMode = NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                requestedSandboxMode);
+            var workspace = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty;
+            var sandboxScope = NormalizeSandboxScope(QuickSettings.SandboxScope, workspace);
+            var sandboxWorkspace = sandboxScope == "global" ? string.Empty : workspace;
+            var sandboxUserId = NormalizeSandboxUserId(QuickSettings.UserId);
+            var sandboxImage = NebulaRuntimeSettings.NormalizeSandboxImage(
+                QuickSettings.SandboxImage);
+            var sandboxMemoryLimitMb = Math.Max(0, QuickSettings.SandboxMemoryLimitMb);
+            var sandboxCpuLimit = Math.Max(0, QuickSettings.SandboxCpuLimit);
+
             var snapshot = new NebulaRuntimeSettingsSnapshot
             {
                 MainModel = NormalizeModelSetting(
@@ -395,26 +535,97 @@ public sealed class NebulaWorkspaceState(
                 AccelerationProfile = QuickSettings.AccelerationProfile,
                 ResponseLanguageCode = language.Code,
                 ResponseLanguageName = language.Name,
-                WorkspaceRoot = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty,
+                AutoApproveCommands = QuickSettings.AutoApproveCommands,
+                AutoApproveCommandsConfigured = QuickSettings.AutoApproveCommandsConfigured,
+                AutoApproveCategories = RuntimeSettings.AutoApproveCategories.ToList(),
+                WorkspaceRoot = workspace,
                 UserId = QuickSettings.UserId?.Trim() ?? string.Empty,
-                AutonomyProfile = ParseAutonomyProfile(QuickSettings.AutonomyProfile),
+                AutonomyProfile = profile,
                 ProviderMode = QuickSettings.ProviderMode,
-                AutoApproveCommands = QuickSettings.AutoApproveCommands
+                RequireDeterministicVerification = RuntimeSettings.RequireDeterministicVerification,
+                CommandTimeoutSeconds = RuntimeSettings.CommandTimeoutSeconds,
+                ScriptTimeoutSeconds = RuntimeSettings.ScriptTimeoutSeconds,
+                MaxVerificationRetries = RuntimeSettings.MaxVerificationRetries,
+                LlmTimeoutSeconds = RuntimeSettings.LlmTimeoutSeconds,
+                MaxConsecutiveErrorRetries = RuntimeSettings.MaxConsecutiveErrorRetries,
+                EnableResultValidation = RuntimeSettings.EnableResultValidation,
+                EnableEnvironmentValidation = RuntimeSettings.EnableEnvironmentValidation,
+                SandboxMode = effectiveSandboxMode,
+                SandboxConfigured = true,
+                SandboxScope = sandboxScope,
+                SandboxImage = sandboxImage,
+                SandboxMemoryLimitMb = sandboxMemoryLimitMb,
+                SandboxCpuLimit = sandboxCpuLimit,
+                CompactMode = QuickSettings.CompactMode,
+                ScreenshotEnabled = QuickSettings.ScreenshotEnabled,
+                ScreenshotDiffThresholdPercent = QuickSettings.ScreenshotDiffThresholdPercent,
+                ScreenshotViewports = ParseScreenshotViewports(
+                    QuickSettings.ScreenshotViewportsText,
+                    RuntimeSettings.ScreenshotViewports),
+                ScreenshotCaptureDelayMs = Math.Max(0, QuickSettings.ScreenshotCaptureDelayMs)
             };
 
             RuntimeSettings.Apply(snapshot);
+
+            string? persistenceWarning = null;
+            if (sandboxSettingsStore is not null)
+            {
+                try
+                {
+                    if (sandboxScope == "global" && workspace.Length > 0)
+                    {
+                        await sandboxSettingsStore.DeleteAsync(
+                            sandboxUserId,
+                            workspace);
+                    }
+
+                    await sandboxSettingsStore.SaveAsync(new SandboxSettings(
+                        sandboxUserId,
+                        sandboxWorkspace,
+                        requestedSandboxMode,
+                        sandboxImage,
+                        sandboxMemoryLimitMb,
+                        sandboxCpuLimit,
+                        DateTimeOffset.UtcNow));
+                    sandboxInheritedFromGlobal = false;
+                    sandboxSettingsOrigin = sandboxWorkspace.Length == 0
+                        ? "global"
+                        : "workspace";
+                }
+                catch (Exception ex)
+                {
+                    persistenceWarning =
+                        $"Nao foi possivel persistir o sandbox no banco: {ex.Message}";
+                }
+            }
+
+            if (sandboxSettingsStore is null || persistenceWarning is not null)
+            {
+                sandboxInheritedFromGlobal = false;
+                sandboxSettingsOrigin = "local";
+            }
+
             SyncQuickSettingsDraft();
+            QuickSettings.SandboxScope = sandboxScope;
             var modelApplied = await ApplyConfiguredMainModelAsync();
-            var json = JsonSerializer.Serialize(RuntimeSettings.CreateSnapshot());
+            var persistedSnapshot = RuntimeSettings.CreateSnapshot();
+            persistedSnapshot.SandboxScope = sandboxScope;
+            var json = JsonSerializer.Serialize(persistedSnapshot);
             await jsRuntime.InvokeVoidAsync(
                 "localStorage.setItem",
                 QuickSettingsStorageKey,
                 json);
 
             settingsLoaded = true;
-            SettingsFeedback = modelApplied
+            var feedback = modelApplied
                 ? "Configuracao salva e aplicada nesta sessao."
                 : $"Configuracao salva. O modelo {RuntimeSettings.MainModel} precisa estar instalado para ser ativado.";
+            if (persistenceWarning is not null)
+            {
+                feedback = $"{feedback} {persistenceWarning}";
+            }
+
+            SettingsFeedback = feedback;
         }
         catch (Exception ex) when (ex is JSException or InvalidOperationException)
         {
@@ -1693,7 +1904,7 @@ public sealed class NebulaWorkspaceState(
 
     public string GetCommandApprovalSummary()
     {
-        return RuntimeSettings.AutoApproveCommands
+        return RuntimeSettings.EffectiveAutoApproveCommands
             ? "Auto-aprovacao ativa"
             : "Aprovacao manual";
     }
@@ -2218,7 +2429,15 @@ public sealed class NebulaWorkspaceState(
         QuickSettings.UserId = RuntimeSettings.UserId;
         QuickSettings.AutonomyProfile = FormatAutonomyProfile(RuntimeSettings.AutonomyProfile);
         QuickSettings.ProviderMode = RuntimeSettings.ProviderMode;
-        QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
+        QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommandsConfigured
+            ? RuntimeSettings.AutoApproveCommands
+            : RuntimeSettings.EffectiveAutoApproveCommands;
+        QuickSettings.AutoApproveCommandsConfigured =
+            RuntimeSettings.AutoApproveCommandsConfigured;
+        QuickSettings.SandboxMode = FormatSandboxMode(RuntimeSettings.SandboxMode);
+        QuickSettings.SandboxImage = RuntimeSettings.SandboxImage;
+        QuickSettings.SandboxMemoryLimitMb = RuntimeSettings.SandboxMemoryLimitMb;
+        QuickSettings.SandboxCpuLimit = RuntimeSettings.SandboxCpuLimit;
         QuickSettings.CompactMode = RuntimeSettings.CompactMode;
         QuickSettings.ScreenshotEnabled = RuntimeSettings.ScreenshotEnabled;
         QuickSettings.ScreenshotDiffThresholdPercent = RuntimeSettings.ScreenshotDiffThresholdPercent;
@@ -2262,9 +2481,101 @@ public sealed class NebulaWorkspaceState(
         };
     }
 
+    private static SandboxMode ParseSandboxMode(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "docker" => SandboxMode.Docker,
+            _ => SandboxMode.Disabled
+        };
+    }
+
+    private static string FormatSandboxMode(SandboxMode mode)
+    {
+        return mode == SandboxMode.Docker ? "docker" : "disabled";
+    }
+
+    private static string NormalizeSandboxScope(string? scope, string workspace)
+    {
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            return "global";
+        }
+
+        return scope?.Trim().Equals("global", StringComparison.OrdinalIgnoreCase) == true
+            ? "global"
+            : "workspace";
+    }
+
+    private string NormalizeSandboxUserId(string? userId)
+    {
+        var normalized = userId?.Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? userMemoryService?.DefaultUserId ?? "default"
+            : normalized;
+    }
+
+    private static List<string> ParseScreenshotViewports(
+        string? value,
+        IReadOnlyList<string> fallback)
+    {
+        var viewports = (value ?? string.Empty)
+            .Split(
+                ['\r', '\n', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(viewport => !string.IsNullOrWhiteSpace(viewport))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return viewports.Count > 0
+            ? viewports
+            : fallback.ToList();
+    }
+
+    public void NormalizeSandboxForSelectedProfile()
+    {
+        var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+        if (!QuickSettings.AutoApproveCommandsConfigured)
+        {
+            QuickSettings.AutoApproveCommands =
+                NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(profile);
+        }
+
+        var requestedMode = ParseSandboxMode(QuickSettings.SandboxMode);
+        QuickSettings.SandboxMode = FormatSandboxMode(
+            NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                requestedMode));
+        NotifyChanged();
+    }
+
+    public void NormalizeSandboxScopeFromWorkspace()
+    {
+        QuickSettings.SandboxScope = NormalizeSandboxScope(
+            QuickSettings.SandboxScope,
+            QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty);
+        NotifyChanged();
+    }
+
+    public void SetAutoApproveCommands(bool value)
+    {
+        QuickSettings.AutoApproveCommands = value;
+        QuickSettings.AutoApproveCommandsConfigured = true;
+        NotifyChanged();
+    }
+
     public void ApplyAutonomyProfileDefaults()
     {
-        QuickSettings.AutonomyProfile = QuickSettings.AutonomyProfile;
+        var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+        QuickSettings.AutoApproveCommands =
+            NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(profile);
+        QuickSettings.AutoApproveCommandsConfigured = false;
+        QuickSettings.SandboxMode = FormatSandboxMode(
+            NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                NebulaRuntimeSettings.GetDefaultSandboxForProfile(profile)));
         NotifyChanged();
     }
 
@@ -2427,6 +2738,18 @@ public sealed class QuickSettingsDraft
     public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
 
     public bool AutoApproveCommands { get; set; }
+
+    public bool AutoApproveCommandsConfigured { get; set; }
+
+    public string SandboxMode { get; set; } = "disabled";
+
+    public string SandboxImage { get; set; } = NebulaRuntimeSettings.DefaultSandboxImage;
+
+    public long SandboxMemoryLimitMb { get; set; }
+
+    public double SandboxCpuLimit { get; set; }
+
+    public string SandboxScope { get; set; } = "workspace";
 
     public bool CompactMode { get; set; }
 

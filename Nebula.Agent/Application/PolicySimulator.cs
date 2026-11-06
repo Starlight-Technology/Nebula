@@ -116,22 +116,14 @@ public sealed class PolicySimulator(
                             cancellationToken);
                 }
 
-                var profileCategories = NebulaRuntimeSettings.GetDefaultCategoriesForProfile(runtimeSettings.AutonomyProfile);
-                var combinedCategories = runtimeSettings.AutoApproveCategories
-                    .Concat(profileCategories)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                var autoApproveEnabled = runtimeSettings.AutoApproveCommands ||
-                    NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(runtimeSettings.AutonomyProfile);
-
                 var overrideResult = approvalService.EvaluateOverride(
                     operationDecision,
                     OperationKind.TerminalCommand,
                     new ApprovalOverrideInput(
                         HasUserApprovedAction: false,
                         IsApprovedForConversation: false,
-                        AutoApproveEnabled: autoApproveEnabled,
-                        AutoApproveCategories: combinedCategories,
+                        AutoApproveEnabled: runtimeSettings.EffectiveAutoApproveCommands,
+                        AutoApproveCategories: runtimeSettings.EffectiveAutoApproveCategories,
                         WorkspaceAutoApproveCategories: workspaceCategories
                             .Select(entry => entry.Value)
                             .ToList()));
