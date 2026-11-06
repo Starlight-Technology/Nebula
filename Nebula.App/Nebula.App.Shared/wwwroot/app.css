@@ -3578,3 +3578,41 @@ pre {
 .nebula-artifact-item--screenshot-diff .nebula-artifact-item__icon {
     color: var(--nebula-amber);
 }
+
+/* Database initialization banner */
+.nebula-database-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--nebula-border);
+    border-left: 3px solid var(--nebula-amber);
+    border-radius: var(--nebula-radius);
+    background: var(--nebula-amber-soft);
+    color: var(--nebula-text);
+}
+
+.nebula-database-banner--failed {
+    border-left-color: var(--nebula-rose);
+    background: rgba(221, 107, 98, 0.1);
+}
+
+.nebula-database-banner__content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.nebula-database-banner__content span {
+    color: var(--nebula-muted);
+    font-size: 0.875rem;
+}
+
+@media (max-width: 700px) {
+    .nebula-database-banner {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

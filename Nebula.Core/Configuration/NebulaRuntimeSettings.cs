@@ -18,12 +18,30 @@ public enum ProviderMode
     RemoteOnly = 3
 }
 
+public enum SandboxContainerRuntime
+{
+    Auto = 0,
+    Docker = 1,
+    Podman = 2
+}
+
 public sealed class NebulaRuntimeSettings
 {
     public const string DefaultLanguageCode = "pt-BR";
     public const string DefaultLanguageName = "Portugues (Brasil)";
     public const string DefaultWebResearchProvider = "Free";
     public const string DefaultAccelerationProfile = "auto";
+    public const string DefaultSandboxImage = "mcr.microsoft.com/powershell:lts";
+
+    public NebulaRuntimeSettings()
+    {
+    }
+
+    public NebulaRuntimeSettings(SandboxMode sandboxModeFloor)
+    {
+        SandboxModeFloor = sandboxModeFloor;
+        SandboxMode = sandboxModeFloor;
+    }
 
     public string MainModel { get; set; } = string.Empty;
 
@@ -38,6 +56,8 @@ public sealed class NebulaRuntimeSettings
     public string ResponseLanguageName { get; set; } = DefaultLanguageName;
 
     public bool AutoApproveCommands { get; set; }
+
+    public bool AutoApproveCommandsConfigured { get; set; }
 
     public List<string> AutoApproveCategories { get; set; } = [];
 
@@ -54,6 +74,14 @@ public sealed class NebulaRuntimeSettings
     public bool AllowsRemote => ProviderMode is ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
 
     public bool CanUseRemoteFallback => ProviderMode is ProviderMode.LocalPreferred or ProviderMode.RemoteAllowed or ProviderMode.RemoteOnly;
+
+    public SandboxMode SandboxModeFloor { get; init; } = SandboxMode.Disabled;
+
+    public SandboxContainerRuntime SandboxRuntime { get; init; } = SandboxContainerRuntime.Auto;
+
+    public string SandboxSidecarUrl { get; init; } = string.Empty;
+
+    public string SandboxSidecarToken { get; init; } = string.Empty;
 
     public bool RequireDeterministicVerification { get; set; } = true;
 
@@ -73,7 +101,7 @@ public sealed class NebulaRuntimeSettings
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 
-    public string SandboxImage { get; set; } = "mcr.microsoft.com/powershell:lts";
+    public string SandboxImage { get; set; } = DefaultSandboxImage;
 
     public long SandboxMemoryLimitMb { get; set; }
 
@@ -99,6 +127,23 @@ public sealed class NebulaRuntimeSettings
             ? MainModel.Trim()
             : LearningModel.Trim();
 
+    public IReadOnlyList<string> EffectiveAutoApproveCategories =>
+        AutoApproveCategories
+            .Concat(
+                AutoApproveCommandsConfigured && !AutoApproveCommands
+                    ? []
+                    : GetDefaultCategoriesForProfile(AutonomyProfile))
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Select(category => category.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public bool EffectiveAutoApproveCommands =>
+        AutoApproveCommandsConfigured
+            ? AutoApproveCommands
+            : AutoApproveCommands ||
+                GetDefaultAutoApproveForProfile(AutonomyProfile);
+
     public void Apply(NebulaRuntimeSettingsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -118,6 +163,7 @@ public sealed class NebulaRuntimeSettings
             snapshot.ResponseLanguageName,
             DefaultLanguageName);
         AutoApproveCommands = snapshot.AutoApproveCommands;
+        AutoApproveCommandsConfigured = snapshot.AutoApproveCommandsConfigured;
         AutoApproveCategories = snapshot.AutoApproveCategories?.ToList() ?? [];
         WorkspaceRoot = snapshot.WorkspaceRoot?.Trim() ?? string.Empty;
         UserId = snapshot.UserId?.Trim() ?? string.Empty;
@@ -131,8 +177,10 @@ public sealed class NebulaRuntimeSettings
         MaxConsecutiveErrorRetries = Math.Max(1, snapshot.MaxConsecutiveErrorRetries);
         EnableResultValidation = snapshot.EnableResultValidation;
         EnableEnvironmentValidation = snapshot.EnableEnvironmentValidation;
-        SandboxMode = snapshot.SandboxMode;
-        SandboxImage = NormalizeOrDefault(snapshot.SandboxImage, "mcr.microsoft.com/powershell:lts");
+        SandboxMode = Enum.IsDefined(snapshot.SandboxMode)
+            ? snapshot.SandboxMode
+            : SandboxMode.Disabled;
+        SandboxImage = NormalizeSandboxImage(snapshot.SandboxImage);
         SandboxMemoryLimitMb = Math.Max(0, snapshot.SandboxMemoryLimitMb);
         SandboxCpuLimit = Math.Max(0, snapshot.SandboxCpuLimit);
         CompactMode = snapshot.CompactMode;
@@ -153,6 +201,7 @@ public sealed class NebulaRuntimeSettings
             ResponseLanguageCode = ResponseLanguageCode,
             ResponseLanguageName = ResponseLanguageName,
             AutoApproveCommands = AutoApproveCommands,
+            AutoApproveCommandsConfigured = AutoApproveCommandsConfigured,
             AutoApproveCategories = AutoApproveCategories.ToList(),
             WorkspaceRoot = WorkspaceRoot,
             UserId = UserId,
@@ -167,7 +216,8 @@ public sealed class NebulaRuntimeSettings
             EnableResultValidation = EnableResultValidation,
             EnableEnvironmentValidation = EnableEnvironmentValidation,
             SandboxMode = SandboxMode,
-            SandboxImage = SandboxImage,
+            SandboxConfigured = true,
+            SandboxImage = NormalizeSandboxImage(SandboxImage),
             SandboxMemoryLimitMb = SandboxMemoryLimitMb,
             SandboxCpuLimit = SandboxCpuLimit,
             CompactMode = CompactMode,
@@ -216,6 +266,58 @@ public sealed class NebulaRuntimeSettings
         return profile is AutonomyProfile.Lab ? SandboxMode.Docker : SandboxMode.Disabled;
     }
 
+    public static SandboxMode ResolveSandboxMode(
+        AutonomyProfile profile,
+        SandboxMode serverFloor,
+        SandboxMode requestedMode)
+    {
+        if (profile is AutonomyProfile.Autonomous or AutonomyProfile.Lab)
+        {
+            return requestedMode;
+        }
+
+        return serverFloor == SandboxMode.Docker
+            ? SandboxMode.Docker
+            : requestedMode;
+    }
+
+    public static SandboxContainerRuntime ParseSandboxRuntime(string? value)
+    {
+        return Enum.TryParse<SandboxContainerRuntime>(
+                   value,
+                   ignoreCase: true,
+                   out var runtime) &&
+               Enum.IsDefined(runtime)
+            ? runtime
+            : SandboxContainerRuntime.Auto;
+    }
+
+    public static bool IsValidSandboxImage(string? image)
+    {
+        var value = image?.Trim();
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 512)
+        {
+            return false;
+        }
+
+        if (!IsAsciiLetterOrDigit(value[0]))
+        {
+            return false;
+        }
+
+        return value.All(character =>
+            IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or '/' or ':' or '@');
+    }
+
+    public static string NormalizeSandboxImage(string? image) =>
+        IsValidSandboxImage(image)
+            ? image!.Trim()
+            : DefaultSandboxImage;
+
+    private static bool IsAsciiLetterOrDigit(char character) =>
+        character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
+
     public static ProviderMode GetDefaultProviderModeForProfile(AutonomyProfile profile)
     {
         return profile switch
@@ -248,6 +350,8 @@ public sealed class NebulaRuntimeSettingsSnapshot
 
     public bool AutoApproveCommands { get; set; }
 
+    public bool AutoApproveCommandsConfigured { get; set; }
+
     public List<string> AutoApproveCategories { get; set; } = [];
 
     public string WorkspaceRoot { get; set; } = string.Empty;
@@ -276,7 +380,11 @@ public sealed class NebulaRuntimeSettingsSnapshot
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 
-    public string SandboxImage { get; set; } = "mcr.microsoft.com/powershell:lts";
+    public bool SandboxConfigured { get; set; }
+
+    public string SandboxScope { get; set; } = string.Empty;
+
+    public string SandboxImage { get; set; } = NebulaRuntimeSettings.DefaultSandboxImage;
 
     public long SandboxMemoryLimitMb { get; set; }
 

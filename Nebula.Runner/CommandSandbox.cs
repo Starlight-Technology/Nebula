@@ -21,17 +21,24 @@ public interface ICommandSandbox
         CancellationToken cancellationToken);
 }
 
+public sealed record SandboxWorkspaceMount(
+    string Source,
+    string AllowedRoot);
+
 public sealed class DockerCommandSandbox : ICommandSandbox
 {
     private readonly IResolvedCommandExecutor executor;
     private readonly NebulaRuntimeSettings settings;
+    private readonly ISandboxRuntimeLocator runtimeLocator;
 
     public DockerCommandSandbox(
         IResolvedCommandExecutor executor,
-        NebulaRuntimeSettings settings)
+        NebulaRuntimeSettings settings,
+        ISandboxRuntimeLocator? runtimeLocator = null)
     {
         this.executor = executor;
         this.settings = settings;
+        this.runtimeLocator = runtimeLocator ?? new SandboxRuntimeLocator();
     }
 
     public SandboxMode Mode => settings.SandboxMode;
@@ -39,32 +46,54 @@ public sealed class DockerCommandSandbox : ICommandSandbox
     public bool IsEligible(ShellKind shellKind) =>
         shellKind is ShellKind.PowerShell or ShellKind.Bash or ShellKind.Sh;
 
+    public Task<ShellCommandResult> RunSandboxedAsync(
+        ShellKind shellKind,
+        ResolvedCommand command,
+        string workingDirectory,
+        CancellationToken cancellationToken) =>
+        RunSandboxedAsync(
+            shellKind,
+            command,
+            workingDirectory,
+            workspaceMount: null,
+            cancellationToken);
+
     public async Task<ShellCommandResult> RunSandboxedAsync(
         ShellKind shellKind,
         ResolvedCommand command,
         string workingDirectory,
+        SandboxWorkspaceMount? workspaceMount,
         CancellationToken cancellationToken)
     {
-        var dockerArguments = BuildDockerArguments(
+        var runtime = runtimeLocator.Locate(settings.SandboxRuntime) ??
+            throw new InvalidOperationException(
+                $"No container runtime found for preference '{settings.SandboxRuntime}'. " +
+                "Install Docker or Podman, or configure Nebula:Sandbox:Runtime.");
+
+        var runtimeArguments = BuildRuntimeArguments(
             shellKind,
             command,
-            workingDirectory);
-        var dockerCommand = new ResolvedCommand(
-            "docker",
-            dockerArguments,
-            $"{command.DisplayCommand} (sandbox docker)",
             workingDirectory,
-            ["Executed inside an isolated Docker container."]);
+            runtime,
+            workspaceMount);
+        var runtimeCommand = new ResolvedCommand(
+            runtime.Executable,
+            runtimeArguments,
+            $"{command.DisplayCommand} (sandbox {runtime.Name})",
+            workingDirectory,
+            [$"Executed inside an isolated {runtime.Name} container."]);
 
         return await executor.RunCommandDetailedAsync(
-            dockerCommand,
+            runtimeCommand,
             cancellationToken);
     }
 
-    private string BuildDockerArguments(
+    private string BuildRuntimeArguments(
         ShellKind shellKind,
         ResolvedCommand command,
-        string workingDirectory)
+        string workingDirectory,
+        SandboxRuntimeInfo runtime,
+        SandboxWorkspaceMount? workspaceMount)
     {
         var arguments = new List<string>
         {
@@ -91,18 +120,37 @@ public sealed class DockerCommandSandbox : ICommandSandbox
                 System.Globalization.CultureInfo.InvariantCulture));
         }
 
-        if (!IsUnderAllowedRoot(workingDirectory))
+        if (workspaceMount is null)
+        {
+            if (!IsUnderAllowedRoot(workingDirectory))
+            {
+                throw new InvalidOperationException(
+                    $"Sandbox mount rejected: workingDirectory '{workingDirectory}' is outside allowed workspace/temp roots.");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(workspaceMount.AllowedRoot) ||
+                 !PathContainment.IsUnder(
+                     workspaceMount.Source,
+                     workspaceMount.AllowedRoot))
         {
             throw new InvalidOperationException(
-                $"Sandbox mount rejected: workingDirectory '{workingDirectory}' is outside allowed workspace/temp roots.");
+                $"Sandbox mount rejected: source '{workspaceMount.Source}' is outside allowed root '{workspaceMount.AllowedRoot}'.");
         }
 
-        var workspaceMount = NormalizeWorkspacePath(workingDirectory);
+        if (!NebulaRuntimeSettings.IsValidSandboxImage(settings.SandboxImage))
+        {
+            throw new InvalidOperationException(
+                $"Sandbox image '{settings.SandboxImage}' is invalid.");
+        }
+
+        var workspaceMountPath = NormalizeWorkspacePath(
+            workspaceMount?.Source ?? workingDirectory);
+        var mountOptions = runtime.RelabelWorkspace ? ":rw,Z" : ":rw";
         arguments.Add("-v");
-        arguments.Add($"\"{workspaceMount}:/workspace:rw\"");
+        arguments.Add($"\"{workspaceMountPath}:/workspace{mountOptions}\"");
         arguments.Add("-w");
         arguments.Add("/workspace");
-        arguments.Add(settings.SandboxImage);
+        arguments.Add(settings.SandboxImage.Trim());
 
         arguments.AddRange(BuildShellInvocation(shellKind, command, workingDirectory));
 

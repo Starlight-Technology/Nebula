@@ -75,6 +75,29 @@ public sealed class PathContainmentTest : IDisposable
             workspace));
     }
 
+    [Fact]
+    public void is_under_must_resolve_symlinked_root()
+    {
+        var realRoot = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"nebula-real-{Guid.NewGuid():N}")).FullName;
+        var linkRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-link-{Guid.NewGuid():N}");
+        Directory.CreateSymbolicLink(linkRoot, realRoot);
+        try
+        {
+            Assert.True(PathContainment.IsUnder(
+                Path.Combine(linkRoot, "sub", "file.txt"),
+                linkRoot));
+            Assert.True(PathContainment.IsUnder(linkRoot, linkRoot));
+        }
+        finally
+        {
+            Directory.Delete(linkRoot);
+            Directory.Delete(realRoot, recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(workspace, recursive: true); } catch { }

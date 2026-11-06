@@ -26,6 +26,7 @@ public class PostgresContext : DbContext
     public DbSet<AgentApprovalEntity> AgentApprovals { get; set; } = null!;
     public DbSet<WorkspaceMemoryEntry> WorkspaceMemoryEntries { get; set; } = null!;
     public DbSet<UserMemoryEntry> UserMemoryEntries { get; set; } = null!;
+    public DbSet<SandboxSettingsEntity> SandboxSettings { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -340,6 +341,22 @@ public class PostgresContext : DbContext
             b.HasIndex(x => new { x.UserId, x.Kind, x.Key })
                 .IsUnique();
             b.HasIndex(x => new { x.UserId, x.UpdatedAt });
+        });
+
+        modelBuilder.Entity<SandboxSettingsEntity>(b =>
+        {
+            b.ToTable("sandbox_settings");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.UserId).IsRequired().HasMaxLength(256);
+            b.Property(x => x.Workspace).IsRequired().HasMaxLength(1024);
+            b.Property(x => x.Mode).IsRequired();
+            b.Property(x => x.Image).IsRequired().HasMaxLength(512);
+            b.Property(x => x.MemoryLimitMb).IsRequired();
+            b.Property(x => x.CpuLimit).IsRequired();
+            b.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+
+            b.HasIndex(x => new { x.UserId, x.Workspace })
+                .IsUnique();
         });
     }
 }

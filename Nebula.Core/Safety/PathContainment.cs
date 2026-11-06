@@ -21,7 +21,7 @@ public static class PathContainment
         try
         {
             fullCandidate = GetRealPath(candidate);
-            fullRoot = Path.GetFullPath(root);
+            fullRoot = GetRealPath(root);
         }
         catch (Exception)
         {
