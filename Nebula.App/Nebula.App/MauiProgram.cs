@@ -14,6 +14,7 @@ using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
 using Nebula.Agent.Infrastructure.Events;
 using Nebula.Agent.Infrastructure.Execution;
+using Nebula.Agent.Logging;
 using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
 using Nebula.Core.Agent;
@@ -54,9 +55,11 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new RedactingLoggerProvider(logging => logging.AddDebug()));
+
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
-        builder.Logging.AddDebug();
 #endif
 
         builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
@@ -105,6 +108,10 @@ public static class MauiProgram
                     Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_COMMANDS"),
                     out var autoApproveCommands) &&
                 autoApproveCommands,
+            AutoApproveCommandsConfigured =
+                bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_COMMANDS"),
+                    out var autoApproveCommandsConfigured),
             AutoApproveCategories = ParseCategoryList(
                 Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_CATEGORIES")),
             RequireDeterministicVerification =
@@ -163,6 +170,16 @@ public static class MauiProgram
                     out var sandboxMode)
                     ? sandboxMode
                     : SandboxMode.Disabled,
+            SandboxModeFloor =
+                Enum.TryParse<SandboxMode>(
+                    Environment.GetEnvironmentVariable("NEBULA_SANDBOX_MODE"),
+                    ignoreCase: true,
+                    out var sandboxModeFloor)
+                    ? sandboxModeFloor
+                    : SandboxMode.Disabled,
+            SandboxRuntime =
+                NebulaRuntimeSettings.ParseSandboxRuntime(
+                    Environment.GetEnvironmentVariable("NEBULA_SANDBOX_RUNTIME")),
             SandboxImage =
                 Environment.GetEnvironmentVariable("NEBULA_SANDBOX_IMAGE") ??
                 "mcr.microsoft.com/powershell:lts",
@@ -180,11 +197,15 @@ public static class MauiProgram
                     : 0
         });
         builder.Services.AddScoped<NebulaWorkspaceState>();
+        builder.Services.AddSingleton<DatabaseInitializationState>();
+        builder.Services.AddSingleton<MauiDatabaseInitializationService>();
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
+        builder.Services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
         builder.Services.AddScoped<ICommandSandbox>(provider =>
             new DockerCommandSandbox(
                 (IResolvedCommandExecutor)provider.GetRequiredService<IShellExecutor>(),
-                provider.GetRequiredService<NebulaRuntimeSettings>()));
+                provider.GetRequiredService<NebulaRuntimeSettings>(),
+                provider.GetRequiredService<ISandboxRuntimeLocator>()));
         builder.Services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
         builder.Services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
         builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
@@ -318,6 +339,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
         builder.Services.AddScoped<WorkspaceMemoryService>();
         builder.Services.AddScoped<IUserMemoryStore, PostgresUserMemoryStore>();
+        builder.Services.AddScoped<ISandboxSettingsStore, PostgresSandboxSettingsStore>();
         builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
         builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
         builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
@@ -386,10 +408,10 @@ builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>(
     workspaceCategoryPolicyService: provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
     knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
     projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
-    userMemoryService: provider.GetRequiredService<IUserMemoryService>()));
-            errorFixService: provider.GetService<IErrorFixService>(),
-            environmentValidator: provider.GetService<IEnvironmentValidator>(),
-            resultValidator: provider.GetService<IResultValidator>()));
+    userMemoryService: provider.GetRequiredService<IUserMemoryService>(),
+    errorFixService: provider.GetService<IErrorFixService>(),
+    environmentValidator: provider.GetService<IEnvironmentValidator>(),
+    resultValidator: provider.GetService<IResultValidator>()));
         builder.Services.AddScoped<IManager>(provider => new Manager(
             provider.GetRequiredService<ILlamaClient>(),
             provider.GetRequiredService<IShellExecutor>(),
@@ -420,12 +442,9 @@ builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>(
 
         var app = builder.Build();
 
-        using (var migrationScope = app.Services.CreateScope())
-        {
-            var postgresContext =
-                migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
-            PostgresDatabaseInitializer.Initialize(postgresContext);
-        }
+        app.Services
+            .GetRequiredService<MauiDatabaseInitializationService>()
+            .Start();
 
         var llamaClient = app.Services.GetRequiredService<ILlamaClient>();
         _ = llamaClient.EnsureInstalledModelSelectedAsync();

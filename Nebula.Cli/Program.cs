@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 
 using Nebula.Agent;
@@ -11,6 +12,7 @@ using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
 using Nebula.Agent.Infrastructure.Events;
 using Nebula.Agent.Infrastructure.Execution;
+using Nebula.Agent.Logging;
 using Nebula.Core.Agent;
 using Nebula.Core.Background;
 using Nebula.Core.Commands;
@@ -35,6 +37,8 @@ using Nebula.Services.Operations;
 using Nebula.Services.Projects;
 using MongoDB.Bson;
 using MongoDB.Driver;
+
+using ILogger = Nebula.Agent.ILogger;
 
 var configuration = new ConfigurationBuilder()
     .AddEnvironmentVariables()
@@ -82,6 +86,9 @@ if (args.Contains("--train-command-safety", StringComparer.OrdinalIgnoreCase))
 }
 
 var hostBuilder = Host.CreateApplicationBuilder(args);
+hostBuilder.Logging.ClearProviders();
+hostBuilder.Logging.AddProvider(new RedactingLoggerProvider(logging => logging.AddConsole()));
+
 var services = hostBuilder.Services;
 
 services.AddSingleton(_ => new NebulaRuntimeSettings
@@ -97,6 +104,10 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             out var autoApproveCommands)
             ? autoApproveCommands
             : false,
+    AutoApproveCommandsConfigured =
+        bool.TryParse(
+            configuration["Nebula:AutoApproveCommands"],
+            out var autoApproveCommandsConfigured),
     AutoApproveCategories = ParseCategoryList(
         configuration["Nebula:AutoApproveCategories"]),
     WorkspaceRoot = configuration["Nebula:WorkspaceRoot"] ?? string.Empty,
@@ -128,6 +139,20 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             out var sandboxMode)
             ? sandboxMode
             : SandboxMode.Disabled,
+    SandboxModeFloor =
+        Enum.TryParse<SandboxMode>(
+            configuration["Nebula:Sandbox:Mode"],
+            ignoreCase: true,
+            out var sandboxModeFloor)
+            ? sandboxModeFloor
+            : SandboxMode.Disabled,
+    SandboxRuntime =
+        NebulaRuntimeSettings.ParseSandboxRuntime(
+            configuration["Nebula:Sandbox:Runtime"]),
+    SandboxSidecarUrl =
+        configuration["Nebula:Sandbox:SidecarUrl"]?.Trim() ?? string.Empty,
+    SandboxSidecarToken =
+        configuration["Nebula:Sandbox:SidecarToken"]?.Trim() ?? string.Empty,
     SandboxImage = configuration["Nebula:Sandbox:Image"] ?? "mcr.microsoft.com/powershell:lts",
     SandboxMemoryLimitMb =
         long.TryParse(configuration["Nebula:Sandbox:MemoryLimitMb"], out var sandboxMemoryLimitMb)
@@ -147,10 +172,23 @@ services.AddSingleton<ILlamaClient>(provider =>
     return new LlamaClient(timeoutSeconds: settings.LlmTimeoutSeconds);
 });
 services.AddSingleton<IShellExecutor, ShellExecutor>();
+services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
 services.AddScoped<ICommandSandbox>(provider =>
-    new DockerCommandSandbox(
+{
+    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
+    if (!string.IsNullOrWhiteSpace(settings.SandboxSidecarUrl))
+    {
+        return new SandboxSidecarCommandSandbox(
+            settings,
+            settings.SandboxSidecarUrl,
+            settings.SandboxSidecarToken);
+    }
+
+    return new DockerCommandSandbox(
         (IResolvedCommandExecutor)provider.GetRequiredService<IShellExecutor>(),
-        provider.GetRequiredService<NebulaRuntimeSettings>()));
+        settings,
+        provider.GetRequiredService<ISandboxRuntimeLocator>());
+});
 services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
 services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
 services.AddSingleton<ICommandResolver, CommandResolver>();

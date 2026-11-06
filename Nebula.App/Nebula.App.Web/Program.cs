@@ -5,6 +5,8 @@ using Microsoft.EntityFrameworkCore;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
+using Microsoft.Extensions.Logging;
+
 using Nebula.Agent;
 using Nebula.Agent.Application;
 using Nebula.Agent.Application.Background;
@@ -13,7 +15,9 @@ using Nebula.Agent.Infrastructure;
 using Nebula.Agent.Infrastructure.Events;
 using Nebula.Agent.Infrastructure.Execution;
 using Nebula.Agent.Data;
+using Nebula.Agent.Logging;
 using Nebula.App.Shared.State;
+using Nebula.App.Web.Auth;
 using Nebula.App.Web.Components;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Agent;
@@ -41,6 +45,19 @@ using Nebula.Services.Projects;
 using Nebula.Services.Safety;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddProvider(new RedactingLoggerProvider(logging =>
+{
+    logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+    logging.AddConsole();
+}));
+
+var webAuthOptions = WebAuthOptions.FromConfiguration(
+    builder.Configuration,
+    builder.Environment);
+
+builder.Services.AddSingleton(webAuthOptions);
+builder.Services.AddNebulaWebAuth(webAuthOptions);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
@@ -92,6 +109,9 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
         NebulaRuntimeSettings.DefaultLanguageName,
     AutoApproveCommands =
         builder.Configuration.GetValue<bool>("Nebula:AutoApproveCommands"),
+    AutoApproveCommandsConfigured =
+        !string.IsNullOrWhiteSpace(
+            builder.Configuration["Nebula:AutoApproveCommands"]),
     AutoApproveCategories =
         RuntimeSettingsBinding.ParseCategoryList(
             builder.Configuration["Nebula:AutoApproveCategories"]),
@@ -126,6 +146,16 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     SandboxMode =
         RuntimeSettingsBinding.ParseSandboxMode(
             builder.Configuration["Nebula:Sandbox:Mode"]),
+    SandboxModeFloor =
+        RuntimeSettingsBinding.ParseSandboxMode(
+            builder.Configuration["Nebula:Sandbox:Mode"]),
+    SandboxRuntime =
+        NebulaRuntimeSettings.ParseSandboxRuntime(
+            builder.Configuration["Nebula:Sandbox:Runtime"]),
+    SandboxSidecarUrl =
+        builder.Configuration["Nebula:Sandbox:SidecarUrl"]?.Trim() ?? string.Empty,
+    SandboxSidecarToken =
+        builder.Configuration["Nebula:Sandbox:SidecarToken"]?.Trim() ?? string.Empty,
     SandboxImage =
         builder.Configuration["Nebula:Sandbox:Image"] ??
         "mcr.microsoft.com/powershell:lts",
@@ -139,11 +169,25 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
             0d)
 });
 builder.Services.AddScoped<NebulaWorkspaceState>();
+builder.Services.AddSingleton<DatabaseInitializationState>();
 builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
+builder.Services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
 builder.Services.AddScoped<ICommandSandbox>(provider =>
-    new DockerCommandSandbox(
+{
+    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
+    if (!string.IsNullOrWhiteSpace(settings.SandboxSidecarUrl))
+    {
+        return new SandboxSidecarCommandSandbox(
+            settings,
+            settings.SandboxSidecarUrl,
+            settings.SandboxSidecarToken);
+    }
+
+    return new DockerCommandSandbox(
         (IResolvedCommandExecutor)provider.GetRequiredService<IShellExecutor>(),
-        provider.GetRequiredService<NebulaRuntimeSettings>()));
+        settings,
+        provider.GetRequiredService<ISandboxRuntimeLocator>());
+});
 builder.Services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
 builder.Services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
 builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
@@ -247,6 +291,7 @@ builder.Services.AddScoped<IFetchedPageCache, PostgresFetchedPageCache>();
 builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
 builder.Services.AddScoped<WorkspaceMemoryService>();
 builder.Services.AddScoped<IUserMemoryStore, PostgresUserMemoryStore>();
+builder.Services.AddScoped<ISandboxSettingsStore, PostgresSandboxSettingsStore>();
 builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
 builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
 builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
@@ -366,12 +411,24 @@ builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
 var app = builder.Build();
 
+if (!webAuthOptions.Enabled)
+{
+    app.Logger.LogWarning(
+        "Web authentication is disabled because {EnvironmentVariable} is not configured. " +
+        "This is only allowed in Development; set a token before exposing the app.",
+        WebAuthOptions.EnvironmentVariable);
+}
+
 await using (var migrationScope = app.Services.CreateAsyncScope())
 {
     var postgresContext =
         migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
     await PostgresDatabaseInitializer.InitializeAsync(postgresContext);
 }
+
+app.Services
+    .GetRequiredService<DatabaseInitializationState>()
+    .MarkReady();
 
 using (var startupScope = app.Services.CreateScope())
 {
@@ -391,10 +448,18 @@ else
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
-app.UseAntiforgery();
-app.MapStaticAssets();
 
-app.MapGet(
+if (webAuthOptions.Enabled)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+
+app.UseAntiforgery();
+app.MapStaticAssets().AllowAnonymous();
+app.MapNebulaWebAuthEndpoints();
+
+var researchSearchEndpoint = app.MapGet(
     "/api/research/search",
     async (
         string q,
@@ -428,6 +493,11 @@ app.MapGet(
                 result.Snippet,
                 result.SearchScore)).ToList()));
     });
+
+if (webAuthOptions.Enabled)
+{
+    researchSearchEndpoint.RequireAuthorization();
+}
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
