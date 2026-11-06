@@ -136,10 +136,11 @@ services:
       nebula-telemetry:
         condition: service_started
     ports:
-      - "8081:8081"
+      - "${NEBULA_WEB_BIND:-127.0.0.1}:${NEBULA_WEB_PORT:-8081}:8081"
     environment:
       ASPNETCORE_ENVIRONMENT: "Production"
       ASPNETCORE_HTTP_PORTS: "8081"
+      NEBULA_WEB_AUTH_TOKEN: "${NEBULA_WEB_AUTH_TOKEN:?Defina NEBULA_WEB_AUTH_TOKEN no .env}"
       LLAMA_URL: "http://ollama:11434/api/generate"
       LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:8b}"
       MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"

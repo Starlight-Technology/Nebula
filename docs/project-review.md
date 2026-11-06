@@ -33,7 +33,8 @@ UI (Blazor / MAUI / CLI)
         -> CommandResolver / OperationKindDetector
         -> CommandPolicyEngine + OperationPolicyEngine (deterministic first, ML advisory)
         -> ShellExecutor          (streaming, timeouts, interactive-prompt kill)
-        -> DockerCommandSandbox   (optional isolated execution)
+        -> DockerCommandSandbox   (optional Docker/Podman isolated execution)
+        -> SandboxSidecarCommandSandbox (compose -> Nebula.Sandbox -> DockerCommandSandbox)
         -> WorkspaceMap / StackDetector / Verification / GitDiff / PlannedPatch / Learning
   -> PostgreSQL (primary) / MongoDB (complementary) / Ollama / SearXNG
 ```
@@ -41,8 +42,8 @@ UI (Blazor / MAUI / CLI)
 Composition roots:
 
 - Web: `Nebula.App/Nebula.App.Web/Program.cs`
-- MAUI: `Nebula.App/Nebula.App/MauiProgram.cs` (env-only settings, sync DB init)
-- CLI: `Nebula.Cli/Program.cs` (additional `NEBULA_MAX_ACTION_*` wiring)
+- MAUI: `Nebula.App/Nebula.App/MauiProgram.cs` (env-only settings, background DB init with retry)
+- CLI: `Nebula.Cli/Program.cs`
 
 Overall the layering is clean: `Nebula.Core` holds contracts and domain models,
 services implement behavior, a thin runner layer owns process execution, and the
@@ -72,19 +73,27 @@ Rating scale: **Implemented** / **Partial** / **Planned (roadmap only)** /
 | Learning (offline-first + LLM extractor + deterministic fallback) | Implemented | `LearningOrchestrator`, `LlamaKnowledgeExtractor` with fallback; source-only experiments. |
 | Knowledge query + RAG in Chat | Implemented | `AnswerAsync` (Chat) and `AnswerForAutomationAsync` (agent, filtered by automation policy). |
 | Web research (free providers) | Implemented | Direct docs + SearXNG + Bing HTML; Brave optional; no paid dependency by default. |
-| Docker web service | Partial | Dockerfile + compose service exist but `nebula-web` is commented out in `docker-compose.yml`. |
+| Graceful MAUI Postgres init | Implemented | `MauiDatabaseInitializationService` runs migrations after `builder.Build()` with retry/backoff; `DatabaseInitializationState` drives a banner and manual retry; retry/state unit tests cover success, exhaustion, delay cap, cancellation, and transitions. `net10.0-android` builds; manual emulator/device validation remains pending. |
+| Docker web service | Implemented | Dockerfile + active `nebula-web` compose service; image build still needs live-daemon revalidation. |
+| Container sandbox sidecar | Implemented | `Nebula.Sandbox` exposes authenticated `/run`/`/health`; Web/CLI delegate via `Nebula:Sandbox:SidecarUrl`/`SidecarToken`. `docker-compose.sandbox.yml` mounts the host workspace and Podman socket into the sidecar, which maps `/tmp` back to `${HOME}/nebula-tmp` and executes the script through the host runtime. Smoke-tested with rootless Podman on 2026-10-30 using non-root `1000:1000`, `userns_mode=keep-id`, `label=type:container_runtime_t`, and a runtime-probing healthcheck. The Docker CLI path was exercised against Podman's Docker-compatible API; a real Docker daemon remains unvalidated. |
 | Model warm-up script | Partial | `ollama-start.sh` is mounted but not invoked by the default compose entrypoint. |
 | ML.NET classifier | Partial (advisory) | Correctly non-authoritative; falls back to `Unknown`. |
 | Project scaffolding + planned patches | Implemented | Curated templates + `PlannedPatch` with per-file classification and review before apply. |
 | Self-programming loop | Implemented | DoD + timeouts + diff review + overwrite guard + `MaxVerificationRetries`. |
 | Streaming tool output | Implemented | `IShellOutputObserver`/`IStreamingShellExecutor` -> StreamOutput events in UI. |
 | OpenClaw / plugins / tool catalog | Not found | No references; generic plugin registry not confirmed. |
-| Redis / SQLite / queues / hosted workers | Not found | No background worker or queue implementation found. |
-| Web authentication | Not found | No auth/authorization layer located during review. |
+| Redis / SQLite / queues / hosted workers | Partial | `AgentRunBackgroundService` is an unbounded FIFO hosted worker for agent runs. No Redis, SQLite, Hangfire, Quartz, or general priority queue. |
+| Git workspace operations + PR | Partial | `GitService` covers diff/status/branch/commit/amend/revert by commit/log/remotes; commit-message generation is wired in `Git.razor`. `PullRequestService` supports GitHub/GitLab but has no callers/UI; no direct `GitService` tests. |
+| Post-frontend verification tooling | Partial | `TestRunnerService.RunTargetedTestsAsync` is wired in `TestRunnerCard`/`AgentRunLive`; `SmokeTestService`, `ScreenshotService`, `PortDetectionService`, and `MigrationService` are DI-registered but unused. `ProjectDoctorService` is implemented. |
+| Autonomy profiles | Partial | `AutonomyProfile` defaults and `PolicySimulator` exist, but the real runner does not apply profile defaults. |
+| Secret redaction | Implemented | Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting are redacted. Structured log scope values are not redacted. |
+| Web authentication | Implemented | Single local operator token (`NEBULA_WEB_AUTH_TOKEN`/`Nebula:Web:AuthToken`, minimum 32 chars) exchanged for an `HttpOnly` cookie. Fallback authorization protects UI/API/`/_blazor`; compose binds loopback and requires the token. Covered by `Nebula.App.Web.Test` and a Kestrel HTTP smoke; manual browser/compose validation pending. |
 | Safe experiment execution in learning | Partial | `SafeExperimentRunner` exists but the active learning path records source-only experiments. |
 
-`plan.md` is a roadmap, not an implementation ledger: Fase 7/8/9/10/12 items are
-largely **Planned** until verified in code.
+`plan.md` was reconciled on 2026-11-02 and now distinguishes `[x]` implemented,
+`[~]` partial, and `[ ]` planned/not found. Fase 11 remains planned; Fase 8/12
+contain partial services that are not fully wired, and `plan.md` remains a
+roadmap/status ledger rather than runtime proof.
 
 ## 4. Strengths
 
@@ -111,24 +120,31 @@ largely **Planned** until verified in code.
 
 ## 5. Weaknesses and Risks
 
-1. **Documented operational gaps remain:** `nebula-web` is commented out of
-   `docker-compose.yml`; `ollama-start.sh` is not active by default; MongoDB is
-   used only if ping succeeds and remains complementary to PostgreSQL.
-2. **Web/MAUI don't wire the action/step caps.** `NEBULA_MAX_ACTION_STEPS` and
-   `NEBULA_MAX_ACTION_RETRIES` are only read by the CLI; in the Web and MAUI
-   roots the defaults are effectively unbounded (the step-limit failure is
-   practically unreachable there).
-3. **MAUI blocks startup on DB availability.** `PostgresDatabaseInitializer`
-   runs synchronously during app creation, so an unreachable Postgres delays
-   startup with no graceful path.
+1. **Documented operational gaps remain:** `ollama-start.sh` is not active by
+   default; MongoDB is used only if ping succeeds and remains complementary to
+   PostgreSQL; compose sandboxing requires the opt-in sidecar.
+2. **Sandbox sidecar is privileged and not fully hardened.** Native Web/CLI/MAUI
+   use the local Docker/Podman runtime; `nebula-web` delegates to
+   `nebula-sandbox` only with `docker-compose.sandbox.yml`. The sidecar mounts
+   the host Podman socket and was smoke-tested only with rootless Podman; it now
+   runs non-root with `label=type:container_runtime_t`; the Docker CLI path was
+   exercised against Podman's Docker-compatible API, but a real Docker daemon
+   and a narrow API proxy remain future work.
+3. **MAUI DB initialization lacks manual validation.** The app now opens while
+   Postgres initialization runs in the background with retry and a manual retry
+   banner; retry/state logic is covered by tests. The `net10.0-android` target
+   builds successfully with the local Java 17 and Android SDK, but the banner and
+   retry flow still need an emulator/device validation.
 4. **Global DoD setting.** `RequireDeterministicVerification` is per-runtime, not
    per-task-type; there is no way to require verification only for code tasks.
-5. **No web authentication/authorization** was found. For a local-first tool this
-   may be acceptable, but it means any host-reachable instance exposes the whole
-   control surface (command approval, execution) without credentials.
-6. **Secrets redaction is partial.** Shell execution redacts sensitive values,
-   but the broader logging story (app console, some service diagnostics) is not
-   uniform across the codebase.
+5. **Web auth is single-user and local-first.** One operator token protects UI,
+   API, and `/_blazor`, and compose binds loopback by default. There are no
+   users/roles or rate limiting, and the compose stack has no TLS termination; a
+   leaked token exposes the whole control surface. Manual browser/compose
+   login/logout validation is still pending.
+6. **Structured log scopes are not redacted.** Chat/UI/shell, the custom console
+   logger, and `Microsoft.Extensions.Logging` message/exception formatting now
+   redact sensitive values; scope values still pass through unchanged.
 7. **Learning verification is source-only** in the active path: learned commands
    are recorded but not automatically executed/validated, so "learned and working"
    should not be claimed.
@@ -141,20 +157,28 @@ largely **Planned** until verified in code.
 
 ## 6. Recommendations (priority order)
 
-1. **Wire `NEBULA_MAX_ACTION_STEPS`/`NEBULA_MAX_ACTION_RETRIES` into the Web and
-   MAUI roots**, or remove the CLI-only asymmetry, so runaway agent loops are
-   bounded everywhere.
-2. **Add graceful Postgres initialization in MAUI** (retry/backoff or background
-   init) so the app still opens when the database is down.
-3. **Decide the container story:** either enable `nebula-web` and `ollama-start.sh`
-   in `docker-compose.yml` (documented defaults) or delete the commented blocks to
-   remove ambiguity. Re-validate `docker build` with the live daemon.
-4. **Add explicit auth for the web app** (e.g., a local-first token/localhost
-   binding) or document the intended trust boundary.
-5. **Close the secret-redaction gap:** centralize redaction in a logging filter
-   used by all diagnostics, not only shell execution.
-6. **Reconcile `plan.md`** with the code (many Fase 7-12 items are unverified) so
-   the roadmap doesn't mislead.
+1. **Finish hardening the container sandbox sidecar.** Docker/Podman portability
+   and the compose sidecar are implemented; the Podman path now runs non-root
+   with `label=type:container_runtime_t`. Validate against a real Docker daemon
+   and consider a narrower API proxy than direct runtime access. Keep the base
+   `nebula-web` free of runtime sockets.
+2. **Validate graceful Postgres initialization in MAUI on an emulator/device.**
+   Retry/backoff, background startup, and the manual retry banner are implemented,
+   unit-tested, and the `net10.0-android` build succeeds; the runtime banner/retry
+   flow still needs manual validation.
+3. **Decide the remaining container story:** activate `ollama-start.sh` by
+   default or delete the commented entrypoint; re-validate `docker build` with
+   the live daemon.
+4. **Validate and harden web auth.** The local token/cookie flow and loopback
+   compose binding are implemented and integration-tested; run manual
+   browser/compose login/logout checks and consider HTTPS/rate limiting before any
+   non-loopback exposure.
+5. **Extend redaction to structured log scopes:** messages and exceptions are
+   covered by `SecretRedaction`; redact scope values before adding new diagnostics
+   that put secrets in logging scopes.
+6. **Keep `plan.md` reconciled** with the code; the 2026-11-02 pass now
+   distinguishes implemented, partial, and planned work, so update it when Fase
+   8/12 wiring changes.
 7. **Keep extending the manual + automated test surface**; the docs in this
    repository (`docs/nebula-test-prompts.md`, `docs/manual-testing-guide.md`) are
    the right vehicle for gap-tested capabilities.
@@ -163,8 +187,9 @@ largely **Planned** until verified in code.
 
 Nebula delivers a credible, local-first autonomous agent with a strong
 deterministic safety model, real evidence collection, persistent auditability,
-and a working free research + offline learning path. The main gaps are
-operational wiring (compose services, MAUI DB init, action caps in Web/MAUI)
-rather than architectural ones. Given its layered design and the discipline shown
-in code/docs, the highest-value next work is closing those operational gaps and
-turning `plan.md` into a verified contract before adding more autonomy.
+and a working free research + offline learning path. Docker/Podman portability
+and the compose sidecar are now implemented; the main gaps are operational
+hardening (Docker sidecar validation, MAUI manual validation, live-daemon image builds)
+rather than architectural ones. Given its layered design and the
+discipline shown in code/docs, the highest-value next work is closing those
+operational gaps while keeping `plan.md` reconciled before adding more autonomy.

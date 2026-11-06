@@ -4,6 +4,9 @@ Nebula e uma central local para conversar com modelos via Ollama, trocar o model
 
 ## Subindo a stack base
 
+Defina `NEBULA_WEB_AUTH_TOKEN` no `.env` antes do primeiro `up` (veja
+"Acesso local e autenticacao Web").
+
 ```powershell
 docker compose up -d
 ```
@@ -13,8 +16,33 @@ Isso sobe:
 - `ollama`
 - `mongodb`
 - `postgres`
+- `searxng`
+- `nebula-telemetry`
+- `nebula-web`
 
-Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:8b`.
+Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:8b`. A UI Web fica
+em `http://127.0.0.1:8081` e exige o token de acesso descrito abaixo.
+
+## Acesso local e autenticacao Web
+
+A UI Web usa um token local unico, trocado por um cookie de sessao `HttpOnly`.
+Gere um token com pelo menos 32 caracteres e coloque no `.env`:
+
+```bash
+openssl rand -hex 32
+# edite .env
+NEBULA_WEB_AUTH_TOKEN=cole-o-token-gerado
+```
+
+O Compose publica a porta apenas em loopback por padrao
+(`NEBULA_WEB_BIND=127.0.0.1`, `NEBULA_WEB_PORT=8081`) e recusa subir o
+`nebula-web` sem `NEBULA_WEB_AUTH_TOKEN`. Acesse `http://127.0.0.1:8081`,
+informe o token em `/login` e use "Sair" no menu para encerrar a sessao.
+
+Em `Development`, sem token, a auth e desativada com um warning no log. Em
+`Production`/`Staging`, token ausente ou com menos de 32 caracteres impede o
+startup. Fora do Compose, use a configuracao `Nebula:Web:AuthToken` ou a variavel
+`NEBULA_WEB_AUTH_TOKEN`; o cookie tem validade de 7 dias.
 
 ## Perfis de aceleracao GPU
 
@@ -102,6 +130,15 @@ A central em `Nebula.App` mostra:
 - perfis de aceleracao disponiveis
 - CPU, memoria, disco e GPU do host no header e na pagina Runtime
 
+### Inicializacao do Postgres no MAUI
+
+O app MAUI abre mesmo quando o Postgres esta indisponivel. A inicializacao roda
+em background com backoff exponencial; enquanto ela esta em andamento ou falha,
+um banner no topo informa o estado e, em caso de falha, oferece o botao
+"Tentar novamente". Ajuste as tentativas com `NEBULA_DB_INIT_MAX_ATTEMPTS`,
+`NEBULA_DB_INIT_INITIAL_DELAY_MS` e `NEBULA_DB_INIT_MAX_DELAY_MS`. O Web mantem
+a inicializacao sincrona e falha cedo se o banco estiver fora do ar.
+
 ## Telemetria do host
 
 O servico `nebula-telemetry` le CPU, memoria, discos e GPUs diretamente do host
@@ -113,6 +150,29 @@ O sidecar nao publica porta e nao recebe o socket do Docker/Podman por padrao; o
 acesso ao socket e opcional e serve apenas para estatisticas de containers. Para
 GPU NVIDIA, use o override `docker-compose.nvidia.yml`; AMD/Intel exigem os
 devices correspondentes e validacao no host.
+
+Para executar comandos no sandbox dentro do Compose, use o override opt-in
+`docker-compose.sandbox.yml`. Ele adiciona `nebula-sandbox`, monta
+`${HOME}/nebula-tmp:/tmp:z` e o socket Podman, e faz o `nebula-web` delegar via
+`Nebula__Sandbox__SidecarUrl`. O token e obrigatorio:
+
+```bash
+export NEBULA_SANDBOX_TOKEN="troque-por-um-token-longo"
+systemctl --user enable --now podman.socket
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d
+```
+
+O sidecar mapeia `/tmp` para o workspace do host, entao scripts criados pelo
+agente sao executados com o caminho correto. O `nebula-web` continua sem socket.
+No Podman o sidecar roda como `1000:1000` com `userns_mode=keep-id` e
+`label=type:container_runtime_t`, e o healthcheck do Compose chama `/health`,
+que verifica o runtime. Ajuste `NEBULA_SANDBOX_SOCKET` se o socket nao estiver em
+`/run/user/1000/podman/podman.sock`. Para Docker use
+`NEBULA_SANDBOX_RUNTIME=Docker`, `NEBULA_SANDBOX_SOCKET=/var/run/docker.sock`,
+`NEBULA_SANDBOX_USER=0:0`, `NEBULA_SANDBOX_USERNS_MODE=host` e
+`NEBULA_SANDBOX_SECURITY_OPT=label=disable`; trate o sidecar como privilegiado.
+O caminho Docker CLI foi testado contra a API compativel do Podman; valide com um
+daemon Docker real antes de producao.
 
 ## Workspace por conversa
 

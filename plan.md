@@ -2,6 +2,16 @@
 
 Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de programacao completos, escrever scripts funcionais, operar ferramentas locais com seguranca, aprender com resultados reais e entregar software verificavel de ponta a ponta.
 
+## Legenda de status
+
+- `[x]` Implementado e conectado a um fluxo real.
+- `[~]` Parcial: existe codigo/servico/UI, mas falta wiring, teste, enforcement ou prova E2E.
+- `[ ]` Planejado ou nao encontrado no codigo atual.
+
+Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
+2026-11-03. Baseado em inspecao do codigo e nos builds/testes registrados em
+`AGENTS.md`; nao e prova de runtime.
+
 ## Principios
 
 - [x] Todo resultado importante deve ser verificavel por evidencias reais: arquivos criados, testes executados, logs, screenshots, builds ou artefatos.
@@ -89,13 +99,14 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Fase 8 - Ferramentas de desenvolvimento
 
-- [ ] Integrar controle Git: diff, status, branch, commit, revert seletivo e PR.
-- [ ] Adicionar geracao de mensagens de commit baseadas em diff.
-- [ ] Criar suporte a testes direcionados por arquivo alterado.
-- [ ] Adicionar execucao de smoke tests de apps web locais.
-- [ ] Integrar screenshots automaticos para UI depois de mudancas frontend.
-- [ ] Detectar portas ocupadas e escolher alternativas automaticamente.
-- [ ] Adicionar geracao de migrations com aprovacao explicita.
+- [x] Integrar Git core: diff, status, branch, commit, amend, revert por commit, log e remotes (`GitService`); sem teste direto do servico.
+- [~] Adicionar revert seletivo por arquivo e fluxo de PR: `PullRequestService` cobre GitHub/GitLab e esta registrado em DI, mas nao tem chamadores nem UI de PR.
+- [x] Adicionar geracao de mensagens de commit baseadas em diff (`GitService.GenerateCommitMessageAsync` + botao em `Git.razor`); sem teste direto.
+- [x] Criar suporte a testes direcionados por arquivo alterado (`TestRunnerService.RunTargetedTestsAsync`, usado em `TestRunnerCard`/`AgentRunLive`); sem teste unitario direto do servico.
+- [~] Adicionar execucao de smoke tests de apps web locais: `SmokeTestService` registrado, sem chamadores/testes.
+- [~] Integrar screenshots automaticos para UI depois de mudancas frontend: `ScreenshotService` tem captura/viewports/baselines/diff, mas nao e acionado automaticamente.
+- [~] Detectar portas ocupadas e escolher alternativas automaticamente: `PortDetectionService` existe, sem chamadores/testes.
+- [~] Adicionar geracao de migrations com aprovacao explicita: `MigrationService` cria/aplica/lista migrations EF/Node e tem `DryRun`, mas nao tem gate de aprovacao nem chamador.
 - [x] Criar "project doctor" para diagnosticar ambiente, SDKs, Docker, banco, Ollama e dependencias.
 
 ## Fase 9 - Capacidades multimodais e artefatos
@@ -103,22 +114,26 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - [ ] Permitir que o agente leia screenshots e associe problemas visuais a arquivos de frontend.
 - [ ] Gerar imagens, icones e assets quando o projeto precisar.
 - [ ] Criar documentos, planilhas, PDFs e slides como artefatos versionados quando aplicavel.
-- [ ] Adicionar verificacao visual de layouts responsivos.
+- [~] Adicionar verificacao visual de layouts responsivos: ha captura/viewports/diff de screenshots (`ScreenshotService`), mas falta assertion/automacao no fluxo de UI.
 - [ ] Suportar extracao de requisitos a partir de documentos enviados.
-- [ ] Criar relatórios finais exportaveis para Markdown e PDF.
+- [~] Criar relatórios finais exportaveis para Markdown e PDF: o `FinalReport` e exibido em Markdown no Chat, mas nao ha exportacao para arquivo/PDF.
 
 ## Fase 10 - Seguranca e governanca
 
-- [ ] Separar policy de comandos por perfis: conservador, padrao, autonomo e laboratorio.
+- [x] Separar policy de comandos por perfis: conservador, padrao, autonomo e laboratorio. `AutonomyProfile` e defaults sao aplicados no caminho real: `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` combinam os defaults do perfil com a configuracao explicita, o `AgentActionRunner` usa esses valores no override de aprovacao e o `PolicySimulator` reutiliza a mesma resolucao. `AutoApproveCommandsConfigured` preserva a escolha explicita do usuario (inclusive false); `Block` continua sempre bloqueado.
 - [x] Exigir aprovacao para rede, instalacao de pacotes, escrita fora do workspace, processos persistentes e alteracoes globais.
 - [x] Bloquear exfiltracao de credenciais, leitura de segredos e destruicao ampla de dados.
 - [x] Criar logs auditaveis para todas as decisoes de seguranca.
-- [x] Adicionar redacao automatica de segredos em logs exibidos na UI.
-- [ ] Criar simulador de policy para explicar como um comando seria classificado antes de executar.
+- [x] Adicionar redacao automatica de segredos em Chat/UI/`AgentActionSession` (`SecretRedaction`).
+- [x] Centralizar redaction em logs de console/diagnosticos e no pipeline de `Microsoft.Extensions.Logging` (`ConsoleLogger` + `RedactingLoggerProvider`; mensagens e excecoes; escopos estruturados ainda nao sao redigidos).
+- [x] Adicionar autenticacao local-first para a UI Web: token unico de operador (`NEBULA_WEB_AUTH_TOKEN`/`Nebula:Web:AuthToken`, minimo 32 caracteres), cookie `HttpOnly`, fallback policy para UI/API/`/_blazor`, login/logout e bind loopback no Compose; coberto por `Nebula.App.Web.Test` (validacao manual de browser/Compose pendente).
+- [x] Criar simulador de policy para explicar como um comando seria classificado antes de executar (`PolicySimulator` + Settings/UI + testes).
 - [x] Permitir configuracao por workspace das categorias auto-aprovadas (categorias por workspace persistidas em `workspace_memory` via `WorkspaceMemoryKind.AutoApprovedCategory` + `IWorkspaceCategoryPolicyService`, combinadas com as globais no override; escopo Category de aprovacao grava no workspace, nao global).
 - [x] Criar testes de regressao para comandos perigosos conhecidos.
 
 ## Fase 11 - Avaliacao e benchmarks
+
+> Nao ha harness de avaliacao/benchmark no repositorio atual; os itens abaixo continuam planejados.
 
 - [ ] Criar um conjunto de tarefas reais para avaliar o Nebula: scripts, apps simples, bugs, refactors e testes.
 - [ ] Medir taxa de sucesso, numero de tentativas, comandos bloqueados, tempo total e qualidade do resultado.
@@ -129,40 +144,44 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 
 ## Fase 12 - Autonomia forte
 
-- [ ] Implementar execucoes longas com checkpoints e retomada.
-- [ ] Permitir que o agente continue trabalhando ate cumprir criterios objetivos.
-- [ ] Adicionar fila de tarefas com prioridade.
+- [x] Implementar execucoes longas com checkpoints e retomada (`AgentRun`, checkpoints no loop, `IManager.ResumeTaskAsync` e `/agent-runs`; ja coberto na Fase 1).
+- [~] Permitir que o agente continue trabalhando ate cumprir criterios objetivos: ha DoD e repair loop limitado (`MaxVerificationRetries`), nao continuacao aberta.
+- [~] Adicionar fila de tarefas com prioridade: `AgentRunBackgroundService` tem fila FIFO/unbounded, sem prioridade.
 - [ ] Criar modo "watch": observar arquivos, testes ou issues e agir quando necessario.
 - [ ] Permitir subtarefas paralelas isoladas quando nao houver conflito de arquivos.
 - [ ] Adicionar reconciliacao de resultados de subagentes.
 - [ ] Criar um supervisor que avalia plano, riscos e conclusao antes de finalizar.
-- [ ] Implementar modo "entrega completa": criar projeto, testar, documentar, empacotar e preparar commit.
+- [~] Implementar modo "entrega completa": criar projeto, testar, documentar, empacotar e preparar commit. Scaffold/testes/docs/relatorio existem; falta empacotamento e preparacao de commit/PR.
+
+> Watch mode, subtarefas paralelas, reconciliacao de subagentes e supervisor nao foram encontrados no codigo atual.
 
 ## Backlog Tecnico Imediato
 
 - [x] Criar `IAgentRunStore` para persistir execucoes longas.
 - [x] Criar `AgentRun`, `AgentStepRecord`, `AgentArtifactRecord` e `AgentApprovalRecord`.
 - [x] Mover logica de aprovacao para um servico dedicado, por exemplo `ICommandApprovalService`.
-- [ ] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas.
+- [x] Expandir `NebulaRuntimeSettings` com perfil de autonomia e categorias auto-aprovadas (`AutonomyProfile`, `AutoApproveCategories`, defaults por perfil); o runner real ainda nao aplica os defaults do perfil.
 - [x] Adicionar testes para aprovacao por categoria e por workspace.
 - [x] Criar componente Blazor reutilizavel para cards de comando (`CommandCard`, `StepCard`, `TerminalOutput`, `PlanView`, `ArtifactPanel`, `AgentRunTimeline`).
 - [x] Criar tela `/agent-runs`.
 - [x] Criar tela `/audit` para auditoria de aprovacoes.
 - [x] Criar worker de execucao para nao prender o ciclo de renderizacao da UI (`AgentRunBackgroundService`).
 - [x] Criar eventos de progresso fortemente tipados em vez de depender de texto (`AgentRunEvent` hierarchy).
-- [ ] Criar fixture de projeto temporario para testes end-to-end do agente.
+- [~] Criar fixture de projeto temporario para testes end-to-end do agente: `TempTestWorkspace` cobre testes unitarios/integracao, mas nao ha fixture de projeto completo reutilizavel para E2E.
 
 ## Marcos de Entrega
 
 - [x] Marco 1: UI mostra plano vivo, comandos, aprovacoes e evidencias.
 - [x] Marco 2: Nebula cria scripts simples, executa e corrige falhas automaticamente.
-- [ ] Marco 3: Nebula cria um projeto pequeno completo com testes e README.
-- [ ] Marco 4: Nebula altera um projeto existente seguindo padroes locais e passando testes.
-- [ ] Marco 5: Nebula retoma uma tarefa interrompida sem perder contexto.
-- [ ] Marco 6: Nebula opera com perfil autonomo configuravel por workspace.
-- [ ] Marco 7: Nebula entrega mudancas prontas para commit/PR com relatorio final.
+- [~] Marco 3: Nebula cria um projeto pequeno completo com testes e README. Componentes de scaffold/validacao existem, falta prova E2E.
+- [~] Marco 4: Nebula altera um projeto existente seguindo padroes locais e passando testes. Workspace map/patch existem, falta prova E2E.
+- [x] Marco 5: Nebula retoma uma tarefa interrompida sem perder contexto.
+- [x] Marco 6: Nebula opera com perfil autonomo configuravel por workspace. Settings/simulator existem e o runner real aplica os defaults do perfil via `EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories`, com precedencia para a configuracao explicita.
+- [~] Marco 7: Nebula entrega mudancas prontas para commit/PR com relatorio final. Relatorio/Git diff existem; `PullRequestService` ainda nao tem UI/chamadores.
 
 ## Indicadores de Sucesso
+
+> Indicadores ainda nao possuem harness de medicao continuo; os checkboxes representam metas, nao resultados verificados.
 
 - [ ] 90% das tarefas simples de script concluidas com execucao real e evidencia.
 - [ ] 80% dos projetos pequenos gerados com build/test passando na primeira ou segunda correcao.
