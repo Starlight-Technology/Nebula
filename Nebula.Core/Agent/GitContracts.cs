@@ -7,6 +7,12 @@ public interface IGitService
     Task<GitCommitResult> CommitAsync(string workingDirectory, string message, bool amend = false, CancellationToken cancellationToken = default);
     Task<GitCommitResult> CommitAllAsync(string workingDirectory, string message, CancellationToken cancellationToken = default);
     Task<GitRevertResult> RevertAsync(string workingDirectory, string commitHash, CancellationToken cancellationToken = default);
+    Task<GitFileRevertResult> RevertFileAsync(
+        string workingDirectory,
+        string relativePath,
+        bool staged = false,
+        string? commitHash = null,
+        CancellationToken cancellationToken = default);
     Task<GitDiffResult> GetDiffAsync(string workingDirectory, bool staged = false, CancellationToken cancellationToken = default);
     Task<GitLogResult> GetLogAsync(string workingDirectory, int count = 10, CancellationToken cancellationToken = default);
     Task<GitRemoteResult> GetRemotesAsync(string workingDirectory, CancellationToken cancellationToken = default);
@@ -56,6 +62,12 @@ public sealed record GitCommitResult(
 public sealed record GitRevertResult(
     bool Success,
     string? RevertedCommitHash,
+    string? Error);
+
+public sealed record GitFileRevertResult(
+    bool Success,
+    string? FilePath,
+    string? CommitHash,
     string? Error);
 
 public sealed record GitDiffResult(

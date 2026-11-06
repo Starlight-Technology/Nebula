@@ -75,10 +75,10 @@
                     </div>
 
                     <div class="nebula-git-status-grid">
-                        <div class="nebula-git-status-item @(!Status.HasUncommittedChanges ? "clean" : "")">
-                            <CoronaBadge Content="@(Status.HasUncommittedChanges ? "Com mudancas" : "Limpo")"
+                        <div class="nebula-git-status-item @(Status?.HasUncommittedChanges != true ? "clean" : "")">
+                            <CoronaBadge Content="@(Status?.HasUncommittedChanges == true ? "Com mudancas" : "Limpo")"
                                          Variant="CoronaBadgeVariant.Soft"
-                                         Color="@(Status.HasUncommittedChanges ? CoronaColorSemantic.Warning : CoronaColorSemantic.Success)" />
+                                         Color="@(Status?.HasUncommittedChanges == true ? CoronaColorSemantic.Warning : CoronaColorSemantic.Success)" />
                             <p>Arquivos com mudancas</p>
                         </div>
 
@@ -104,9 +104,40 @@
                             <p class="nebula-kicker">Staged (@(Status.StagedFiles.Count))</p>
                             @foreach (var file in Status.StagedFiles)
                             {
+                                var revertKey = $"staged:{file}";
                                 <div class="nebula-git-file nebula-git-file--staged">
                                     <span class="nebula-git-file__icon">📄</span>
-                                    <span>@file</span>
+                                    <span class="nebula-git-file__path">@file</span>
+                                    <div class="nebula-git-file__actions">
+                                        @if (PendingRevertKey == revertKey)
+                                        {
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Danger"
+                                                          OnClick="@(() => ConfirmFileRevertAsync(file, staged: true))"
+                                                          Disabled="@IsRevertingFile">
+                                                Confirmar
+                                            </CoronaButton>
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Neutral"
+                                                          OnClick="CancelFileRevert"
+                                                          Disabled="@IsRevertingFile">
+                                                Cancelar
+                                            </CoronaButton>
+                                        }
+                                        else
+                                        {
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Warning"
+                                                          OnClick="@(() => RequestFileRevert(revertKey))"
+                                                          Disabled="@(IsProtected || IsRevertingFile)"
+                                                          Title="Descartar alteracoes deste arquivo (staged e working tree)">
+                                                Reverter
+                                            </CoronaButton>
+                                        }
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -118,9 +149,40 @@
                             <p class="nebula-kicker">Nao staged (@(Status.UnstagedFiles.Count))</p>
                             @foreach (var file in Status.UnstagedFiles)
                             {
+                                var revertKey = $"unstaged:{file}";
                                 <div class="nebula-git-file nebula-git-file--unstaged">
                                     <span class="nebula-git-file__icon">📝</span>
-                                    <span>@file</span>
+                                    <span class="nebula-git-file__path">@file</span>
+                                    <div class="nebula-git-file__actions">
+                                        @if (PendingRevertKey == revertKey)
+                                        {
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Danger"
+                                                          OnClick="@(() => ConfirmFileRevertAsync(file, staged: false))"
+                                                          Disabled="@IsRevertingFile">
+                                                Confirmar
+                                            </CoronaButton>
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Neutral"
+                                                          OnClick="CancelFileRevert"
+                                                          Disabled="@IsRevertingFile">
+                                                Cancelar
+                                            </CoronaButton>
+                                        }
+                                        else
+                                        {
+                                            <CoronaButton Variant="CoronaButtonVariant.Text"
+                                                          Size="CoronaComponentSize.Small"
+                                                          Color="CoronaColorSemantic.Warning"
+                                                          OnClick="@(() => RequestFileRevert(revertKey))"
+                                                          Disabled="@(IsProtected || IsRevertingFile)"
+                                                          Title="Descartar alteracoes deste arquivo">
+                                                Reverter
+                                            </CoronaButton>
+                                        }
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -171,7 +233,7 @@
                                       Color="CoronaColorSemantic.Primary"
                                       Icon="@CoronaIcons.Check"
                                       OnClick="CommitAsync"
-                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || !Status.HasUncommittedChanges)">
+                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || Status?.HasUncommittedChanges != true)">
                             Commit (apenas staged)
                         </CoronaButton>
 
@@ -179,7 +241,7 @@
                                       Color="CoronaColorSemantic.Primary"
                                       Icon="@CoronaIcons.Check"
                                       OnClick="CommitAllAsync"
-                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || !Status.HasUncommittedChanges)">
+                                      Disabled="@(IsCommitting || string.IsNullOrWhiteSpace(CommitMessage) || Status?.HasUncommittedChanges != true)">
                             Commit All (git add -A + commit)
                         </CoronaButton>
 
@@ -390,6 +452,8 @@
     private bool IsLoading;
     private bool IsCommitting;
     private bool IsReverting;
+    private bool IsRevertingFile;
+    private string? PendingRevertKey;
     private bool IsGeneratingMessage;
     private bool ShowStagedDiff = false;
     private int LogCount = 10;
@@ -438,24 +502,23 @@
             Feedback = $"Erro ao carregar: {ex.Message}";
             IsError = true;
         }
-finally
-            {
-                IsLoading = false;
-                await RefreshAsync();
-                await WorkspaceState.RefreshGitStatusAsync();
-            }
+        finally
+        {
+            IsLoading = false;
+            await WorkspaceState.RefreshGitStatusAsync();
+        }
     }
 
     private async Task<string> GetDiffAsync()
     {
         var workspace = WorkspaceState.ResolvedWorkspace.Root;
         var result = await GitService.GetDiffAsync(workspace, ShowStagedDiff);
-        return result.IsRepository ? result.DiffStat : string.Empty;
+        return result.IsRepository ? result.DiffStat ?? string.Empty : string.Empty;
     }
 
     private async Task GenerateCommitMessageAsync()
     {
-        if (!Status?.HasUncommittedChanges == true) return;
+        if (Status?.HasUncommittedChanges != true) return;
 
         IsGeneratingMessage = true;
         StateHasChanged();
@@ -547,6 +610,66 @@ finally
         finally
         {
             IsCommitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private void RequestFileRevert(string revertKey)
+    {
+        PendingRevertKey = revertKey;
+        Feedback = "Clique em Confirmar para descartar as alteracoes deste arquivo.";
+        IsError = false;
+        StateHasChanged();
+    }
+
+    private void CancelFileRevert()
+    {
+        PendingRevertKey = null;
+        Feedback = string.Empty;
+        IsError = false;
+        StateHasChanged();
+    }
+
+    private async Task ConfirmFileRevertAsync(string file, bool staged)
+    {
+        if (IsProtected || IsRevertingFile)
+        {
+            return;
+        }
+
+        IsRevertingFile = true;
+        StateHasChanged();
+
+        try
+        {
+            var workspace = WorkspaceState.ResolvedWorkspace.Root;
+            var result = await GitService.RevertFileAsync(
+                workspace,
+                file,
+                staged);
+
+            await RefreshAsync();
+            PendingRevertKey = null;
+
+            if (result.Success)
+            {
+                Feedback = $"Alteracoes descartadas em {result.FilePath}.";
+                IsError = false;
+            }
+            else
+            {
+                Feedback = result.Error ?? "Falha ao reverter arquivo.";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Erro ao reverter arquivo: {ex.Message}";
+            IsError = true;
+        }
+        finally
+        {
+            IsRevertingFile = false;
             StateHasChanged();
         }
     }

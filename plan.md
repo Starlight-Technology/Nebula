@@ -99,8 +99,9 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 
 ## Fase 8 - Ferramentas de desenvolvimento
 
-- [x] Integrar Git core: diff, status, branch, commit, amend, revert por commit, log e remotes (`GitService`); sem teste direto do servico.
-- [~] Adicionar revert seletivo por arquivo e fluxo de PR: `PullRequestService` cobre GitHub/GitLab e esta registrado em DI, mas nao tem chamadores nem UI de PR.
+- [x] Integrar Git core: diff, status, branch, commit, amend, revert por commit, log e remotes (`GitService`); revert seletivo coberto por `GitServiceTest`, demais fluxos ainda sem teste direto.
+- [x] Adicionar revert seletivo por arquivo: `IGitService.RevertFileAsync` valida path/repo, bloqueia branches protegidas, aceita `staged` e commit de origem e e acionado com confirmacao em dois cliques na tela `/git`.
+- [~] Adicionar fluxo de PR: `PullRequestService` cobre GitHub/GitLab e esta registrado em DI, mas nao tem chamadores nem UI de PR.
 - [x] Adicionar geracao de mensagens de commit baseadas em diff (`GitService.GenerateCommitMessageAsync` + botao em `Git.razor`); sem teste direto.
 - [x] Criar suporte a testes direcionados por arquivo alterado (`TestRunnerService.RunTargetedTestsAsync`, usado em `TestRunnerCard`/`AgentRunLive`); sem teste unitario direto do servico.
 - [~] Adicionar execucao de smoke tests de apps web locais: `SmokeTestService` registrado, sem chamadores/testes.

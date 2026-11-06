@@ -3051,6 +3051,19 @@ pre {
     font-size: 0.9rem;
 }
 
+.nebula-git-file__path {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.nebula-git-file__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
 .nebula-git-commit-input {
     display: flex;
     flex-direction: column;

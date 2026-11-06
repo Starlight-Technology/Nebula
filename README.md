@@ -217,6 +217,15 @@ Runs retomados também apontam para o run original.
 Caminhos de ação são normalizados e validados antes de executar ou gravar: caracteres
 de controle, caminhos relativos inválidos e separadores que escapam da raiz são
 rejeitados.
+## Git
+
+A tela `/git` cobre status, branches, commits, diff, log, remotes e revert por
+commit. Arquivos staged e nao staged podem ser revertidos individualmente com
+confirmacao em dois cliques: o Nebula valida o caminho dentro do repositorio,
+recusa `.git`, `..`, caminhos absolutos e metacaracteres, e bloqueia a operacao
+em branches protegidas (`main`, `master`, `develop`, `release`, `production`).
+Arquivos nao rastreados nao sao alterados por esse fluxo.
+
 ## Migrations de banco
 
 O agente pode listar, criar e aplicar migrations de banco via `OperationKind.Migration`.

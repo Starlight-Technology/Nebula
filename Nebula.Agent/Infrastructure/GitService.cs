@@ -1,5 +1,6 @@
 using Nebula.Llama.Client;
 using Nebula.Core.Agent;
+using Nebula.Core.Safety;
 using Nebula.Runner;
 
 namespace Nebula.Agent.Infrastructure;
@@ -209,6 +210,163 @@ public sealed class GitService(
             logger.Log($"[GIT] Revert error: {ex.Message}");
             return new GitRevertResult(false, null, ex.Message);
         }
+    }
+
+    public async Task<GitFileRevertResult> RevertFileAsync(
+        string workingDirectory,
+        string relativePath,
+        bool staged = false,
+        string? commitHash = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) ||
+            !Directory.Exists(workingDirectory))
+        {
+            return new GitFileRevertResult(
+                false,
+                relativePath,
+                commitHash,
+                "Working directory does not exist.");
+        }
+
+        if (!TryNormalizeRelativePath(
+                workingDirectory,
+                relativePath,
+                out var normalizedPath,
+                out var pathError))
+        {
+            return new GitFileRevertResult(
+                false,
+                relativePath,
+                commitHash,
+                pathError);
+        }
+
+        if (!string.IsNullOrWhiteSpace(commitHash) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                commitHash.Trim(),
+                "^[0-9a-fA-F]{4,40}$"))
+        {
+            return new GitFileRevertResult(
+                false,
+                normalizedPath,
+                commitHash,
+                "Commit hash contains invalid characters.");
+        }
+
+        var protectionCheck = await CheckBranchProtection(
+            workingDirectory,
+            cancellationToken);
+        if (!protectionCheck.Success)
+        {
+            return new GitFileRevertResult(
+                false,
+                normalizedPath,
+                commitHash,
+                protectionCheck.Error);
+        }
+
+        try
+        {
+            var sourceArg = string.IsNullOrWhiteSpace(commitHash)
+                ? string.Empty
+                : $"--source={commitHash.Trim()} ";
+            var stagedArg = staged ? "--staged " : string.Empty;
+            var cmd =
+                $"git restore {sourceArg}{stagedArg}--worktree -- \"{normalizedPath}\"";
+            var result = await RunAsync(
+                cmd,
+                workingDirectory,
+                cancellationToken);
+            if (!result.Success)
+            {
+                return new GitFileRevertResult(
+                    false,
+                    normalizedPath,
+                    commitHash,
+                    result.StandardError ?? "git restore failed");
+            }
+
+            logger.Log(
+                $"[GIT] Reverted file {normalizedPath}" +
+                (string.IsNullOrWhiteSpace(commitHash)
+                    ? string.Empty
+                    : $" to {commitHash}"));
+            return new GitFileRevertResult(
+                true,
+                normalizedPath,
+                commitHash,
+                null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[GIT] File revert error: {ex.Message}");
+            return new GitFileRevertResult(
+                false,
+                normalizedPath,
+                commitHash,
+                ex.Message);
+        }
+    }
+
+    private static bool TryNormalizeRelativePath(
+        string workingDirectory,
+        string relativePath,
+        out string normalizedPath,
+        out string error)
+    {
+        normalizedPath = string.Empty;
+        error = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "A file path is required.";
+            return false;
+        }
+
+        var candidate = relativePath.Trim().Replace('\\', '/');
+        if (candidate.StartsWith("/", StringComparison.Ordinal) ||
+            candidate.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(".git/", StringComparison.OrdinalIgnoreCase) ||
+            candidate.Split('/').Any(segment => segment == ".."))
+        {
+            error = "The file path must be inside the repository and must not reference .git.";
+            return false;
+        }
+
+        if (candidate.Any(char.IsControl) ||
+            candidate.IndexOfAny(['"', '`', '$', ';', '&', '|', '<', '>']) >= 0)
+        {
+            error = "The file path contains invalid characters.";
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(
+                Path.Combine(
+                    workingDirectory,
+                    candidate.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch (Exception)
+        {
+            error = "The file path is invalid.";
+            return false;
+        }
+
+        if (!PathContainment.IsUnder(fullPath, workingDirectory))
+        {
+            error = "The file path escapes the repository working directory.";
+            return false;
+        }
+
+        normalizedPath = candidate;
+        return true;
     }
 
     public async Task<GitDiffResult> GetDiffAsync(string workingDirectory, bool staged = false, CancellationToken cancellationToken = default)
