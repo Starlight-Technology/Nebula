@@ -112,6 +112,16 @@ public class CommandExecution
     /// </summary>
     public string? TemplateId { get; set; }
 
+    public MigrationAction? MigrationAction { get; set; }
+
+    public MigrationFramework? MigrationFramework { get; set; }
+
+    public string? MigrationName { get; set; }
+
+    public string? MigrationContext { get; set; }
+
+    public bool MigrationDryRun { get; set; }
+
     public string? ContentHash { get; set; }
 
     public string ClassificationSource { get; set; } = string.Empty;

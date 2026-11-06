@@ -290,6 +290,11 @@ public class Manager : IManager
                     Content = command.Content,
                     Language = command.Language,
                     TemplateId = command.TemplateId,
+                    MigrationAction = command.MigrationAction,
+                    MigrationFramework = command.MigrationFramework,
+                    MigrationName = command.MigrationName,
+                    MigrationContext = command.MigrationContext,
+                    MigrationDryRun = command.MigrationDryRun,
                     WorkingDirectory = command.WorkingDirectory,
                     Scope = scope
                 }

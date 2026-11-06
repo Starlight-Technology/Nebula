@@ -376,6 +376,7 @@ builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner
     plannedPatchApplier: provider.GetRequiredService<IPlannedPatchApplier>(),
     gitDiffService: provider.GetRequiredService<IGitDiffService>(),
     commandSandbox: provider.GetRequiredService<ICommandSandbox>(),
+    migrationService: provider.GetRequiredService<IMigrationService>(),
     approvalService: provider.GetRequiredService<ICommandApprovalService>(),
     workspaceMemoryService: provider.GetRequiredService<WorkspaceMemoryService>(),
     commandAllowlistService: provider.GetRequiredService<ICommandAllowlistService>(),

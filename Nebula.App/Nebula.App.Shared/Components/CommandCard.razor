@@ -104,15 +104,24 @@
             }
             else
             {
-                <select class="nebula-approval-scope"
-                        value="@SelectedScope"
-                        @onchange="@((ChangeEventArgs args) => SelectedScope = ParseApprovalScope(args.Value?.ToString()))"
-                        title="Escopo da aprovacao">
-                    <option value="@ApprovalScope.Once">Aprovar uma vez</option>
-                    <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
-                    <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
-                    <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
-                </select>
+                @if (ShowScopeSelector)
+                {
+                    <select class="nebula-approval-scope"
+                            value="@SelectedScope"
+                            @onchange="@((ChangeEventArgs args) => SelectedScope = ParseApprovalScope(args.Value?.ToString()))"
+                            title="Escopo da aprovacao">
+                        <option value="@ApprovalScope.Once">Aprovar uma vez</option>
+                        <option value="@ApprovalScope.Conversation">Aprovar nesta conversa</option>
+                        <option value="@ApprovalScope.Workspace">Aprovar neste workspace</option>
+                        <option value="@ApprovalScope.Category">Auto-aprovar categoria</option>
+                    </select>
+                }
+                else
+                {
+                    <span class="nebula-approval-scope-note">
+                        Aprovacao unica obrigatoria para migrations.
+                    </span>
+                }
 
                 <CoronaButton Variant="CoronaButtonVariant.Outlined"
                               Size="CoronaComponentSize.Small"
@@ -155,6 +164,7 @@
     [Parameter] public bool CanApprove { get; set; }
     [Parameter] public bool CanCopy { get; set; } = true;
     [Parameter] public bool ShowApprovalControls { get; set; } = true;
+    [Parameter] public bool ShowScopeSelector { get; set; } = true;
     [Parameter] public ApprovalScope SelectedScope { get; set; } = ApprovalScope.Once;
     [Parameter] public EventCallback<ApprovalScope> SelectedScopeChanged { get; set; }
     [Parameter] public EventCallback<string> OnApprove { get; set; }

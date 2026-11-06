@@ -105,6 +105,7 @@ Use these categories when describing Nebula:
 | Workspace map | Implemented | `IWorkspaceMapService`/`WorkspaceMapService` indexa arquivos, modulos, testes, dependencias e comandos conhecidos; `BuildSummary` injetado no decision prompt; `IProjectStackValidator` valida arquivos essenciais por template. |
 | Reference workspace | Implemented | `ReferenceWorkspace.Resolve` (`Nebula.Core/Projects/ReferenceWorkspace.cs`) define a pasta do projeto em que o agente trabalha: caminho explicito e criado quando faltar (mesmo vazio) ou workspace novo vazio em `%TEMP%/nebula-workspace/<conversationId>` quando nada for especificado (raiz explicita e usada como esta); `NebulaRuntimeSettings.WorkspaceRoot` (config `Nebula:WorkspaceRoot`, env `NEBULA_WORKSPACE_ROOT`) → `UserMessage.WorkspaceRoot` → `ConversationRequest` → `AgentActionRunRequest.WorkspaceRoot` → `AgentActionSession.WorkspaceRoot`; o runner usa o workspace resolvido no lugar de `Environment.CurrentDirectory` (detecção de operação, ambiente, `ResolveSessionWorkingDirectory`, workspace map/memory no decision prompt); `AgentRun.WorkspaceRoot` persistido em `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) e restaurado em `Manager.ResumeTaskAsync`; UI: campo em `Settings.razor` + `QuickSettings.WorkspaceRoot` persistido em `nebula.quick-settings.v1` + `WorkspaceState.ResolvedWorkspace`. |
 | Action path validation | Implemented | `AgentActionRunner.ValidateDecision` rejects control characters in `targetPath`/`workingDirectory`/`PlannedFiles[].RelativePath`, normalizes Windows-style relative separators (`NormalizePathSeparators`), and rejects drive-rooted relative paths; `PlannedPatchApplier` applies the same checks and never falls back to the process cwd when a target is invalid. |
+| Database migrations with explicit approval | Implemented | `OperationKind.Migration` + `AgentToolAction.MigrationAction/MigrationFramework/MigrationName/MigrationContext`; `AgentActionRunner.ExecuteMigrationAsync` runs `Create`/`Apply` only after a manual `AgentApprovedAction` (scope forced to `Once`) and never through auto-approve, allowlist, conversation or category scopes; `List` is read-only and allowed. `MigrationService` supports EF Core and Node.js, validates names/contexts, and `DryRun` returns the planned command without executing. See `Nebula.Agent/Infrastructure/MigrationService.cs` and `Nebula.Core/Agent/MigrationContracts.cs`. |
 | Multi-file planned patches | Implemented | `OperationKind.PlannedPatch` + `AgentToolAction.PlannedFiles` (`plannedFiles` [{path, content}] no JSON de decisao), `IPlannedPatchApplier`/`PlannedPatchApplier` (raiz restrita a workspace/temp, arquivos relativos ao target, path traversal bloqueado, sem fallback para o cwd em caminho invalido), validacao de conteudo (`PlannedPatchContentValidator`) e classificacao agregada por arquivo (`FileWriteSafetyClassifier`); extensao de script ou arquivo fora das raizes pedem aprovacao antes de aplicar (revisao visivel nas Notes do card). |
 | Self-programming loop (DoD, lint/format, timeouts, diff review, overwrite guard, repair loop) | Implemented | `RequireDeterministicVerification` (gate no `VerifyCompletionDeterministicallyAsync`), `WorkspaceStack.LintCommand` (`.NET` `dotnet format --verify-no-changes --no-restore`; Node `npm run lint` quando o script existe; falha reprova o DoD e `dotnet format` e permitido pela policy para corrigir), `CommandTimeoutSeconds`/`ScriptTimeoutSeconds` (`CreateToolCancellationToken` com falha clara e retry), `IGitDiffService`/`GitDiffService` (read-only: `rev-parse`, `diff --name-only`, `diff --stat`) com secoes de diff e aviso de alteracoes fora da acao no `FinalReport`, `ConcurrentModificationGuard` (arquivo alterado apos `RunStartedUtc` pede aprovacao antes de sobrescrever, incluindo patches), `MaxVerificationRetries` (repair loop: falha do DoD volta para o agente corrigir; limite de correcoes seguidas configuravel). |
 | Optional per-workspace container sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker`/`podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw` (Podman no Linux usa `:rw,Z`), imagem default `mcr.microsoft.com/powershell:lts`; `SandboxRuntime` (`Auto`/`Docker`/`Podman`) e resolvido por `ISandboxRuntimeLocator`/`SandboxRuntimeLocator` (Auto prefere Docker e depois Podman; runtime explicito nao faz fallback) e a ausencia de runtime falha antes da execucao, sem cair para o host; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Runtime|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|RUNTIME|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
@@ -123,7 +124,7 @@ Use these categories when describing Nebula:
 | OpenClaw integration | Not found | No `OpenClaw` references were found outside the user request. |
 | Redis/SQLite/queues/background worker | Partial | `BackgroundService`/`IHostedService` implemented via `AgentRunBackgroundService` for agent run queue. No Redis, SQLite, Hangfire, Quartz, or general queue worker. |
 | Git workspace operations and PR | Partial | `GitService` covers diff/status/branch/commit/amend/revert by commit/log/remotes; commit-message generation is wired in `Git.razor`. `PullRequestService` supports GitHub/GitLab but has no callers/UI, and `GitService` has no direct tests. |
-| Post-frontend verification tooling | Partial | `TestRunnerService.RunTargetedTestsAsync` is wired in `TestRunnerCard`/`AgentRunLive`; `SmokeTestService`, `ScreenshotService`, `PortDetectionService`, and `MigrationService` are DI-registered but unused. `ProjectDoctorService` is implemented. |
+| Post-frontend verification tooling | Partial | `TestRunnerService.RunTargetedTestsAsync` is wired in `TestRunnerCard`/`AgentRunLive`; `MigrationService` is wired through `OperationKind.Migration`; `SmokeTestService`, `ScreenshotService`, and `PortDetectionService` are DI-registered but unused. `ProjectDoctorService` is implemented. |
 | Autonomy profiles | Implemented | `AutonomyProfile` defaults are resolved by `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` (profile defaults merged with explicit config; `AutoApproveCommandsConfigured` preserves explicit false) and used by both `AgentActionRunner` and `PolicySimulator`; `Block` decisions are never overridden. |
 | Secret redaction | Implemented | Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting are redacted. Structured log scope values are not redacted. |
 | Web app Docker service | Implemented | `nebula-web` service is active in `docker-compose.yml` (container runs the built web app), binds loopback by default, and requires `NEBULA_WEB_AUTH_TOKEN`. Docker daemon was unavailable on some machines during build validation. |
@@ -374,6 +375,7 @@ Supported operation kinds are defined in `Nebula.Core/Operations`:
 - `ScriptExecution`
 - `ProjectScaffold`
 - `PlannedPatch`
+- `Migration`
 - `Research`
 - `Learning`
 - `Chat`
@@ -395,6 +397,10 @@ Actions can include:
 - `targetPath`
 - `templateId`
 - `plannedFiles` (array of `{path, content}` for `PlannedPatch`; paths are relative to `targetPath`)
+- `migrationAction` (`Create`/`Apply`/`List`)
+- `migrationFramework` (`EfCore`/`NodeJs`)
+- `migrationName` and `migrationContext`
+- `migrationDryRun`
 - `language`
 - `workingDirectory`
 - `retryJustification`
@@ -553,6 +559,26 @@ Changing or creating several files in one step uses `OperationKind.PlannedPatch`
 
 `AgentApprovedAction` carries `PlannedFiles` so an approved patch can be replayed
 without the LLM.
+
+### Database migrations
+
+Database schema changes use `OperationKind.Migration`:
+
+1. The planner emits `migrationAction` (`Create`, `Apply` or `List`),
+   `migrationFramework` (`EfCore` or `NodeJs`), `migrationName` for `Create`,
+   and `migrationContext` when an EF Core project has multiple contexts.
+2. `AgentActionRunner.ExecuteMigrationAsync` resolves the project directory,
+   validates `migrationName`/`migrationContext` (letters, digits, underscores;
+   no shell metacharacters), and classifies `List` as read-only.
+3. `Create` and `Apply` always require a manual `AgentApprovedAction` with
+   `ApprovalScope.Once`. Auto-approval, allowlists, conversation scopes and
+   auto-approved categories are intentionally ignored for migrations.
+4. `MigrationService` runs `dotnet ef` for EF Core and `npx knex`/`typeorm`/
+   `prisma`/`sequelize` for Node.js. `DryRun` returns the planned command without
+   executing it.
+5. Evidence, output, and the created migration file (when available) are recorded
+   on the run; the approval card hides the scope selector and states that only a
+   one-time approval is accepted.
 
 ### Approval continuation and run linking
 
@@ -1394,7 +1420,7 @@ These are current gaps or cautions confirmed by inspection.
 - Persistent `AgentRun` storage is implemented (checkpoints, plan, artifacts, approvals, parent-run links via `agent_runs.ParentRunId`). Resume support exists via `IManager.ResumeTaskAsync` and the `/agent-runs` screen; approval overrides use `ICommandApprovalService`.
 - Project scaffolding is implemented with curated templates (`ProjectScaffold`). Multi-file planned patches (`PlannedPatch`) are implemented with review before apply for risky files; the generic tool/plugin catalog is still not confirmed.
 - The self-programming loop is implemented (DoD gate, lint/format check by stack, timeouts by command type, read-only git diff review in the `FinalReport`, concurrent-modification guard, `MaxVerificationRetries` repair loop). The DoD setting is global rather than per-task-type; the git diff review is appended on the normal (non-approved-action) run path.
-- Fase 8 services `SmokeTestService`, `ScreenshotService`, `PortDetectionService`, and `MigrationService` are DI-registered but have no callers/tests; `PullRequestService` is also unused and has no PR UI. `GitService` has no direct test.
+- Fase 8 services `SmokeTestService`, `ScreenshotService`, and `PortDetectionService` are DI-registered but have no callers/tests; `MigrationService` now has an agent caller and tests, but `PullRequestService` is still unused and has no PR UI. `GitService` has no direct test.
 - `AutonomyProfile` defaults are applied by `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` in both `AgentActionRunner` and `PolicySimulator`. Explicit `AutoApproveCommands` values are preserved via `AutoApproveCommandsConfigured`; profile categories act as a floor merged with explicitly configured categories.
 - Redaction is centralized for Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting; structured log scope values are not redacted.
 - A generic agent tool/plugin catalog is not confirmed in current repository state.

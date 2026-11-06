@@ -117,6 +117,19 @@ public sealed class AgentActionRunner : IAgentActionRunner
                                 ["required"] = new JsonArray("path", "content")
                             }
                         },
+                        ["migrationAction"] = new JsonObject
+                        {
+                            ["type"] = new JsonArray("string", "null"),
+                            ["enum"] = new JsonArray("Create", "Apply", "List")
+                        },
+                        ["migrationFramework"] = new JsonObject
+                        {
+                            ["type"] = new JsonArray("string", "null"),
+                            ["enum"] = new JsonArray("Unknown", "EfCore", "NodeJs", "Python", "Go")
+                        },
+                        ["migrationName"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["migrationContext"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["migrationDryRun"] = new JsonObject { ["type"] = "boolean" },
                         ["language"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["workingDirectory"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["retryJustification"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
@@ -182,6 +195,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IPlannedPatchApplier? plannedPatchApplier;
     private readonly IGitDiffService? gitDiffService;
     private readonly ICommandSandbox? commandSandbox;
+    private readonly IMigrationService? migrationService;
     private readonly NebulaRuntimeSettings runtimeSettings;
     private readonly ICommandApprovalService approvalService;
     private readonly WorkspaceMemoryService? workspaceMemoryService;
@@ -231,6 +245,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         IPlannedPatchApplier? plannedPatchApplier = null,
         IGitDiffService? gitDiffService = null,
         ICommandSandbox? commandSandbox = null,
+        IMigrationService? migrationService = null,
         ICommandApprovalService? approvalService = null,
         WorkspaceMemoryService? workspaceMemoryService = null,
         ICommandAllowlistService? commandAllowlistService = null,
@@ -295,6 +310,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.plannedPatchApplier = plannedPatchApplier;
         this.gitDiffService = gitDiffService;
         this.commandSandbox = commandSandbox;
+        this.migrationService = migrationService;
         this.approvalService = approvalService ?? new CommandApprovalService();
         this.workspaceMemoryService = workspaceMemoryService;
         this.commandAllowlistService = commandAllowlistService;
@@ -635,6 +651,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
                     "An approved planned patch requires at least one file.");
             }
         }
+        else if (approved.OperationKind == OperationKind.Migration)
+        {
+            if (approved.MigrationAction is null)
+            {
+                throw new ArgumentException(
+                    "An approved migration requires migrationAction.");
+            }
+        }
         else
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(approved.Command);
@@ -662,6 +686,11 @@ public sealed class AgentActionRunner : IAgentActionRunner
             Content = approved.Content,
             Language = approved.Language,
             TemplateId = approved.TemplateId,
+            MigrationAction = approved.MigrationAction,
+            MigrationFramework = approved.MigrationFramework,
+            MigrationName = approved.MigrationName,
+            MigrationContext = approved.MigrationContext,
+            MigrationDryRun = approved.MigrationDryRun,
             WorkingDirectory = approved.WorkingDirectory,
             RequiresSafetyReview = true
         };
@@ -674,7 +703,10 @@ public sealed class AgentActionRunner : IAgentActionRunner
             return terminal;
         }
 
-        if (approved.OperationKind is OperationKind.PlannedPatch or OperationKind.ProjectScaffold)
+        if (approved.OperationKind is
+            OperationKind.PlannedPatch or
+            OperationKind.ProjectScaffold or
+            OperationKind.Migration)
         {
             // The approved action is only one step of the task. Hand control
             // back to the ReAct loop so the agent can create the remaining
@@ -1138,6 +1170,12 @@ public sealed class AgentActionRunner : IAgentActionRunner
                     action,
                     step,
                     cancellationToken),
+            OperationKind.Migration =>
+                await ExecuteMigrationAsync(
+                    session,
+                    action,
+                    step,
+                    cancellationToken),
             _ => ActionAttemptResult.Terminal(
                 session.BlockUnsupportedOperation(operationKind))
         };
@@ -1222,6 +1260,20 @@ public sealed class AgentActionRunner : IAgentActionRunner
                         ["Nenhum template de projeto correspondeu ao objetivo."])
                     : scaffoldClassifier.Classify(targetPath);
                 execution.TemplateId = template?.Id;
+            }
+            else if (operationKind is OperationKind.Migration)
+            {
+                targetPath = string.IsNullOrWhiteSpace(action.TargetPath)
+                    ? session.WorkspaceRoot.Root
+                    : targetPath;
+                execution.TargetPath = targetPath;
+                execution.MigrationAction = action.MigrationAction;
+                execution.MigrationFramework = action.MigrationFramework;
+                execution.MigrationName = action.MigrationName;
+                execution.MigrationContext = action.MigrationContext;
+                execution.MigrationDryRun = action.MigrationDryRun;
+                execution.Run = BuildMigrationRunLabel(action);
+                classification = ClassifyMigration(action);
             }
             else if (operationKind is OperationKind.ScriptContent)
             {
@@ -1745,6 +1797,344 @@ public sealed class AgentActionRunner : IAgentActionRunner
             session.RecordObservation(execution.Run, execution.Notes);
             return ActionAttemptResult.Retry(execution.Notes);
         }
+    }
+
+    private async Task<ActionAttemptResult> ExecuteMigrationAsync(
+        AgentActionSession session,
+        AgentToolAction action,
+        AgentStep step,
+        CancellationToken cancellationToken)
+    {
+        if (migrationService is null)
+        {
+            return ActionAttemptResult.Terminal(
+                session.BlockUnsupportedOperation(OperationKind.Migration));
+        }
+
+        var execution = session.CreateExecution(
+            action,
+            step,
+            OperationKind.Migration);
+        var targetDirectory = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : ResolveOperationPath(action.TargetPath, execution.WorkingDirectory);
+        execution.TargetPath = targetDirectory;
+        execution.Run = BuildMigrationRunLabel(action);
+        execution.OriginalCommand = action.Command;
+        execution.MigrationAction = action.MigrationAction;
+        execution.MigrationFramework = action.MigrationFramework;
+        execution.MigrationName = action.MigrationName;
+        execution.MigrationContext = action.MigrationContext;
+        execution.MigrationDryRun = action.MigrationDryRun;
+        session.Commands.Add(execution);
+
+        if (action.MigrationAction is null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = "migrationAction is required (Create, Apply or List).";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        if (action.MigrationAction == MigrationAction.Create &&
+            !MigrationNaming.IsValidName(action.MigrationName) &&
+            !string.IsNullOrWhiteSpace(action.MigrationName))
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error =
+                "Migration names must start with a letter or underscore and contain only letters, digits and underscores.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        if (!MigrationNaming.IsValidContext(action.MigrationContext))
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = "Migration context contains invalid characters.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        var classification = ClassifyMigration(action);
+        var decision = await operationPolicyEngine.EvaluateAsync(
+            new OperationPolicyRequest(
+                session.Request.ConversationId,
+                execution.StepId,
+                OperationKind.Migration,
+                session.Request.Prompt,
+                ResolvedCommand: null,
+                targetDirectory,
+                classification),
+            cancellationToken);
+        ApplyOperationClassification(execution, classification, decision);
+
+        if (decision.Decision == CommandSafetyDecisionType.Block)
+        {
+            return ActionAttemptResult.Terminal(
+                session.BlockUnsafeCommand(execution));
+        }
+
+        if (decision.Decision == CommandSafetyDecisionType.AskApproval)
+        {
+            if (!IsMigrationApprovedByUser(session, action, targetDirectory))
+            {
+                execution.Notes = AppendApprovalNote(
+                    execution.Notes,
+                    "Migrations exigem aprovacao manual e unica; auto-aprovacao, allowlist e escopos por conversa/workspace/categoria nao se aplicam.");
+                return ActionAttemptResult.Terminal(
+                    session.RequestCommandApproval(execution));
+            }
+
+            execution.ApprovedByUser = true;
+            execution.Notes = AppendApprovalNote(
+                execution.Notes,
+                "Aprovado manualmente pela interface (escopo unico).");
+        }
+
+        var framework = action.MigrationFramework is null or MigrationFramework.Unknown
+            ? await migrationService.DetectFrameworkAsync(
+                targetDirectory,
+                cancellationToken)
+            : action.MigrationFramework.Value;
+        execution.MigrationFramework = framework;
+
+        if (framework == MigrationFramework.Unknown)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error =
+                "Nenhum framework de migrations reconhecido no diretorio alvo.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        session.EmitActionStarted(execution);
+        try
+        {
+            MigrationResult result;
+            string observation;
+
+            if (action.MigrationAction == MigrationAction.List)
+            {
+                var pending = await migrationService.GetPendingMigrationsAsync(
+                    targetDirectory,
+                    framework,
+                    cancellationToken);
+                var output = pending.Count == 0
+                    ? "Nenhuma migration pendente encontrada."
+                    : string.Join(
+                        Environment.NewLine,
+                        pending.Select(item =>
+                            $"- {item.MigrationId} {item.Name} " +
+                            (item.IsApplied ? "(applied)" : "(pending)")));
+                result = new MigrationResult(
+                    true,
+                    null,
+                    null,
+                    null,
+                    output,
+                    null);
+                observation =
+                    $"Migrations ({framework}) em {targetDirectory}:{Environment.NewLine}{output}";
+            }
+            else if (action.MigrationAction == MigrationAction.Create)
+            {
+                result = await migrationService.CreateMigrationAsync(
+                    new MigrationRequest(
+                        targetDirectory,
+                        framework,
+                        action.MigrationName,
+                        action.MigrationContext,
+                        action.MigrationDryRun),
+                    cancellationToken);
+                observation = result.Success
+                    ? $"Migration criada: {result.MigrationName}." +
+                      (string.IsNullOrWhiteSpace(result.Output)
+                          ? string.Empty
+                          : $"{Environment.NewLine}{result.Output}")
+                    : $"Falha ao criar migration: {result.Error}";
+            }
+            else
+            {
+                result = await migrationService.ApplyMigrationsAsync(
+                    targetDirectory,
+                    framework,
+                    cancellationToken);
+                observation = result.Success
+                    ? $"Migrations aplicadas ({framework})." +
+                      (string.IsNullOrWhiteSpace(result.Output)
+                          ? string.Empty
+                          : $"{Environment.NewLine}{result.Output}")
+                    : $"Falha ao aplicar migrations: {result.Error}";
+            }
+
+            execution.Executed = result.Success;
+            execution.ExitCode = result.Success ? 0 : -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardOutput = result.Output ?? string.Empty;
+            execution.Output = execution.StandardOutput;
+            execution.StandardError = result.Error ?? string.Empty;
+            execution.Error = result.Error;
+            execution.Notes = result.Success
+                ? observation
+                : $"{observation} | {result.Error}";
+
+            var evidence = evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.Migration,
+                    Command: execution.Run,
+                    FilePath: result.MigrationFilePath ?? targetDirectory,
+                    Executed: true,
+                    ExitCode: execution.ExitCode,
+                    StdOut: execution.StandardOutput,
+                    StdErr: result.Error,
+                    Success: result.Success));
+            session.RecordEvidence(evidence);
+
+            if (result.Success &&
+                !string.IsNullOrWhiteSpace(result.MigrationFilePath))
+            {
+                session.RecordArtifact(
+                    result.MigrationFilePath,
+                    evidence.ContentHash ?? string.Empty,
+                    classification);
+            }
+
+            session.EmitActionCompleted(execution);
+            session.EmitToolObservation(
+                execution,
+                observation,
+                execution.StandardOutput);
+            session.RecordObservation(execution.Run, observation);
+
+            if (!result.Success)
+            {
+                return ActionAttemptResult.Retry(execution.Notes);
+            }
+
+            return ActionAttemptResult.Completed(observation);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardError = ex.Message;
+            execution.Error = ex.Message;
+            execution.Notes = $"Falha na migration: {ex.Message}";
+            session.RecordEvidence(evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.Migration,
+                    FilePath: targetDirectory,
+                    Executed: true,
+                    ExitCode: -1,
+                    StdErr: ex.Message,
+                    Success: false)));
+            session.EmitActionCompleted(execution);
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+    }
+
+    private static bool IsMigrationApprovedByUser(
+        AgentActionSession session,
+        AgentToolAction action,
+        string targetDirectory)
+    {
+        var approved = session.Request.ApprovedAction;
+        if (approved is null ||
+            approved.OperationKind != OperationKind.Migration ||
+            approved.MigrationAction != action.MigrationAction)
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                approved.MigrationName ?? string.Empty,
+                action.MigrationName ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(approved.TargetPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(approved.TargetPath),
+                Path.GetFullPath(targetDirectory),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static CommandClassification ClassifyMigration(
+        AgentToolAction action)
+    {
+        if (action.MigrationAction is null)
+        {
+            return new CommandClassification(
+                "migration",
+                CommandIntent.Blocked,
+                0.99,
+                "MigrationSafetyClassifier",
+                ["migrationAction ausente."]);
+        }
+
+        if (action.MigrationAction == MigrationAction.List)
+        {
+            return new CommandClassification(
+                "migration list",
+                CommandIntent.SafeReadOnly,
+                0.99,
+                "MigrationSafetyClassifier",
+                ["Listar migrations e somente leitura."]);
+        }
+
+        return new CommandClassification(
+            action.MigrationAction == MigrationAction.Create
+                ? "migration create"
+                : "migration apply",
+            CommandIntent.NeedsApproval,
+            0.99,
+            "MigrationSafetyClassifier",
+            ["Criar ou aplicar migrations altera o banco e exige aprovacao manual."]);
+    }
+
+    private static string BuildMigrationRunLabel(AgentToolAction action)
+    {
+        var verb = action.MigrationAction?.ToString().ToLowerInvariant() ?? "unknown";
+        return string.IsNullOrWhiteSpace(action.MigrationName)
+            ? $"migration {verb}"
+            : $"migration {verb} {action.MigrationName}";
     }
 
     private static string BuildPatchSummary(
@@ -4606,13 +4996,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
             {{userPreferencesSection}}
             {{errorContextSection}}
             {{dryRunSection}}
-            Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
+            Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch, Migration.
             For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
             For FileWrite (text/markdown/json): provide content, targetPath with actual .txt/.md/.json path.
             For FileRead: provide targetPath with the exact absolute path of the requested file, based on the workspace context or working directory (command is optional). Never invent a path or use a placeholder.
             For TerminalCommand/ScriptExecution: provide the command.
             For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
             For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Every plannedFiles[].content must be the COMPLETE file, including closing tags and braces. Never emit partial or truncated content. If a file is too large for one response, split it into multiple PlannedPatch steps instead of shortening it. Before returning, check that every HTML file has </html> and every CSS/JS file has balanced braces. Prefer PlannedPatch over many separate FileWrite steps.
+            For Migration (database schema changes): provide migrationAction (Create, Apply or List), migrationFramework when known (EfCore or NodeJs), migrationName for Create (letters, digits and underscores only) and migrationContext for EF Core when the project has multiple contexts. Creating or applying a migration ALWAYS requires explicit manual approval; the user may not auto-approve it. Listing migrations is read-only and can run without approval. Use targetPath as the project directory and never put shell metacharacters in migrationName or migrationContext.
             For large projects, first create a PROJECT_SPEC.md file (FileWrite) with requirements and architecture BEFORE writing code files.
             For large tasks, decompose them into subtasks in the plan and mark milestone steps as checkpoints (isCheckpoint: true), for example right after scaffolding, after tests build, and after verification succeeds. Each checkpoint must have a deterministic way to confirm it (build, test or file listing).
             Before implementing a large change (new module, architecture decision, major refactor), provide an architectureComparison: an array of at least 2 options (name, pros, cons, recommendation, risk) comparing the viable approaches. Emit it in the same decision that starts the change, before the first implementation action, so the user can review the trade-offs. For small or localized changes, omit it.
@@ -4755,12 +5146,17 @@ public sealed class AgentActionRunner : IAgentActionRunner
               "completionMessage": "",
               "action": {
                 "objective": "what this step does",
-                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch",
+                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch|Migration",
                 "command": "the shell command",
                 "content": "file content for FileWrite/ScriptContent",
                 "targetPath": "path for file operations (use \\\\)",
                 "templateId": "template id for ProjectScaffold",
                 "plannedFiles": "[{path, content}] for PlannedPatch (paths relative to targetPath)",
+                "migrationAction": "Create|Apply|List for Migration",
+                "migrationFramework": "EfCore|NodeJs for Migration",
+                "migrationName": "migration name for Create (letters, digits, underscores)",
+                "migrationContext": "EF Core context name when needed",
+                "migrationDryRun": false,
                 "language": "python|csharp|text",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4930,8 +5326,32 @@ public sealed class AgentActionRunner : IAgentActionRunner
         decision.Action.WorkingDirectory = NormalizePathSeparators(
             decision.Action.WorkingDirectory ?? string.Empty);
         decision.Action.Language = decision.Action.Language?.Trim();
+        decision.Action.MigrationName = decision.Action.MigrationName?.Trim();
+        decision.Action.MigrationContext = decision.Action.MigrationContext?.Trim();
         ValidatePathArgument(decision.Action.TargetPath, "targetPath");
         ValidatePathArgument(decision.Action.WorkingDirectory, "workingDirectory");
+
+        if (decision.Action.OperationKind == OperationKind.Migration)
+        {
+            if (decision.Action.MigrationAction is null)
+            {
+                throw new ArgumentException(
+                    "The ReAct decision requires migrationAction for Migration.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(decision.Action.MigrationName) &&
+                !MigrationNaming.IsValidName(decision.Action.MigrationName))
+            {
+                throw new ArgumentException(
+                    "The ReAct decision contains an invalid migrationName.");
+            }
+
+            if (!MigrationNaming.IsValidContext(decision.Action.MigrationContext))
+            {
+                throw new ArgumentException(
+                    "The ReAct decision contains an invalid migrationContext.");
+            }
+        }
 
         if (decision.Action.PlannedFiles is { Count: > 0 } plannedFiles)
         {
@@ -5010,6 +5430,11 @@ public sealed class AgentActionRunner : IAgentActionRunner
         {
             return !string.IsNullOrWhiteSpace(action.TargetPath) ||
                    !string.IsNullOrWhiteSpace(action.Command);
+        }
+
+        if (action.OperationKind == OperationKind.Migration)
+        {
+            return action.MigrationAction is not null;
         }
 
         return !string.IsNullOrWhiteSpace(action.Command) ||

@@ -14,6 +14,29 @@ public sealed class MigrationService(
             return new MigrationResult(false, null, null, null, null, "Working directory does not exist.");
         }
 
+        if (!string.IsNullOrWhiteSpace(request.MigrationName) &&
+            !MigrationNaming.IsValidName(request.MigrationName))
+        {
+            return new MigrationResult(
+                false,
+                null,
+                null,
+                null,
+                null,
+                "Migration name must start with a letter or underscore and contain only letters, digits and underscores.");
+        }
+
+        if (!MigrationNaming.IsValidContext(request.ContextName))
+        {
+            return new MigrationResult(
+                false,
+                null,
+                null,
+                null,
+                null,
+                "Migration context must start with a letter or underscore and contain only letters, digits, underscores and dots.");
+        }
+
         return request.Framework switch
         {
             MigrationFramework.EfCore => await CreateEfCoreMigrationAsync(request, cancellationToken),
@@ -109,34 +132,33 @@ public sealed class MigrationService(
     {
         var migrationName = request.MigrationName ?? $"Migration_{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
         var contextArg = string.IsNullOrWhiteSpace(request.ContextName) ? "" : $"--context {request.ContextName}";
-        var dryRunArg = request.DryRun ? "--dry-run" : "";
+        var cmd = $"dotnet ef migrations add {migrationName} {contextArg} --no-build".Trim();
 
-        var cmd = $"dotnet ef migrations add {migrationName} {contextArg} {dryRunArg} --no-build";
+        if (request.DryRun)
+        {
+            return new MigrationResult(true, null, migrationName, null, cmd, null);
+        }
 
         var result = await RunWithTimeoutAsync(cmd, request.WorkingDirectory, 120, cancellationToken);
 
-        if (!result.Success && !request.DryRun)
+        if (!result.Success)
         {
             return new MigrationResult(false, null, null, null, result.StandardOutput, result.StandardError ?? result.StandardOutput);
         }
 
-        // Find the created migration file
         string? migrationFile = null;
-        if (!request.DryRun)
+        var migrationsDir = FindMigrationsDirectory(request.WorkingDirectory);
+        if (Directory.Exists(migrationsDir))
         {
-            var migrationsDir = FindMigrationsDirectory(request.WorkingDirectory);
-            if (Directory.Exists(migrationsDir))
-            {
-                var files = Directory.GetFiles(migrationsDir, $"*{migrationName}.cs", SearchOption.AllDirectories);
-                migrationFile = files.FirstOrDefault();
-            }
+            var files = Directory.GetFiles(migrationsDir, $"*{migrationName}.cs", SearchOption.AllDirectories);
+            migrationFile = files.FirstOrDefault();
         }
 
         return new MigrationResult(
-            result.Success || request.DryRun,
+            result.Success,
             migrationFile,
             migrationName,
-            request.DryRun ? result.StandardOutput : null,
+            null,
             result.StandardOutput,
             result.Success ? null : result.StandardError);
     }
@@ -174,6 +196,11 @@ public sealed class MigrationService(
         else
         {
             return new MigrationResult(false, null, null, null, null, "Nenhuma ferramenta de migracao Node.js detectada (knex, typeorm, prisma, sequelize)");
+        }
+
+        if (request.DryRun)
+        {
+            return new MigrationResult(true, null, request.MigrationName, null, cmd, null);
         }
 
         var result = await RunWithTimeoutAsync(cmd, request.WorkingDirectory, 120, cancellationToken);

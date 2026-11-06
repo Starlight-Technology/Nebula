@@ -217,6 +217,14 @@ Runs retomados também apontam para o run original.
 Caminhos de ação são normalizados e validados antes de executar ou gravar: caracteres
 de controle, caminhos relativos inválidos e separadores que escapam da raiz são
 rejeitados.
+## Migrations de banco
+
+O agente pode listar, criar e aplicar migrations de banco via `OperationKind.Migration`.
+Listar migrations é somente leitura. Criar ou aplicar sempre exige aprovação manual
+com escopo único; auto-aprovação, allowlist, escopo por conversa/workspace e categoria
+não se aplicam. O `MigrationService` suporta EF Core (`dotnet ef`) e Node.js
+(`knex`, `typeorm`, `prisma`, `sequelize`), valida nomes/contextos e, em modo
+`DryRun`, retorna o comando planejado sem executar.
 
 ## Pesquisa e aprendizado gratuito
 

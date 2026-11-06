@@ -1,4 +1,5 @@
 using Nebula.Agent.Domain;
+using Nebula.Core.Agent;
 using Nebula.Core.Learning; // for ErrorFix
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
@@ -120,6 +121,16 @@ public sealed class AgentToolAction
     public string? TemplateId { get; set; }
 
     public IReadOnlyList<PlannedPatchFile>? PlannedFiles { get; set; }
+
+    public MigrationAction? MigrationAction { get; set; }
+
+    public MigrationFramework? MigrationFramework { get; set; }
+
+    public string? MigrationName { get; set; }
+
+    public string? MigrationContext { get; set; }
+
+    public bool MigrationDryRun { get; set; }
 
     public string? Language { get; set; }
 

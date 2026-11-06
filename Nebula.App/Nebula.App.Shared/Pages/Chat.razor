@@ -5,6 +5,7 @@
 @inject IJSRuntime JSRuntime
 @using Nebula.Agent.Data
 @using Nebula.Core.Interactions
+@using Nebula.Core.Operations
 @using Nebula.Core.Safety
 @using Nebula.App.Shared.Components
 
@@ -340,6 +341,7 @@ Skipped="@command.Skipped"
                                                                       CanApprove="@WorkspaceState.CanApproveCommand(command)"
                                                                       SelectedScope="@WorkspaceState.SelectedApprovalScope"
                                                                       SelectedScopeChanged="@((scope) => WorkspaceState.SelectedApprovalScope = scope)"
+                                                                      ShowScopeSelector="@(command.OperationKind != OperationKind.Migration)"
                                                                       OnApprove="@((editedCmd) => WorkspaceState.ApproveCommandAsync(command))"
                                                                       OnEdit="@((editedCmd) => WorkspaceState.HandleEditedCommandInput(command.Id, editedCmd))"
                                                                       OnCancelEdit="@(() => WorkspaceState.CancelEditingCommand(command.Id))"

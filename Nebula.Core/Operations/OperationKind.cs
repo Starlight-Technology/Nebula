@@ -14,6 +14,7 @@ public enum OperationKind
     Learning,
     ProjectScaffold,
     PlannedPatch,
+    Migration,
     Unknown
 }
 

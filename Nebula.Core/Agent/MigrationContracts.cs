@@ -1,4 +1,23 @@
+using System.Text.RegularExpressions;
+
 namespace Nebula.Core.Agent;
+
+public static class MigrationNaming
+{
+    private static readonly Regex NamePattern = new(
+        "^[A-Za-z_][A-Za-z0-9_]*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ContextPattern = new(
+        "^[A-Za-z_][A-Za-z0-9_.]*$",
+        RegexOptions.Compiled);
+
+    public static bool IsValidName(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && NamePattern.IsMatch(value);
+
+    public static bool IsValidContext(string? value) =>
+        string.IsNullOrWhiteSpace(value) || ContextPattern.IsMatch(value);
+}
 
 public sealed record MigrationRequest(
     string WorkingDirectory,
@@ -22,6 +41,13 @@ public enum MigrationFramework
     NodeJs,
     Python,
     Go
+}
+
+public enum MigrationAction
+{
+    Create,
+    Apply,
+    List
 }
 
 public sealed record PendingMigrationInfo(

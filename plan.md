@@ -106,7 +106,7 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 - [~] Adicionar execucao de smoke tests de apps web locais: `SmokeTestService` registrado, sem chamadores/testes.
 - [~] Integrar screenshots automaticos para UI depois de mudancas frontend: `ScreenshotService` tem captura/viewports/baselines/diff, mas nao e acionado automaticamente.
 - [~] Detectar portas ocupadas e escolher alternativas automaticamente: `PortDetectionService` existe, sem chamadores/testes.
-- [~] Adicionar geracao de migrations com aprovacao explicita: `MigrationService` cria/aplica/lista migrations EF/Node e tem `DryRun`, mas nao tem gate de aprovacao nem chamador.
+- [x] Adicionar geracao de migrations com aprovacao explicita: `OperationKind.Migration` + `migrationAction`/`migrationFramework`/`migrationName`/`migrationContext` no planner; `AgentActionRunner.ExecuteMigrationAsync` lista sem aprovacao, mas `Create`/`Apply` exigem `AgentApprovedAction` manual com escopo `Once` (auto-aprovacao, allowlist, conversa e categoria sao ignorados); `MigrationService` valida nomes/contextos, suporta EF/Node e `DryRun` retorna o comando planejado sem executar.
 - [x] Criar "project doctor" para diagnosticar ambiente, SDKs, Docker, banco, Ollama e dependencias.
 
 ## Fase 9 - Capacidades multimodais e artefatos

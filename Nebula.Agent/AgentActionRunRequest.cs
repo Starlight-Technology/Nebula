@@ -1,3 +1,4 @@
+using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
@@ -108,6 +109,16 @@ public sealed class AgentApprovedAction
     /// Template id of the proposed scaffold (ProjectScaffold).
     /// </summary>
     public string? TemplateId { get; set; }
+
+    public MigrationAction? MigrationAction { get; set; }
+
+    public MigrationFramework? MigrationFramework { get; set; }
+
+    public string? MigrationName { get; set; }
+
+    public string? MigrationContext { get; set; }
+
+    public bool MigrationDryRun { get; set; }
 
     public string? WorkingDirectory { get; set; }
 

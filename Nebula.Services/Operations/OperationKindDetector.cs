@@ -30,6 +30,12 @@ public sealed class OperationKindDetector : IOperationKindDetector
             return OperationKind.Research;
         }
 
+        if (MigrationRegex.IsMatch(original) ||
+            MigrationRegex.IsMatch(command))
+        {
+            return OperationKind.Migration;
+        }
+
         if (ProjectScaffoldRegex.IsMatch(original) ||
             ProjectScaffoldRegex.IsMatch(command))
         {
@@ -92,6 +98,10 @@ public sealed class OperationKindDetector : IOperationKindDetector
 
     private static readonly Regex ResearchRegex = new(
         @"\b(?:pesquise|pesquisar|investigue|research|search)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex MigrationRegex = new(
+        @"\b(?:create|add|apply|run|list|generate|drop|criar|adicionar|aplicar|executar|listar|gerar|remover)\b.{0,30}\bmigrations?\b|\bmigrations?\b.{0,30}\b(?:create|add|apply|run|list|generate|drop|criar|adicionar|aplicar|executar|listar|gerar|remover)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex ProjectScaffoldRegex = new(

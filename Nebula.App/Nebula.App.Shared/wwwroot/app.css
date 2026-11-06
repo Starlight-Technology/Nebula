@@ -1973,6 +1973,17 @@ pre {
     min-width: 180px;
 }
 
+.nebula-approval-scope-note {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.2rem;
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    border: 1px dashed var(--nebula-border-strong);
+    color: #ffe8c7;
+    font-size: 0.82rem;
+}
+
 /* StepCard */
 .nebula-step-card {
     border: 1px solid var(--nebula-border);

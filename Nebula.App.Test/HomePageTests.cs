@@ -897,6 +897,24 @@ private static void AssertReasoningBeforeResponse(
             => Task.FromResult<CommandVerification?>(null);
     }
 
+    [Fact]
+    public void can_approve_command_must_allow_pending_migration()
+    {
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+        var state = Services.GetRequiredService<NebulaWorkspaceState>();
+
+        var command = new CommandExecution
+        {
+            OperationKind = OperationKind.Migration,
+            MigrationAction = MigrationAction.Create,
+            MigrationName = "AddUsers",
+            Run = "migration create AddUsers",
+            SafetyDecision = CommandSafetyDecisionType.AskApproval
+        };
+
+        Assert.True(state.CanApproveCommand(command));
+    }
+
     private sealed class FakeManager : IManager
     {
         public Guid ActiveConversationId { get; private set; } = Guid.NewGuid();

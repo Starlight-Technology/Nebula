@@ -789,7 +789,14 @@ public sealed class NebulaWorkspaceState(
                 WorkingDirectory = command.WorkingDirectory,
                 TargetPath = command.TargetPath,
                 PlannedFiles = command.PlannedFiles,
-                Content = command.Content
+                Content = command.Content,
+                Language = command.Language,
+                TemplateId = command.TemplateId,
+                MigrationAction = command.MigrationAction,
+                MigrationFramework = command.MigrationFramework,
+                MigrationName = command.MigrationName,
+                MigrationContext = command.MigrationContext,
+                MigrationDryRun = command.MigrationDryRun
             };
 
         var turn = new ConversationEntryViewModel
@@ -811,7 +818,9 @@ public sealed class NebulaWorkspaceState(
         var turnCancellationSource = new CancellationTokenSource();
         activeTurnCancellationSource = turnCancellationSource;
 
-        var scope = SelectedApprovalScope;
+        var scope = command.OperationKind == OperationKind.Migration
+            ? ApprovalScope.Once
+            : SelectedApprovalScope;
         _ = CompleteApprovedCommandTurnAsync(
             turn,
             commandToRun,
@@ -1884,7 +1893,8 @@ public sealed class NebulaWorkspaceState(
                    OperationKind.FileWrite or
                    OperationKind.ScriptContent or
                    OperationKind.PlannedPatch or
-                   OperationKind.ProjectScaffold) &&
+                   OperationKind.ProjectScaffold or
+                   OperationKind.Migration) &&
                !string.IsNullOrWhiteSpace(command.Run);
     }
 

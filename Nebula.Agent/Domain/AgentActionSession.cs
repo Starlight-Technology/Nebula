@@ -239,6 +239,11 @@ internal sealed class AgentActionSession
             OriginalCommand = action.Command,
             WorkingDirectory = step.WorkingDirectory,
             TargetPath = action.TargetPath,
+            MigrationAction = action.MigrationAction,
+            MigrationFramework = action.MigrationFramework,
+            MigrationName = action.MigrationName,
+            MigrationContext = action.MigrationContext,
+            MigrationDryRun = action.MigrationDryRun,
             Required = true
         };
     }
@@ -1022,6 +1027,11 @@ internal sealed class AgentActionSession
             Content = execution.Content,
             Language = execution.Language,
             TemplateId = execution.TemplateId,
+            MigrationAction = execution.MigrationAction,
+            MigrationFramework = execution.MigrationFramework,
+            MigrationName = execution.MigrationName,
+            MigrationContext = execution.MigrationContext,
+            MigrationDryRun = execution.MigrationDryRun,
             ContentHash = execution.ContentHash,
             ClassificationSource = execution.ClassificationSource,
             ClassificationConfidence = execution.ClassificationConfidence,

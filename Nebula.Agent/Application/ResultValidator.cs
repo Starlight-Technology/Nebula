@@ -113,12 +113,16 @@ public sealed class ResultValidator(
               "reason": "Brief explanation in English",
               "correctedAction": {
                 "objective": "what the corrected step does",
-                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch",
+                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch|Migration",
                 "command": "the shell command (for TerminalCommand/ScriptExecution)",
                 "content": "file content (for FileWrite/ScriptContent)",
                 "targetPath": "path for file operations",
                 "templateId": "template id (for ProjectScaffold)",
                 "plannedFiles": [{"path": "relative/path", "content": "file content"}] (for PlannedPatch),
+                "migrationAction": "Create|Apply|List (for Migration)",
+                "migrationFramework": "EfCore|NodeJs (for Migration)",
+                "migrationName": "migration name for Create",
+                "migrationContext": "EF Core context name when needed",
                 "language": "python|csharp|text",
                 "workingDirectory": "",
                 "retryJustification": "why this correction addresses the mismatch",
@@ -143,6 +147,7 @@ public sealed class ResultValidator(
             OperationKind.FileRead => $"FileRead: {action.TargetPath}",
             OperationKind.ProjectScaffold => $"ProjectScaffold: {action.TemplateId} at {action.TargetPath}",
             OperationKind.PlannedPatch => $"PlannedPatch: {action.PlannedFiles?.Count ?? 0} files at {action.TargetPath}",
+            OperationKind.Migration => $"Migration: {action.MigrationAction} {action.MigrationName} ({action.MigrationFramework}) at {action.TargetPath}",
             _ => $"Unknown: {action.Command}"
         };
     }

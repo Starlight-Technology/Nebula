@@ -2810,6 +2810,177 @@ public sealed class AgentActionRunnerTest
     }
 
     [Fact]
+    public async Task run_async_must_request_manual_approval_for_migration_create()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migration = new Mock<IMigrationService>();
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the AddUsers migration.",
+                "Create AddUsers migration",
+                OperationKind.Migration,
+                targetPath: workspace.Path,
+                migrationAction: MigrationAction.Create,
+                migrationFramework: MigrationFramework.EfCore,
+                migrationName: "AddUsers")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the AddUsers migration.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.Equal(MigrationAction.Create, command.MigrationAction);
+        Assert.Equal("AddUsers", command.MigrationName);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, command.SafetyDecision);
+        Assert.False(command.Executed);
+        Assert.False(command.ApprovedByUser);
+        migration.Verify(
+            service => service.CreateMigrationAsync(
+                It.IsAny<MigrationRequest>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_async_must_list_migrations_without_approval()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migration = new Mock<IMigrationService>();
+        migration
+            .Setup(service => service.GetPendingMigrationsAsync(
+                It.IsAny<string>(),
+                MigrationFramework.EfCore,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new PendingMigrationInfo(
+                    "20260101000000_AddUsers",
+                    "AddUsers",
+                    string.Empty,
+                    false)
+            ]);
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to list pending migrations.",
+                "List pending migrations",
+                OperationKind.Migration,
+                targetPath: workspace.Path,
+                migrationAction: MigrationAction.List,
+                migrationFramework: MigrationFramework.EfCore),
+            CompleteDecision(
+                "The pending migrations were listed.",
+                "Migration list obtained.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("List pending migrations.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.True(command.Executed);
+        Assert.False(command.ApprovedByUser);
+        migration.Verify(
+            service => service.GetPendingMigrationsAsync(
+                workspace.Path,
+                MigrationFramework.EfCore,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_replay_approved_migration_without_llm_decision()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migrationFile = Path.Combine(
+            workspace.Path,
+            "Migrations",
+            "20260101000000_AddUsers.cs");
+        var migration = new Mock<IMigrationService>();
+        migration
+            .Setup(service => service.CreateMigrationAsync(
+                It.IsAny<MigrationRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MigrationResult(
+                true,
+                migrationFile,
+                "AddUsers",
+                null,
+                "Migration created.",
+                null));
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(
+            llamaClientMock,
+            new Queue<string>(
+            [
+                CompleteDecision(
+                    "The migration was created.",
+                    "Migration AddUsers created and verified.")
+            ]));
+
+        var request = CreateRequest(
+            "Create the AddUsers migration.",
+            workspace.Path);
+        request.ApprovedAction = new AgentApprovedAction
+        {
+            Objective = "Create AddUsers migration",
+            Command = "migration create AddUsers",
+            OperationKind = OperationKind.Migration,
+            TargetPath = workspace.Path,
+            MigrationAction = MigrationAction.Create,
+            MigrationFramework = MigrationFramework.EfCore,
+            MigrationName = "AddUsers",
+            Scope = ApprovalScope.Once
+        };
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.True(command.Executed);
+        Assert.True(command.ApprovedByUser);
+        Assert.Equal("AddUsers", command.MigrationName);
+        migration.Verify(
+            service => service.CreateMigrationAsync(
+                It.Is<MigrationRequest>(migrationRequest =>
+                    migrationRequest.Framework == MigrationFramework.EfCore &&
+                    migrationRequest.MigrationName == "AddUsers" &&
+                    migrationRequest.WorkingDirectory == workspace.Path),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task run_async_dry_run_must_preview_without_executing_or_writing()
     {
         using var workspace = new TempTestWorkspace();
@@ -3964,6 +4135,7 @@ public async Task file_write_must_request_approval_when_target_was_modified_afte
         IOperationPolicyEngine? operationPolicyEngine = null,
         IGitDiffService? gitDiffService = null,
         ICommandSandbox? commandSandbox = null,
+        IMigrationService? migrationService = null,
         ICommandAllowlistService? commandAllowlistService = null,
         IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
         IResultValidator? resultValidator = null,
@@ -3989,6 +4161,7 @@ public async Task file_write_must_request_approval_when_target_was_modified_afte
             operationPolicyEngine: operationPolicyEngine ?? (useTestPolicyEngines ? CreateTestOperationPolicyEngine() : CreateRealOperationPolicyEngine()),
             gitDiffService: gitDiffService,
             commandSandbox: commandSandbox,
+            migrationService: migrationService,
             commandAllowlistService: commandAllowlistService,
             workspaceCategoryPolicyService: workspaceCategoryPolicyService,
             resultValidator: resultValidator,
@@ -4206,7 +4379,11 @@ public async Task file_write_must_request_approval_when_target_was_modified_afte
         string? language = null,
         string? templateId = null,
         IReadOnlyList<PlannedPatchFile>? plannedFiles = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        MigrationAction? migrationAction = null,
+        MigrationFramework? migrationFramework = null,
+        string? migrationName = null,
+        string? migrationContext = null)
     {
         return JsonSerializer.Serialize(new AgentActionDecision
         {
@@ -4221,6 +4398,10 @@ public async Task file_write_must_request_approval_when_target_was_modified_afte
                 TemplateId = templateId,
                 PlannedFiles = plannedFiles,
                 Language = language,
+                MigrationAction = migrationAction,
+                MigrationFramework = migrationFramework,
+                MigrationName = migrationName,
+                MigrationContext = migrationContext,
                 WorkingDirectory = workingDirectory,
                 RequiresSafetyReview = true
             }
