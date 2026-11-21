@@ -15,10 +15,14 @@ public sealed class PolicySimulator(
     IOperationPolicyEngine operationPolicyEngine,
     ICommandApprovalService? approvalService = null,
     IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
+    NebulaRuntimeSettings? runtimeSettings = null,
     ILogger? logger = null) : IPolicySimulator
 {
     private readonly ICommandApprovalService approvalService =
         approvalService ?? new CommandApprovalService();
+
+    private readonly NebulaRuntimeSettings runtimeSettings =
+        runtimeSettings ?? new NebulaRuntimeSettings();
 
     public async Task<PolicySimulationResult> SimulateAsync(
         string text,
@@ -41,7 +45,7 @@ public sealed class PolicySimulator(
                 WorkingDirectory = workingDirectoryResolved
             };
             var operationKind = operationKindDetector.Detect(step);
-            if (operationKind != OperationKind.TerminalCommand)
+            if (operationKind is not (OperationKind.TerminalCommand or OperationKind.Unknown))
             {
                 return new PolicySimulationResult(
                     text,
@@ -63,10 +67,15 @@ public sealed class PolicySimulator(
                     null);
             }
 
+            operationKind = OperationKind.TerminalCommand;
+            var effectiveRawCommand = string.IsNullOrWhiteSpace(rawCommand)
+                ? text
+                : rawCommand;
+
             var environment = environmentDetector.Detect(workingDirectoryResolved);
             var commandRequest = intentParser.Parse(
                 text,
-                rawCommand,
+                effectiveRawCommand,
                 workingDirectoryResolved);
             var resolvedCommand = resolver.Resolve(commandRequest, environment);
             var commandText = resolvedCommand.DisplayCommand;
@@ -113,8 +122,8 @@ public sealed class PolicySimulator(
                     new ApprovalOverrideInput(
                         HasUserApprovedAction: false,
                         IsApprovedForConversation: false,
-                        AutoApproveEnabled: false,
-                        AutoApproveCategories: [],
+                        AutoApproveEnabled: runtimeSettings.EffectiveAutoApproveCommands,
+                        AutoApproveCategories: runtimeSettings.EffectiveAutoApproveCategories,
                         WorkspaceAutoApproveCategories: workspaceCategories
                             .Select(entry => entry.Value)
                             .ToList()));

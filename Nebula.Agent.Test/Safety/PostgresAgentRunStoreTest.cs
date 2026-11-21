@@ -103,7 +103,8 @@ public sealed class PostgresAgentRunStoreTest
                     "hello.py",
                     "C:\\work\\hello.py",
                     "abc123",
-                    DateTimeOffset.UtcNow)
+                    DateTimeOffset.UtcNow,
+                    0.0)
             ],
             Approvals =
             [
@@ -138,6 +139,37 @@ public sealed class PostgresAgentRunStoreTest
     }
 
     [Fact]
+    public async Task save_and_get_run_must_round_trip_parent_run_id()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var parentRunId = Guid.NewGuid();
+        var run = CreateRun() with { ParentRunId = parentRunId };
+
+        await store.SaveRunAsync(run);
+        var loaded = await store.GetRunAsync(run.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(parentRunId, loaded.ParentRunId);
+    }
+
+    [Fact]
+    public async Task get_run_id_by_step_must_resolve_owner_run()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var run = CreateRun();
+
+        await store.SaveRunAsync(run);
+
+        var ownerRunId = await store.GetRunIdByStepIdAsync(run.Steps[0].Id);
+        var unknownRunId = await store.GetRunIdByStepIdAsync(Guid.NewGuid());
+
+        Assert.Equal(run.Id, ownerRunId);
+        Assert.Null(unknownRunId);
+    }
+
+    [Fact]
     public async Task get_unfinished_runs_must_return_only_incomplete_runs_of_conversation()
     {
         var context = CreateContext();
@@ -168,6 +200,42 @@ public sealed class PostgresAgentRunStoreTest
         var run = Assert.Single(unfinished);
         Assert.Equal(inProgress.Id, run.Id);
         Assert.Null(run.FinishedAt);
+    }
+
+    [Fact]
+    public async Task get_interrupted_runs_must_return_only_unfinished_active_runs()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var running = CreateRun(status: "Running", minutesAgo: 10) with
+        {
+            FinishedAt = null
+        };
+        var observing = CreateRun(status: "Observing", minutesAgo: 8) with
+        {
+            FinishedAt = null
+        };
+        var completed = CreateRun(status: "Completed", minutesAgo: 5);
+        var awaitingApproval = CreateRun(status: "AwaitingApproval", minutesAgo: 4) with
+        {
+            FinishedAt = null
+        };
+        var failed = CreateRun(status: "Failed", minutesAgo: 3) with
+        {
+            FinishedAt = null
+        };
+
+        await store.SaveRunAsync(running);
+        await store.SaveRunAsync(observing);
+        await store.SaveRunAsync(completed);
+        await store.SaveRunAsync(awaitingApproval);
+        await store.SaveRunAsync(failed);
+
+        var runs = await store.GetInterruptedRunsAsync();
+
+        Assert.Equal(2, runs.Count);
+        Assert.Contains(runs, run => run.Id == running.Id);
+        Assert.Contains(runs, run => run.Id == observing.Id);
     }
 
     [Fact]

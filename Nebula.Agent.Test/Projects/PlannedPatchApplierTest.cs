@@ -36,6 +36,92 @@ public sealed class PlannedPatchApplierTest
     }
 
     [Fact]
+    public async Task apply_async_must_normalize_windows_style_relative_paths()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile(@"src\calc.js", "console.log('ok');")],
+                workspace.Path));
+
+        Assert.True(result.Success);
+        Assert.Contains("src/calc.js", result.AppliedFiles);
+        Assert.Equal(
+            "console.log('ok');",
+            File.ReadAllText(Path.Combine(workspace.Path, "src", "calc.js")));
+    }
+
+    [Fact]
+    public async Task apply_async_must_refuse_control_characters_in_relative_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile("bad\tcalc.js", "console.log('ok');")],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            "control characters",
+            result.Error,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AppliedFiles);
+    }
+
+    [Fact]
+    public async Task apply_async_must_refuse_windows_rooted_relative_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the script",
+                [new PlannedPatchFile(@"C:\Temp\evil.js", "console.log('x');")],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains("not a valid relative path", result.Error);
+        Assert.Empty(result.AppliedFiles);
+    }
+
+    [Fact]
+    public async Task apply_async_must_refuse_truncated_html()
+    {
+        using var workspace = new TempTestWorkspace();
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: workspace.Path,
+            controlledTempRoot: workspace.Path);
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Create the page",
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html><html><body><button>1</button>")
+                ],
+                workspace.Path));
+
+        Assert.False(result.Success);
+        Assert.Contains("truncado", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.AppliedFiles);
+        Assert.False(File.Exists(Path.Combine(workspace.Path, "index.html")));
+    }
+
+    [Fact]
     public async Task apply_async_must_refuse_empty_patch()
     {
         using var workspace = new TempTestWorkspace();
@@ -64,6 +150,32 @@ public sealed class PlannedPatchApplierTest
 
         Assert.False(result.Success);
         Assert.Contains("outside", result.Error);
+    }
+
+    [Fact]
+    public async Task apply_async_must_use_workspace_root_from_request()
+    {
+        using var workspace = new TempTestWorkspace();
+        var unrelatedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "Nebula",
+            "tests",
+            Guid.NewGuid().ToString("N"));
+        var applier = new PlannedPatchApplier(
+            workspaceRoot: unrelatedRoot,
+            controlledTempRoot: Path.Combine(unrelatedRoot, "temp"));
+
+        var result = await applier.ApplyAsync(
+            new PlannedPatchRequest(
+                "Session workspace patch",
+                [new PlannedPatchFile("hello.txt", "ok")],
+                workspace.Path,
+                WorkspaceRoot: workspace.Path));
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            "ok",
+            File.ReadAllText(Path.Combine(workspace.Path, "hello.txt")));
     }
 
     [Fact]

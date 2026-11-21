@@ -4,7 +4,7 @@ services:
     container_name: ollama
     restart: unless-stopped
     environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:8b}
       OLLAMA_MODELS: ${OLLAMA_MODELS:-}
       OLLAMA_ACCELERATION_MODE: ${OLLAMA_ACCELERATION_MODE:-cpu}
       OLLAMA_GPU_VENDOR: ${OLLAMA_GPU_VENDOR:-CPU}
@@ -17,8 +17,6 @@ services:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
-      - ./ollama-start.sh:/ollama-start.sh
-    # entrypoint: ["/bin/sh", "/ollama-start.sh"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -80,7 +78,7 @@ services:
     ports:
       - "${SEARXNG_PORT:-8080}:8080"
     volumes:
-      - ./docker/searxng:/etc/searxng:rw,Z
+      - ./docker/searxng:/etc/searxng:rw,z
       - searxng-cache:/var/cache/searxng
     environment:
       SEARXNG_PORT: "8080"
@@ -97,6 +95,32 @@ services:
       retries: 3
       start_period: 20s
 
+  nebula-telemetry:
+    build:
+      context: .
+      dockerfile: Nebula.Telemetry/Dockerfile
+      target: telemetry
+    container_name: nebula_telemetry
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8090"
+      TELEMETRY_PROC_ROOT: "/host/proc"
+      TELEMETRY_SYS_ROOT: "/host/sys"
+      TELEMETRY_HOST_ROOT: "/host/root"
+      TELEMETRY_INTERVAL_MS: "1000"
+      OLLAMA_CONTAINER_NAME: "ollama"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    tmpfs:
+      - /tmp
+
   nebula-web:
     build:
       context: .
@@ -109,17 +133,24 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      nebula-telemetry:
+        condition: service_started
     ports:
-      - "8081:8081"
+      - "${NEBULA_WEB_BIND:-127.0.0.1}:${NEBULA_WEB_PORT:-8081}:8081"
     environment:
       ASPNETCORE_ENVIRONMENT: "Production"
       ASPNETCORE_HTTP_PORTS: "8081"
+      NEBULA_WEB_AUTH_TOKEN: "${NEBULA_WEB_AUTH_TOKEN:?Defina NEBULA_WEB_AUTH_TOKEN no .env}"
       LLAMA_URL: "http://ollama:11434/api/generate"
-      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:7b}"
+      LLAMA_MODEL: "${OLLAMA_MODEL:-deepseek-r1:8b}"
       MONGO_CONNECTION: "mongodb://admin:${MONGODB_PASSWORD:-password}@mongodb-nebula:27017/nebula?authSource=admin"
       MONGO_DATABASE: "${MONGO_DATABASE:-nebula}"
       POSTGRES_CONNECTION: "Host=postgres-nebula;Port=5432;Database=${POSTGRES_DB:-nebula};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres123}"
       Research__SearXng__BaseUrl: "http://searxng:8080"
+      TMPDIR: "/tmp"
+      NEBULA_TELEMETRY_URL: "http://nebula-telemetry:8090"
+    volumes:
+      - ${HOME}/nebula-tmp:/tmp:z
     restart: unless-stopped
 
 volumes:

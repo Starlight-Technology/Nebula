@@ -1,6 +1,9 @@
 @page "/runtime"
 @implements IDisposable
+@using System.Globalization
+@using Nebula.Core.Telemetry
 @inject NebulaWorkspaceState WorkspaceState
+@inject ILlamaRuntimeTelemetryService RuntimeTelemetryService
 @inject NavigationManager NavigationManager
 
 <CoronaContainer MaxWidth="CoronaContainerMaxWidth.Xl" Class="nebula-page-shell">
@@ -77,6 +80,104 @@
         </CoronaCard>
 
         <section class="nebula-runtime-main">
+            <CoronaCard Class="nebula-status-card">
+                <div class="nebula-status-card__header">
+                    <div>
+                        <p class="nebula-kicker">Hardware do host</p>
+                        <h3>CPU, memoria, disco e GPU</h3>
+                    </div>
+
+                    <CoronaStack Direction="CoronaStackDirection.Row" Wrap="CoronaStackWrap.Wrap" Spacing=".5rem">
+                        <CoronaBadge Content="@($"Fonte {runtimeTelemetry.MetricsSource}")"
+                                     Variant="CoronaBadgeVariant.Soft"
+                                     Color="CoronaColorSemantic.Neutral" />
+                        @if (runtimeTelemetry.Hardware is { } hardware)
+                        {
+                            <CoronaBadge Content="@hardware.Source"
+                                         Variant="CoronaBadgeVariant.Outlined"
+                                         Color="CoronaColorSemantic.Neutral" />
+                        }
+                    </CoronaStack>
+                </div>
+
+                @if (runtimeTelemetry.Hardware is not { } hardware)
+                {
+                    <div class="nebula-pending-panel">
+                        <div class="nebula-pending-panel__pulse"></div>
+                        <div>
+                            <p class="nebula-pending-panel__title">Lendo hardware do host...</p>
+                            <p>O sidecar de telemetria fornece CPU, memoria, disco e GPU sem depender do container da aplicacao.</p>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="nebula-status-list nebula-status-list--grid">
+                        <div class="nebula-status-row">
+                            <span>CPU</span>
+                            <strong>@hardware.Cpu.Detail</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Uso de CPU</span>
+                            <strong>@FormatPercent(hardware.Cpu.UsagePercent)</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Memoria</span>
+                            <strong>@hardware.Memory.Detail</strong>
+                        </div>
+                        <div class="nebula-status-row">
+                            <span>Uso de memoria</span>
+                            <strong>@FormatPercent(hardware.Memory.UsagePercent)</strong>
+                        </div>
+
+                        @if (GetPrimaryDisk() is { } disk)
+                        {
+                            <div class="nebula-status-row">
+                                <span>Disco principal</span>
+                                <strong>@($"{disk.Name} | {FormatBytes(disk.UsedBytes)} de {FormatBytes(disk.TotalBytes)} ({FormatPercent(disk.UsagePercent)})")</strong>
+                            </div>
+                            <div class="nebula-status-row">
+                                <span>Espaco livre</span>
+                                <strong>@($"{FormatBytes(disk.FreeBytes)} livres em {disk.MountPoint}")</strong>
+                            </div>
+                        }
+
+                        @if (runtimeTelemetry.Gpus.Count == 0)
+                        {
+                            <div class="nebula-status-row">
+                                <span>GPU</span>
+                                <strong>Nenhuma GPU visivel no host</strong>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var gpu in runtimeTelemetry.Gpus)
+                            {
+                                <div class="nebula-status-row">
+                                    <span>@gpu.Name</span>
+                                    <strong>@($"{GetVendorLabel(gpu)} | uso {FormatPercent(gpu.UtilizationPercent)} | VRAM {FormatBytes(gpu.MemoryUsedBytes)} / {FormatBytes(gpu.MemoryTotalBytes)}")</strong>
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    @if (hardware.Warnings.Count > 0)
+                    {
+                        <div class="nebula-warning-panel" style="margin-top: .75rem;">
+                            <div>
+                                <p class="nebula-warning-panel__title">Alertas da leitura de hardware</p>
+                                <ul class="nebula-setup-list nebula-setup-list--compact">
+                                    @foreach (var warning in hardware.Warnings)
+                                    {
+                                        <li>@warning</li>
+                                    }
+                                </ul>
+                            </div>
+                        </div>
+                    }
+                }
+            </CoronaCard>
+
             @if (WorkspaceState.IsDetectingEnvironment && WorkspaceState.SetupRecommendation is null)
             {
                 <div class="nebula-pending-panel">
@@ -223,6 +324,9 @@
 </CoronaContainer>
 
 @code {
+    private readonly CancellationTokenSource telemetryCancellation = new();
+    private LlamaRuntimeTelemetrySnapshot runtimeTelemetry = new();
+
     protected override void OnInitialized()
     {
         WorkspaceState.Changed += HandleWorkspaceChanged;
@@ -237,7 +341,40 @@
     {
         if (firstRender)
         {
+            _ = StartTelemetryLoopAsync(telemetryCancellation.Token);
             await WorkspaceState.DetectEnvironmentAsync();
+        }
+    }
+
+    private async Task StartTelemetryLoopAsync(CancellationToken cancellationToken)
+    {
+        await RefreshTelemetryAsync(cancellationToken);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await RefreshTelemetryAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Encerramento normal da pagina.
+        }
+    }
+
+    private async Task RefreshTelemetryAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            runtimeTelemetry = await RuntimeTelemetryService.GetSnapshotAsync(cancellationToken);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Encerramento normal da pagina.
         }
     }
 
@@ -253,6 +390,53 @@
             : "nebula-setup-card is-cpu";
     }
 
+    private HostDiskTelemetry? GetPrimaryDisk()
+    {
+        var disks = runtimeTelemetry.Hardware?.Disks;
+        return disks?.FirstOrDefault(disk => disk.IsHost) ?? disks?.FirstOrDefault();
+    }
+
+    private static string GetVendorLabel(HostGpuTelemetry gpu)
+    {
+        return string.IsNullOrWhiteSpace(gpu.Vendor)
+            ? "GPU"
+            : gpu.Vendor.ToUpperInvariant();
+    }
+
+    private static string FormatBytes(long? bytes)
+    {
+        if (bytes is null)
+        {
+            return "--";
+        }
+
+        var value = bytes.Value;
+        var absolute = Math.Abs((double)value);
+        if (absolute >= 1024d * 1024d * 1024d)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{value / (1024d * 1024d * 1024d):0.0} GiB");
+        }
+
+        if (absolute >= 1024d * 1024d)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{value / (1024d * 1024d):0.#} MiB");
+        }
+
+        if (absolute >= 1024d)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{value / 1024d:0.#} KiB");
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{value:0} B");
+    }
+
+    private static string FormatPercent(double? value)
+    {
+        return value is null
+            ? "--"
+            : string.Create(CultureInfo.InvariantCulture, $"{value.Value:0.#}%");
+    }
+
     private void HandleWorkspaceChanged()
     {
         _ = InvokeAsync(StateHasChanged);
@@ -260,6 +444,8 @@
 
     public void Dispose()
     {
+        telemetryCancellation.Cancel();
+        telemetryCancellation.Dispose();
         WorkspaceState.Changed -= HandleWorkspaceChanged;
     }
 }

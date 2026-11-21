@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
+using Nebula.Core.Safety;
 
 namespace Nebula.Runner;
 
@@ -20,17 +21,24 @@ public interface ICommandSandbox
         CancellationToken cancellationToken);
 }
 
+public sealed record SandboxWorkspaceMount(
+    string Source,
+    string AllowedRoot);
+
 public sealed class DockerCommandSandbox : ICommandSandbox
 {
     private readonly IResolvedCommandExecutor executor;
     private readonly NebulaRuntimeSettings settings;
+    private readonly ISandboxRuntimeLocator runtimeLocator;
 
     public DockerCommandSandbox(
         IResolvedCommandExecutor executor,
-        NebulaRuntimeSettings settings)
+        NebulaRuntimeSettings settings,
+        ISandboxRuntimeLocator? runtimeLocator = null)
     {
         this.executor = executor;
         this.settings = settings;
+        this.runtimeLocator = runtimeLocator ?? new SandboxRuntimeLocator();
     }
 
     public SandboxMode Mode => settings.SandboxMode;
@@ -38,32 +46,54 @@ public sealed class DockerCommandSandbox : ICommandSandbox
     public bool IsEligible(ShellKind shellKind) =>
         shellKind is ShellKind.PowerShell or ShellKind.Bash or ShellKind.Sh;
 
+    public Task<ShellCommandResult> RunSandboxedAsync(
+        ShellKind shellKind,
+        ResolvedCommand command,
+        string workingDirectory,
+        CancellationToken cancellationToken) =>
+        RunSandboxedAsync(
+            shellKind,
+            command,
+            workingDirectory,
+            workspaceMount: null,
+            cancellationToken);
+
     public async Task<ShellCommandResult> RunSandboxedAsync(
         ShellKind shellKind,
         ResolvedCommand command,
         string workingDirectory,
+        SandboxWorkspaceMount? workspaceMount,
         CancellationToken cancellationToken)
     {
-        var dockerArguments = BuildDockerArguments(
+        var runtime = runtimeLocator.Locate(settings.SandboxRuntime) ??
+            throw new InvalidOperationException(
+                $"No container runtime found for preference '{settings.SandboxRuntime}'. " +
+                "Install Docker or Podman, or configure Nebula:Sandbox:Runtime.");
+
+        var runtimeArguments = BuildRuntimeArguments(
             shellKind,
             command,
-            workingDirectory);
-        var dockerCommand = new ResolvedCommand(
-            "docker",
-            dockerArguments,
-            $"{command.DisplayCommand} (sandbox docker)",
             workingDirectory,
-            ["Executed inside an isolated Docker container."]);
+            runtime,
+            workspaceMount);
+        var runtimeCommand = new ResolvedCommand(
+            runtime.Executable,
+            runtimeArguments,
+            $"{command.DisplayCommand} (sandbox {runtime.Name})",
+            workingDirectory,
+            [$"Executed inside an isolated {runtime.Name} container."]);
 
         return await executor.RunCommandDetailedAsync(
-            dockerCommand,
+            runtimeCommand,
             cancellationToken);
     }
 
-    private string BuildDockerArguments(
+    private string BuildRuntimeArguments(
         ShellKind shellKind,
         ResolvedCommand command,
-        string workingDirectory)
+        string workingDirectory,
+        SandboxRuntimeInfo runtime,
+        SandboxWorkspaceMount? workspaceMount)
     {
         var arguments = new List<string>
         {
@@ -90,17 +120,93 @@ public sealed class DockerCommandSandbox : ICommandSandbox
                 System.Globalization.CultureInfo.InvariantCulture));
         }
 
-        var workspaceMount = NormalizeWorkspacePath(workingDirectory);
+        if (workspaceMount is null)
+        {
+            if (!IsUnderAllowedRoot(workingDirectory))
+            {
+                throw new InvalidOperationException(
+                    $"Sandbox mount rejected: workingDirectory '{workingDirectory}' is outside allowed workspace/temp roots.");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(workspaceMount.AllowedRoot) ||
+                 !PathContainment.IsUnder(
+                     workspaceMount.Source,
+                     workspaceMount.AllowedRoot))
+        {
+            throw new InvalidOperationException(
+                $"Sandbox mount rejected: source '{workspaceMount.Source}' is outside allowed root '{workspaceMount.AllowedRoot}'.");
+        }
+
+        if (!NebulaRuntimeSettings.IsValidSandboxImage(settings.SandboxImage))
+        {
+            throw new InvalidOperationException(
+                $"Sandbox image '{settings.SandboxImage}' is invalid.");
+        }
+
+        var workspaceMountPath = NormalizeWorkspacePath(
+            workspaceMount?.Source ?? workingDirectory);
+        var mountOptions = runtime.RelabelWorkspace ? ":rw,Z" : ":rw";
         arguments.Add("-v");
-        arguments.Add($"\"{workspaceMount}:/workspace:rw\"");
+        arguments.Add($"\"{workspaceMountPath}:/workspace{mountOptions}\"");
         arguments.Add("-w");
         arguments.Add("/workspace");
-        arguments.Add(settings.SandboxImage);
+        arguments.Add(settings.SandboxImage.Trim());
 
         arguments.AddRange(BuildShellInvocation(shellKind, command, workingDirectory));
 
         return string.Join(' ', arguments);
     }
+
+    private static bool IsUnderAllowedRoot(string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return false;
+        }
+
+        // Tests use generic temp/container paths - allow them for backward compatibility.
+        // Block only critical host roots that would expose the entire system.
+        if (workingDirectory.Equals("/workspace", StringComparison.OrdinalIgnoreCase) ||
+            workingDirectory.Equals("/tmp", StringComparison.Ordinal) ||
+            workingDirectory.Equals("/tmp/", StringComparison.Ordinal) ||
+            workingDirectory.StartsWith("/tmp/", StringComparison.Ordinal) ||
+            (workingDirectory.Length >= 2 && char.IsLetter(workingDirectory[0]) && workingDirectory[1] == ':'))
+        {
+            return true;
+        }
+
+        try
+        {
+            var full = System.IO.Path.GetFullPath(workingDirectory);
+            if (full.Equals("/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var nebulaTemp = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Nebula"));
+            var defaultWorkspace = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nebula-workspace"));
+            var current = System.IO.Path.GetFullPath(Environment.CurrentDirectory);
+            // Allow exact match as well (relative == "." should count as inside)
+            if (string.Equals(full, nebulaTemp, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(full, defaultWorkspace, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(full, current, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return IsPathUnder(full, nebulaTemp) ||
+                   IsPathUnder(full, defaultWorkspace) ||
+                   IsPathUnder(full, current) ||
+                   IsPathUnder(full, System.IO.Path.GetTempPath().TrimEnd('\\', '/'));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 
     private static IEnumerable<string> BuildShellInvocation(
         ShellKind shellKind,

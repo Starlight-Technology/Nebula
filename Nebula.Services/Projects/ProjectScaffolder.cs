@@ -1,6 +1,7 @@
 using System.Text;
 
 using Nebula.Core.Projects;
+using Nebula.Core.Safety;
 
 namespace Nebula.Services.Projects;
 
@@ -37,7 +38,10 @@ public sealed class ProjectScaffolder : IProjectScaffolder
         }
 
         var targetDirectory = NormalizeTarget(request.TargetDirectory);
-        if (!IsUnder(targetDirectory, workspaceRoot) &&
+        var effectiveWorkspaceRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+            ? workspaceRoot
+            : NormalizeTarget(request.WorkspaceRoot);
+        if (!IsUnder(targetDirectory, effectiveWorkspaceRoot) &&
             !IsUnder(targetDirectory, controlledTempRoot))
         {
             return ProjectScaffoldResult.Failed(
@@ -115,13 +119,6 @@ public sealed class ProjectScaffolder : IProjectScaffolder
         }
     }
 
-    private static bool IsUnder(string candidate, string root)
-    {
-        var relative = Path.GetRelativePath(root, candidate);
-        return relative != ".." &&
-               !relative.StartsWith(
-                   $"..{Path.DirectorySeparatorChar}",
-                   StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative);
-    }
+    private static bool IsUnder(string candidate, string root) =>
+        PathContainment.IsUnder(candidate, root);
 }

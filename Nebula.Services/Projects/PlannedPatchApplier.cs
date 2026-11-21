@@ -29,8 +29,29 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
                 "A planned patch requires at least one file.");
         }
 
-        var targetDirectory = NormalizeTarget(request.TargetDirectory);
-        if (!IsUnder(targetDirectory, workspaceRoot) &&
+        var incompleteContent = PlannedPatchContentValidator.Validate(request.Files);
+        if (incompleteContent is not null)
+        {
+            return PlannedPatchResult.Failed(incompleteContent);
+        }
+
+        var targetDirectory = TryNormalizeTarget(request.TargetDirectory);
+        if (targetDirectory is null)
+        {
+            return PlannedPatchResult.Failed(
+                $"The patch target directory is invalid: {request.TargetDirectory}");
+        }
+
+        var effectiveWorkspaceRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+            ? workspaceRoot
+            : TryNormalizeTarget(request.WorkspaceRoot);
+        if (effectiveWorkspaceRoot is null)
+        {
+            return PlannedPatchResult.Failed(
+                $"The patch workspace root is invalid: {request.WorkspaceRoot}");
+        }
+
+        if (!IsUnder(targetDirectory, effectiveWorkspaceRoot) &&
             !IsUnder(targetDirectory, controlledTempRoot))
         {
             return PlannedPatchResult.Failed(
@@ -43,16 +64,24 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (string.IsNullOrWhiteSpace(file.RelativePath) ||
-                Path.IsPathRooted(file.RelativePath))
+            var relativePath = NormalizeRelativePath(file.RelativePath);
+            if (string.IsNullOrWhiteSpace(relativePath) ||
+                Path.IsPathRooted(relativePath) ||
+                IsWindowsRooted(relativePath))
             {
                 return PlannedPatchResult.Failed(
                     $"Patch file '{file.RelativePath}' is not a valid relative path.");
             }
 
-            var fullPath = NormalizeTarget(
-                Path.Combine(targetDirectory, file.RelativePath));
-            if (!IsUnder(fullPath, targetDirectory))
+            if (relativePath.Any(char.IsControl))
+            {
+                return PlannedPatchResult.Failed(
+                    $"Patch file '{file.RelativePath}' contains control characters.");
+            }
+
+            var fullPath = TryNormalizeTarget(
+                Path.Combine(targetDirectory, relativePath));
+            if (fullPath is null || !IsUnder(fullPath, targetDirectory))
             {
                 return PlannedPatchResult.Failed(
                     $"Patch file '{file.RelativePath}' escapes the target directory.");
@@ -80,7 +109,7 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
             appliedFiles);
     }
 
-    private static string NormalizeTarget(string path)
+    private static string? TryNormalizeTarget(string path)
     {
         try
         {
@@ -88,8 +117,28 @@ public sealed class PlannedPatchApplier : IPlannedPatchApplier
         }
         catch (Exception)
         {
-            return Environment.CurrentDirectory;
+            return null;
         }
+    }
+
+    private static string NormalizeRelativePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = path.Trim();
+        return Path.DirectorySeparatorChar == '/'
+            ? trimmed.Replace('\\', '/')
+            : trimmed.Replace('/', '\\');
+    }
+
+    private static bool IsWindowsRooted(string path)
+    {
+        return path.Length >= 2 &&
+               char.IsLetter(path[0]) &&
+               path[1] == ':';
     }
 
     private static bool IsUnder(string candidate, string root)

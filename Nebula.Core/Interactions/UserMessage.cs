@@ -1,3 +1,5 @@
+using Nebula.Core.Configuration;
+
 namespace Nebula.Core.Interactions;
 
 public enum InteractionMode
@@ -10,4 +12,5 @@ public sealed record UserMessage(
     string Content,
     InteractionMode Mode,
     string? WorkspaceRoot = null,
-    bool IsDryRun = false);
+    bool IsDryRun = false,
+    ProviderMode ProviderMode = ProviderMode.LocalPreferred);

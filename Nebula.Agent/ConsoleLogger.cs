@@ -1,3 +1,5 @@
+using Nebula.Core.Safety;
+
 namespace Nebula.Agent;
 
 /// <summary>
@@ -5,13 +7,24 @@ namespace Nebula.Agent;
 /// </summary>
 public class ConsoleLogger : ILogger
 {
+    private readonly TextWriter _output;
+
+    public ConsoleLogger() : this(Console.Out)
+    {
+    }
+
+    internal ConsoleLogger(TextWriter output)
+    {
+        _output = output;
+    }
+
     public void Log(string message)
     {
-        Console.WriteLine(message);
+        _output.WriteLine(SecretRedaction.Apply(message));
     }
 
     public void LogError(string message)
     {
-        Console.WriteLine(message);
+        _output.WriteLine(SecretRedaction.Apply(message));
     }
 }

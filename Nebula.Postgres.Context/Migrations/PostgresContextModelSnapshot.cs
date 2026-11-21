@@ -121,6 +121,9 @@ namespace Nebula.Postgres.Context.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ParentRunId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Prompt")
                         .IsRequired()
                         .HasColumnType("text");
@@ -146,6 +149,8 @@ namespace Nebula.Postgres.Context.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ConversationId");
+
+                    b.HasIndex("ParentRunId");
 
                     b.HasIndex("StartedAt");
 
@@ -713,6 +718,49 @@ namespace Nebula.Postgres.Context.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("requests", (string)null);
+                });
+
+            modelBuilder.Entity("Nebula.Postgres.Context.Entities.SandboxSettingsEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double>("CpuLimit")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Image")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<long>("MemoryLimitMb")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Mode")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Workspace")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "Workspace")
+                        .IsUnique();
+
+                    b.ToTable("sandbox_settings", (string)null);
                 });
 
             modelBuilder.Entity("Nebula.Postgres.Context.Entities.StoredCommand", b =>

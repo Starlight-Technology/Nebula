@@ -1,3 +1,4 @@
+using System.Text;
 using Nebula.Agent.Data;
 using Nebula.Core.Interactions;
 using Nebula.Core.Learning;
@@ -7,7 +8,8 @@ namespace Nebula.Agent.Application;
 public sealed record PreparedConversationContext(
     Guid ConversationId,
     string ModelPrompt,
-    ConversationState? PreviousState);
+    ConversationState? PreviousState,
+    string ChatHistoryContext = "");
 
 public interface IConversationContextService
 {
@@ -62,7 +64,8 @@ public sealed class ConversationContextService(
             return new PreparedConversationContext(
                 conversationId,
                 augmented,
-                PreviousState: null);
+                PreviousState: null,
+                ChatHistoryContext: string.Empty);
         }
 
         var userMessage = await AddMessageAsync(
@@ -90,10 +93,38 @@ public sealed class ConversationContextService(
             mode);
         var finalPrompt = await AugmentWithKnowledgeAsync(modelPrompt, prompt, mode, cancellationToken);
         finalPrompt = await AugmentWithUserPreferencesAsync(finalPrompt, mode, cancellationToken);
+
+        var chatHistoryContext = BuildChatHistoryContext(recentMessages, userMessage);
+
         return new PreparedConversationContext(
             conversationId,
             finalPrompt,
-            conversationState);
+            conversationState,
+            chatHistoryContext);
+    }
+
+    private static string BuildChatHistoryContext(
+        IReadOnlyList<ConversationMessage> recentMessages,
+        ConversationMessage currentUserMessage)
+    {
+        var candidates = recentMessages
+            .Where(message => message.Id != currentUserMessage.Id)
+            .Where(message => !string.IsNullOrWhiteSpace(message.Content))
+            .TakeLast(ConversationContextOptions.DefaultRecentMessageLimit)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var context = new StringBuilder();
+        context.AppendLine("[recent_messages]");
+        foreach (var message in candidates)
+        {
+            context.AppendLine($"{NormalizeRole(message.Role)}: {message.Content.Trim()}");
+        }
+        return context.ToString().Trim();
     }
 
     private async Task<string> AugmentWithUserPreferencesAsync(
@@ -334,4 +365,14 @@ public sealed class ConversationContextService(
 
     private static string ModePrefix(InteractionMode mode) =>
         mode == InteractionMode.Agent ? "[AGENT]" : "[CHAT]";
+
+    private static string NormalizeRole(string role) =>
+        role.Trim().ToLowerInvariant() switch
+        {
+            ConversationRoles.System => ConversationRoles.System,
+            ConversationRoles.User => ConversationRoles.User,
+            ConversationRoles.Assistant => ConversationRoles.Assistant,
+            ConversationRoles.Tool => ConversationRoles.Tool,
+            _ => ConversationRoles.User
+        };
 }

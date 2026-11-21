@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,7 +14,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.10" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
@@ -25,7 +28,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Nebula.Agent\Nebula.Agent.csproj" />
     <ProjectReference Include="..\Nebula.Core\Nebula.Core.csproj" />
+    <ProjectReference Include="..\Nebula.Llama.Client\Nebula.Llama.Client.csproj" />
     <ProjectReference Include="..\Nebula.Postgres.Context\Nebula.Postgres.Context.csproj" />
+    <ProjectReference Include="..\Nebula.Runner\Nebula.Runner.csproj" />
+    <ProjectReference Include="..\Nebula.Sandbox\Nebula.Sandbox.csproj" />
     <ProjectReference Include="..\Nebula.Services\Nebula.Services.csproj" />
   </ItemGroup>
 

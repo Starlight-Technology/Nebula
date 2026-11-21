@@ -24,7 +24,8 @@ public enum KnowledgeItemKind
     Formula,
     Procedure,
     Warning,
-    Example
+    Example,
+    ErrorFix
 }
 
 public enum VerificationKind

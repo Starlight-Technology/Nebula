@@ -1,3 +1,6 @@
+@using Nebula.App.Web.Auth
+@inject WebAuthOptions WebAuth
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -15,7 +18,9 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" />
+    <CascadingValue Name="WebAuthEnabled" Value="WebAuth.Enabled">
+        <Routes @rendermode="InteractiveServer" />
+    </CascadingValue>
     <ReconnectModal />
     <script src="@Assets["_framework/blazor.web.js"]"></script>
 </body>

@@ -4,6 +4,9 @@ Nebula e uma central local para conversar com modelos via Ollama, trocar o model
 
 ## Subindo a stack base
 
+Defina `NEBULA_WEB_AUTH_TOKEN` no `.env` antes do primeiro `up` (veja
+"Acesso local e autenticacao Web").
+
 ```powershell
 docker compose up -d
 ```
@@ -13,8 +16,33 @@ Isso sobe:
 - `ollama`
 - `mongodb`
 - `postgres`
+- `searxng`
+- `nebula-telemetry`
+- `nebula-web`
 
-Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:7b`.
+Por padrao o Ollama inicia em CPU com o modelo `deepseek-r1:8b`. A UI Web fica
+em `http://127.0.0.1:8081` e exige o token de acesso descrito abaixo.
+
+## Acesso local e autenticacao Web
+
+A UI Web usa um token local unico, trocado por um cookie de sessao `HttpOnly`.
+Gere um token com pelo menos 32 caracteres e coloque no `.env`:
+
+```bash
+openssl rand -hex 32
+# edite .env
+NEBULA_WEB_AUTH_TOKEN=cole-o-token-gerado
+```
+
+O Compose publica a porta apenas em loopback por padrao
+(`NEBULA_WEB_BIND=127.0.0.1`, `NEBULA_WEB_PORT=8081`) e recusa subir o
+`nebula-web` sem `NEBULA_WEB_AUTH_TOKEN`. Acesse `http://127.0.0.1:8081`,
+informe o token em `/login` e use "Sair" no menu para encerrar a sessao.
+
+Em `Development`, sem token, a auth e desativada com um warning no log. Em
+`Production`/`Staging`, token ausente ou com menos de 32 caracteres impede o
+startup. Fora do Compose, use a configuracao `Nebula:Web:AuthToken` ou a variavel
+`NEBULA_WEB_AUTH_TOKEN`; o cookie tem validade de 7 dias.
 
 ## Perfis de aceleracao GPU
 
@@ -69,7 +97,7 @@ Variaveis uteis:
 
 Modelo principal:
 
-- `OLLAMA_MODEL=deepseek-r1:7b`
+- `OLLAMA_MODEL=deepseek-r1:8b`
 
 Modelos adicionais para pre-carregar na inicializacao:
 
@@ -79,7 +107,7 @@ Exemplo:
 
 ```powershell
 $env:OLLAMA_MODEL = "qwen3:8b"
-$env:OLLAMA_MODELS = "deepseek-r1:7b,llama3.1:8b"
+$env:OLLAMA_MODELS = "deepseek-r1:8b,llama3.1:8b"
 docker compose up -d
 ```
 
@@ -100,6 +128,59 @@ A central em `Nebula.App` mostra:
 - troca de modelo na sessao
 - resposta, raciocinio e passos executados
 - perfis de aceleracao disponiveis
+- CPU, memoria, disco e GPU do host no header e na pagina Runtime
+
+### Inicializacao do Postgres no MAUI
+
+O app MAUI abre mesmo quando o Postgres esta indisponivel. A inicializacao roda
+em background com backoff exponencial; enquanto ela esta em andamento ou falha,
+um banner no topo informa o estado e, em caso de falha, oferece o botao
+"Tentar novamente". Ajuste as tentativas com `NEBULA_DB_INIT_MAX_ATTEMPTS`,
+`NEBULA_DB_INIT_INITIAL_DELAY_MS` e `NEBULA_DB_INIT_MAX_DELAY_MS`. O Web mantem
+a inicializacao sincrona e falha cedo se o banco estiver fora do ar.
+
+## Telemetria do host
+
+O servico `nebula-telemetry` le CPU, memoria, discos e GPUs diretamente do host
+(`/proc`, `/sys` e raiz montada somente leitura) e expoe `/snapshot` e `/health`
+na rede interna do Compose. O container `nebula-web` consome esse sidecar por
+`NEBULA_TELEMETRY_URL` e, se ele nao estiver disponivel, tenta a leitura local.
+
+O sidecar nao publica porta e nao recebe o socket do Docker/Podman por padrao; o
+acesso ao socket e opcional e serve apenas para estatisticas de containers. Para
+GPU NVIDIA, use o override `docker-compose.nvidia.yml`; AMD/Intel exigem os
+devices correspondentes e validacao no host.
+
+Para executar comandos no sandbox dentro do Compose, use o override opt-in
+`docker-compose.sandbox.yml`. Ele adiciona `nebula-sandbox`, monta
+`${HOME}/nebula-tmp:/tmp:z` e o socket Podman, e faz o `nebula-web` delegar via
+`Nebula__Sandbox__SidecarUrl`. O token e obrigatorio:
+
+```bash
+export NEBULA_SANDBOX_TOKEN="troque-por-um-token-longo"
+systemctl --user enable --now podman.socket
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d
+```
+
+O sidecar mapeia `/tmp` para o workspace do host, entao scripts criados pelo
+agente sao executados com o caminho correto. O `nebula-web` continua sem socket.
+No Podman o sidecar roda como `1000:1000` com `userns_mode=keep-id` e
+`label=type:container_runtime_t`, e o healthcheck do Compose chama `/health`,
+que verifica o runtime. Ajuste `NEBULA_SANDBOX_SOCKET` se o socket nao estiver em
+`/run/user/1000/podman/podman.sock`. Para Docker use
+`NEBULA_SANDBOX_RUNTIME=Docker`, `NEBULA_SANDBOX_SOCKET=/var/run/docker.sock`,
+`NEBULA_SANDBOX_USER=0:0`, `NEBULA_SANDBOX_USERNS_MODE=host` e
+`NEBULA_SANDBOX_SECURITY_OPT=label=disable`; trate o sidecar como privilegiado.
+O caminho Docker CLI foi testado contra a API compativel do Podman; valide com um
+daemon Docker real antes de producao.
+
+## Workspace por conversa
+
+Sem um workspace explicito, cada conversa usa uma pasta propria em
+`%TEMP%/nebula-workspace/<conversationId>`, evitando que arquivos de conversas
+diferentes se misturem. Quando `Nebula:WorkspaceRoot` ou o campo de workspace nas
+configuracoes e informado, essa raiz e usada como esta, sem subpasta por conversa.
+No container web, `/tmp` e montado em `~/nebula-tmp` no host.
 
 ## Classificação e autorização de comandos
 
@@ -120,6 +201,53 @@ O modelo ativo é carregado primeiro do PostgreSQL. O arquivo configurado em
 No treinamento, `COMMAND_SAFETY_MODEL` pode ser definido para também gerar esse arquivo.
 O CSV e a versão podem ser sobrescritos por `COMMAND_SAFETY_TRAINING_DATA` e
 `COMMAND_SAFETY_MODEL_VERSION`.
+
+## Aprovação e continuação
+
+Ações que exigem aprovação (comandos, scripts, arquivos e patches) mostram um card com
+escopo `Once`, `Conversation`, `Workspace` ou `Category`. Ao aprovar, o Nebula cria um
+novo run que reproduz a ação aprovada sem consultar o LLM; se a continuação pedir nova
+aprovação, o card aparece novamente. No CLI, o loop de aprovação continua por até 10
+rodadas por turno.
+
+Cada continuação guarda `ParentRunId` (migração `add_agent_run_parent_run_id`) e o
+histórico em `/agent-runs` e `/agent-run/{id}` mostra o link "Continuação de Run ...".
+Runs retomados também apontam para o run original.
+
+Caminhos de ação são normalizados e validados antes de executar ou gravar: caracteres
+de controle, caminhos relativos inválidos e separadores que escapam da raiz são
+rejeitados.
+## Git
+
+A tela `/git` cobre status, branches, commits, diff, log, remotes e revert por
+commit. Arquivos staged e nao staged podem ser revertidos individualmente com
+confirmacao em dois cliques: o Nebula valida o caminho dentro do repositorio,
+recusa `.git`, `..`, caminhos absolutos e metacaracteres, e bloqueia a operacao
+em branches protegidas (`main`, `master`, `develop`, `release`, `production`).
+Arquivos nao rastreados nao sao alterados por esse fluxo.
+
+O card "Pull Request" cria PR/MR no GitHub ou GitLab a partir da branch atual.
+Os tokens ficam apenas no servidor, nunca no navegador:
+
+```bash
+Nebula__PullRequest__GitHubToken=ghp_...
+Nebula__PullRequest__GitLabToken=glpat-...
+Nebula__PullRequest__DefaultTargetBranch=main
+Nebula__PullRequest__PushBranchIfNeeded=true
+```
+
+O botao so fica habilitado com o provedor configurado, sem alteracoes pendentes
+e em branch de trabalho. O push automatico pode ser desligado; nesse caso a
+branch precisa ja existir no remote.
+
+## Migrations de banco
+
+O agente pode listar, criar e aplicar migrations de banco via `OperationKind.Migration`.
+Listar migrations é somente leitura. Criar ou aplicar sempre exige aprovação manual
+com escopo único; auto-aprovação, allowlist, escopo por conversa/workspace e categoria
+não se aplicam. O `MigrationService` suporta EF Core (`dotnet ef`) e Node.js
+(`knex`, `typeorm`, `prisma`, `sequelize`), valida nomes/contextos e, em modo
+`DryRun`, retorna o comando planejado sem executar.
 
 ## Pesquisa e aprendizado gratuito
 
@@ -224,3 +352,36 @@ Exemplo de pedido que funciona sem internet:
 ```text
 Aprenda boas praticas de seguranca para executar comandos shell.
 ```
+
+## Interface do Agente (Phase 7)
+
+A UI web (`Nebula.App.Web`) inclui agora uma tela dedicada para execucoes do agente em tempo real:
+
+### Tela `/agent-run/{RunId}` - Agent Run Live
+- **Layout de 3 painéis**: Plano (esquerda), Terminal (centro), Artefatos (direita)
+- **Streaming em tempo real** via `IAgentRunOrchestrator.SubscribeAsync` - eventos tipados
+- **Plano estruturado** com checkpoints (◆), riscos (baixo/médio/alto/crítico), dependências
+- **Terminal com cores ANSI**, modo compacto (últimas 50 linhas), auto-scroll, copiar/limpar
+- **Artefatos** com ícones por tipo de arquivo, copiar caminho, abrir
+- **Link para o run de origem** quando a execução é uma continuação aprovada
+
+### Componentes reutilizáveis (`Nebula.App.Shared/Components/`)
+- `CommandCard` - Comando unificado com status, aprovação inline, edição prévia
+- `StepCard` - Passo do plano com checkpoint/risk/dependências, expansível
+- `AgentRunTimeline` - Timeline de eventos com filtros (busca, tipo, status, só erros)
+- `TimelineEventItem` - Evento individual com badge colorido
+- `ArtifactPanel` - Painel de artefatos com ícones e ações
+- `PlanView` - Visualização do plano + comparação de arquitetura
+- `TerminalOutput` / `TerminalLine` - Terminal com parsing ANSI
+
+### Keyboard Shortcuts (Chat)
+- `Ctrl+Enter` - Enviar mensagem
+- `Escape` - Cancelar turno ativo
+- `Ctrl+Shift+P` - Prever (dry run)
+- `Ctrl+Shift+C` - Alternar modo compacto (modo Agente)
+- `Ctrl+N` - Nova conversa
+
+### Acessibilidade
+- Focus-visible outlines em todos componentes interativos
+- Suporte a `prefers-contrast: high` (bordas mais grossas)
+- Suporte a `prefers-reduced-motion: reduce` (desativa animações)

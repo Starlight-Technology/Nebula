@@ -8,11 +8,17 @@ using MongoDB.Driver;
 
 using Nebula.Agent;
 using Nebula.Agent.Application;
+using Nebula.Agent.Application.Background;
+using Nebula.Agent.Application.Events;
 using Nebula.Agent.Data;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Infrastructure.Events;
+using Nebula.Agent.Infrastructure.Execution;
+using Nebula.Agent.Logging;
 using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
 using Nebula.Core.Agent;
+using Nebula.Core.Background;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
 using Nebula.Core.Execution;
@@ -23,6 +29,7 @@ using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
+using Nebula.Llama.Client.Telemetry;
 using Nebula.Mongo.Context;
 using Nebula.Postgres.Context;
 using Nebula.Runner;
@@ -48,14 +55,37 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new RedactingLoggerProvider(logging => logging.AddDebug()));
+
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
-        builder.Logging.AddDebug();
 #endif
 
-        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
+        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
+            timeoutSeconds: int.TryParse(
+                Environment.GetEnvironmentVariable("NEBULA_LLM_TIMEOUT_SECONDS"),
+                out var llmTimeout) && llmTimeout > 0
+                ? llmTimeout
+                : 300,
+            loadTimeoutSeconds: int.TryParse(
+                Environment.GetEnvironmentVariable("NEBULA_LLM_LOAD_TIMEOUT_SECONDS"),
+                out var llmLoadTimeout) && llmLoadTimeout > 0
+                ? llmLoadTimeout
+                : LlamaClient.DefaultLoadTimeoutSeconds));
+        builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
+            commandRunner: new ProcessRuntimeCommandRunner()));
+
+        var telemetryUrl = Environment.GetEnvironmentVariable("NEBULA_TELEMETRY_URL");
+        if (!string.IsNullOrWhiteSpace(telemetryUrl))
+        {
+            builder.Services.AddSingleton<ITelemetrySource>(_ => new HttpTelemetrySource(telemetryUrl));
+        }
+
         builder.Services.AddSingleton<ILlamaRuntimeTelemetryService, LlamaRuntimeTelemetryService>();
-        builder.Services.AddSingleton<IRuntimeSetupAdvisor>(_ => new RuntimeSetupAdvisor("Native app"));
+        builder.Services.AddSingleton<IRuntimeSetupAdvisor>(sp => new RuntimeSetupAdvisor(
+            "Native app",
+            sp.GetRequiredService<IHostHardwareProbe>()));
         builder.Services.AddSingleton<IOllamaUpdateService, OllamaUpdateService>();
         builder.Services.AddSingleton<IProjectDoctorService, ProjectDoctorService>();
         builder.Services.AddScoped(_ => new NebulaRuntimeSettings
@@ -83,6 +113,10 @@ public static class MauiProgram
                     Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_COMMANDS"),
                     out var autoApproveCommands) &&
                 autoApproveCommands,
+            AutoApproveCommandsConfigured =
+                bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_COMMANDS"),
+                    out var autoApproveCommandsConfigured),
             AutoApproveCategories = ParseCategoryList(
                 Environment.GetEnvironmentVariable("NEBULA_AUTO_APPROVE_CATEGORIES")),
             RequireDeterministicVerification =
@@ -111,6 +145,29 @@ public static class MauiProgram
             WorkspaceRoot =
                 Environment.GetEnvironmentVariable("NEBULA_WORKSPACE_ROOT") ??
                 string.Empty,
+            UserId =
+                Environment.GetEnvironmentVariable("NEBULA_USER_ID") ??
+                string.Empty,
+            AutonomyProfile =
+                Enum.TryParse<AutonomyProfile>(
+                    Environment.GetEnvironmentVariable("NEBULA_AUTONOMY_PROFILE"),
+                    ignoreCase: true,
+                    out var autonomyProfile)
+                    ? autonomyProfile
+                    : AutonomyProfile.Standard,
+            ProviderMode =
+                Enum.TryParse<ProviderMode>(
+                    Environment.GetEnvironmentVariable("NEBULA_PROVIDER_MODE"),
+                    ignoreCase: true,
+                    out var providerMode)
+                    ? providerMode
+                    : NebulaRuntimeSettings.GetDefaultProviderModeForProfile(
+                        Enum.TryParse<AutonomyProfile>(
+                            Environment.GetEnvironmentVariable("NEBULA_AUTONOMY_PROFILE"),
+                            ignoreCase: true,
+                            out var profile)
+                            ? profile
+                            : AutonomyProfile.Standard),
             SandboxMode =
                 Enum.TryParse<SandboxMode>(
                     Environment.GetEnvironmentVariable("NEBULA_SANDBOX_MODE"),
@@ -118,6 +175,16 @@ public static class MauiProgram
                     out var sandboxMode)
                     ? sandboxMode
                     : SandboxMode.Disabled,
+            SandboxModeFloor =
+                Enum.TryParse<SandboxMode>(
+                    Environment.GetEnvironmentVariable("NEBULA_SANDBOX_MODE"),
+                    ignoreCase: true,
+                    out var sandboxModeFloor)
+                    ? sandboxModeFloor
+                    : SandboxMode.Disabled,
+            SandboxRuntime =
+                NebulaRuntimeSettings.ParseSandboxRuntime(
+                    Environment.GetEnvironmentVariable("NEBULA_SANDBOX_RUNTIME")),
             SandboxImage =
                 Environment.GetEnvironmentVariable("NEBULA_SANDBOX_IMAGE") ??
                 "mcr.microsoft.com/powershell:lts",
@@ -132,14 +199,46 @@ public static class MauiProgram
                     Environment.GetEnvironmentVariable("NEBULA_SANDBOX_CPU_LIMIT"),
                     out var sandboxCpuLimit) && sandboxCpuLimit > 0
                     ? sandboxCpuLimit
-                    : 0
+                    : 0,
+            SmokeTestEnabled =
+                !bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SMOKE_TEST_ENABLED"),
+                    out var smokeTestEnabled) ||
+                smokeTestEnabled,
+            SmokeTestTimeoutSeconds =
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SMOKE_TEST_TIMEOUT_SECONDS"),
+                    out var smokeTestTimeout) && smokeTestTimeout > 0
+                    ? smokeTestTimeout
+                    : NebulaRuntimeSettings.DefaultSmokeTestTimeoutSeconds,
+            ScreenshotEnabled =
+                !bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_ENABLED"),
+                    out var screenshotEnabled) ||
+                screenshotEnabled,
+            ScreenshotDiffThresholdPercent =
+                double.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_DIFF_THRESHOLD"),
+                    out var screenshotDiffThreshold) && screenshotDiffThreshold >= 0
+                    ? screenshotDiffThreshold
+                    : 0.1,
+            ScreenshotCaptureDelayMs =
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_CAPTURE_DELAY_MS"),
+                    out var screenshotCaptureDelay) && screenshotCaptureDelay >= 0
+                    ? screenshotCaptureDelay
+                    : 1000
         });
         builder.Services.AddScoped<NebulaWorkspaceState>();
+        builder.Services.AddSingleton<DatabaseInitializationState>();
+        builder.Services.AddSingleton<MauiDatabaseInitializationService>();
         builder.Services.AddSingleton<IShellExecutor, ShellExecutor>();
+        builder.Services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
         builder.Services.AddScoped<ICommandSandbox>(provider =>
             new DockerCommandSandbox(
                 (IResolvedCommandExecutor)provider.GetRequiredService<IShellExecutor>(),
-                provider.GetRequiredService<NebulaRuntimeSettings>()));
+                provider.GetRequiredService<NebulaRuntimeSettings>(),
+                provider.GetRequiredService<ISandboxRuntimeLocator>()));
         builder.Services.AddSingleton<IRuntimeCommandEnvironmentDetector, RuntimeCommandEnvironmentDetector>();
         builder.Services.AddSingleton<ICommandIntentParser, CommandIntentParser>();
         builder.Services.AddSingleton<ICommandResolver, CommandResolver>();
@@ -195,6 +294,8 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
                 fallbackExtractor: new KnowledgeExtractor(),
                 log: provider.GetRequiredService<Agent.ILogger>().Log));
         builder.Services.AddScoped<ISafeExperimentRunner, SafeExperimentRunner>();
+        builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+        builder.Services.AddHostedService<BackgroundTaskHostedService>();
         builder.Services.AddSingleton<IConversationMemoryStore, InMemoryConversationMemoryRepository>();
         builder.Services.AddScoped<NebulaContextBuilder>();
         builder.Services.AddScoped<IConversationContextService, ConversationContextService>();
@@ -207,7 +308,8 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         {
             var testClient = new MongoClient(mongoConn);
             var testDb = testClient.GetDatabase(mongoDb);
-            testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)).GetAwaiter().GetResult();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            testDb.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token).GetAwaiter().GetResult();
 
             builder.Services.AddSingleton<IMongoContext>(_ => new MongoContext(mongoConn, mongoDb));
             builder.Services.AddSingleton<IPromptRequestStore, MongoPromptRequestRepository>();
@@ -216,6 +318,11 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         catch (MongoAuthenticationException ex)
         {
             Console.WriteLine("Warning: MongoDB authentication failed. Falling back to NoOpPromptRequestRepository. " + ex.Message);
+            builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("Warning: MongoDB ping timed out after 2s. Falling back to NoOpPromptRequestRepository.");
             builder.Services.AddSingleton<IPromptRequestStore, NoOpPromptRequestRepository>();
         }
         catch (Exception ex)
@@ -242,6 +349,9 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<ILearningFromExecutionService, LearningFromExecutionService>();
         builder.Services.AddScoped<IPostTaskLearningService, PostTaskLearningService>();
         builder.Services.AddScoped<IOutputVerificationService, OutputVerificationService>();
+        builder.Services.AddScoped<IErrorFixService, ErrorFixService>();
+        builder.Services.AddScoped<IEnvironmentValidator, EnvironmentValidator>();
+        builder.Services.AddScoped<IResultValidator, ResultValidator>();
         builder.Services.AddScoped<IWorkspaceStackDetector, DeterministicStackDetector>();
         builder.Services.AddScoped<IDeterministicVerificationService, DeterministicVerificationService>();
         builder.Services.AddScoped<ITranslationService, TranslationService>();
@@ -249,31 +359,136 @@ builder.Services.AddHttpClient<ILearningSourceReader, LearningSourceReader>();
         builder.Services.AddScoped<IWorkspaceMapService, WorkspaceMapService>();
         builder.Services.AddScoped<IProjectScaffolder, ProjectScaffolder>();
         builder.Services.AddScoped<IProjectStackValidator, ProjectStackValidator>();
-        builder.Services.AddScoped<IPlannedPatchApplier, PlannedPatchApplier>();
-        builder.Services.AddScoped<IGitDiffService, GitDiffService>();
-        builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
+builder.Services.AddScoped<IPlannedPatchApplier, PlannedPatchApplier>();
+builder.Services.AddScoped<IGitDiffService, GitDiffService>();
+        builder.Services.AddScoped<IGitService, GitService>();
+        builder.Services.AddScoped<ITestRunnerService, TestRunnerService>();
+        builder.Services.AddScoped<ISmokeTestService, SmokeTestService>();
+        builder.Services.AddScoped<IPortDetectionService, PortDetectionService>();
+        builder.Services.Configure<PullRequestOptions>(
+            builder.Configuration.GetSection("Nebula:PullRequest"));
+        builder.Services.Configure<ScreenshotOptions>(
+            builder.Configuration.GetSection("Nebula:Screenshot"));
+        builder.Services.AddScoped<IPullRequestService, PullRequestService>();
+        builder.Services.AddScoped<IMigrationService, MigrationService>();
+        builder.Services.AddScoped<IScreenshotService, ScreenshotService>();
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>();
         builder.Services.AddScoped<WorkspaceMemoryService>();
         builder.Services.AddScoped<IUserMemoryStore, PostgresUserMemoryStore>();
+        builder.Services.AddScoped<ISandboxSettingsStore, PostgresSandboxSettingsStore>();
         builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
         builder.Services.AddScoped<IKnowledgeSearchService, KnowledgeSearchService>();
         builder.Services.AddScoped<IProjectDocumentationIndexer, ProjectDocumentationIndexer>();
         builder.Services.AddScoped<ICommandAllowlistService, CommandAllowlistService>();
         builder.Services.AddScoped<IWorkspaceCategoryPolicyService, WorkspaceCategoryPolicyService>();
-        builder.Services.AddScoped<IPolicySimulator, PolicySimulator>();
+        builder.Services.AddScoped<IPolicySimulator>(provider => new PolicySimulator(
+            provider.GetRequiredService<ICommandIntentParser>(),
+            provider.GetRequiredService<ICommandResolver>(),
+            provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+            provider.GetRequiredService<IOperationKindDetector>(),
+            provider.GetRequiredService<ICommandPolicyEngine>(),
+            provider.GetRequiredService<IOperationPolicyEngine>(),
+            provider.GetRequiredService<ICommandApprovalService>(),
+            provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+            provider.GetRequiredService<NebulaRuntimeSettings>()));
         builder.Services.AddScoped<ICommandApprovalService, CommandApprovalService>();
-        builder.Services.AddScoped<IAgentActionRunner, AgentActionRunner>();
-        builder.Services.AddScoped<IManager, Manager>();
+
+        builder.Services.AddAgentRunProcessing();
+
+        builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner(
+            provider.GetRequiredService<ILlamaClient>(),
+            provider.GetRequiredService<IShellExecutor>(),
+            provider.GetRequiredService<IJsonExtractor>(),
+            provider.GetRequiredService<Agent.ILogger>(),
+            commandRepository: provider.GetRequiredService<ICommandRepository>(),
+            maxRetries:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_RETRIES"),
+                    out var runnerMaxRetries)
+                    ? runnerMaxRetries
+                    : 6,
+            maxSteps:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_STEPS"),
+                    out var runnerMaxSteps)
+                    ? runnerMaxSteps
+                    : 15,
+            commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+            runtimeSettings: provider.GetRequiredService<NebulaRuntimeSettings>(),
+            agentRunStore: provider.GetRequiredService<IAgentRunStore>(),
+    commandIntentParser: provider.GetRequiredService<ICommandIntentParser>(),
+    commandResolver: provider.GetRequiredService<ICommandResolver>(),
+    environmentDetector: provider.GetRequiredService<IRuntimeCommandEnvironmentDetector>(),
+    operationKindDetector: provider.GetRequiredService<IOperationKindDetector>(),
+    scriptContentClassifier: provider.GetRequiredService<IScriptContentSafetyClassifier>(),
+    fileWriteSafetyClassifier: provider.GetRequiredService<IFileWriteSafetyClassifier>(),
+    operationPolicyEngine: provider.GetRequiredService<IOperationPolicyEngine>(),
+    evidenceCollector: provider.GetRequiredService<IExecutionEvidenceCollector>(),
+    learningEngine: provider.GetRequiredService<ILearningEngine>(),
+    knowledgeQueryService: provider.GetRequiredService<IKnowledgeQueryService>(),
+    learningFromExecution: provider.GetRequiredService<ILearningFromExecutionService>(),
+    postTaskLearning: provider.GetRequiredService<IPostTaskLearningService>(),
+    outputVerificationService: provider.GetRequiredService<IOutputVerificationService>(),
+    translationService: provider.GetRequiredService<ITranslationService>(),
+    deterministicVerificationService: provider.GetRequiredService<IDeterministicVerificationService>(),
+    projectTemplateCatalog: provider.GetRequiredService<IProjectTemplateCatalog>(),
+    projectScaffolder: provider.GetRequiredService<IProjectScaffolder>(),
+    projectStackValidator: provider.GetRequiredService<IProjectStackValidator>(),
+    workspaceMapService: provider.GetRequiredService<IWorkspaceMapService>(),
+    plannedPatchApplier: provider.GetRequiredService<IPlannedPatchApplier>(),
+    gitDiffService: provider.GetRequiredService<IGitDiffService>(),
+    commandSandbox: provider.GetRequiredService<ICommandSandbox>(),
+    migrationService: provider.GetRequiredService<IMigrationService>(),
+    approvalService: provider.GetRequiredService<ICommandApprovalService>(),
+    workspaceMemoryService: provider.GetRequiredService<WorkspaceMemoryService>(),
+    commandAllowlistService: provider.GetRequiredService<ICommandAllowlistService>(),
+    workspaceCategoryPolicyService: provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
+    knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
+    projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
+    userMemoryService: provider.GetRequiredService<IUserMemoryService>(),
+    errorFixService: provider.GetService<IErrorFixService>(),
+    environmentValidator: provider.GetService<IEnvironmentValidator>(),
+    portDetectionService: provider.GetService<IPortDetectionService>(),
+    smokeTestService: provider.GetService<ISmokeTestService>(),
+    screenshotService: provider.GetService<IScreenshotService>(),
+    resultValidator: provider.GetService<IResultValidator>()));
+        builder.Services.AddScoped<IManager>(provider => new Manager(
+            provider.GetRequiredService<ILlamaClient>(),
+            provider.GetRequiredService<IShellExecutor>(),
+            provider.GetRequiredService<IJsonExtractor>(),
+            provider.GetRequiredService<Agent.ILogger>(),
+            commandRepository: provider.GetRequiredService<ICommandRepository>(),
+            promptRepository: provider.GetRequiredService<IPromptRequestRepository>(),
+            conversationMemoryRepository: provider.GetRequiredService<IConversationMemoryRepository>(),
+            contextBuilder: provider.GetRequiredService<NebulaContextBuilder>(),
+            maxActionRetries:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_RETRIES"),
+                    out var maxActionRetries)
+                    ? maxActionRetries
+                    : 6,
+            maxActionSteps:
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_MAX_ACTION_STEPS"),
+                    out var maxActionSteps)
+                    ? maxActionSteps
+                    : 15,
+            actionRunner: provider.GetRequiredService<IAgentActionRunner>(),
+            conversationContextService: provider.GetRequiredService<IConversationContextService>(),
+            commandPolicyEngine: provider.GetRequiredService<ICommandPolicyEngine>(),
+            orchestrator: provider.GetRequiredService<IAgentRunOrchestrator>()));
 
         builder.Services.AddCoronaTheming(CoronaThemes.Dark());
 
         var app = builder.Build();
 
-        using (var migrationScope = app.Services.CreateScope())
-        {
-            var postgresContext =
-                migrationScope.ServiceProvider.GetRequiredService<PostgresContext>();
-            PostgresDatabaseInitializer.Initialize(postgresContext);
-        }
+        app.Services
+            .GetRequiredService<MauiDatabaseInitializationService>()
+            .Start();
+
+        var llamaClient = app.Services.GetRequiredService<ILlamaClient>();
+        _ = llamaClient.EnsureInstalledModelSelectedAsync();
 
         return app;
     }

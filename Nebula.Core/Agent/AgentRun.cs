@@ -1,5 +1,6 @@
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
+using Nebula.Core.Interactions;
 
 namespace Nebula.Core.Agent;
 
@@ -18,7 +19,38 @@ public sealed record AgentRun(
     string? CurrentPlan = null,
     IReadOnlyList<AgentArtifactRecord> Artifacts = null!,
     IReadOnlyList<AgentApprovalRecord> Approvals = null!,
-    string? WorkspaceRoot = null);
+    string? WorkspaceRoot = null,
+    InteractionMode Mode = InteractionMode.Agent,
+    IReadOnlyList<ArchitectureComparisonOption> ArchitectureOptions = null!,
+    Guid? ParentRunId = null);
+
+public static class AgentRunStates
+{
+    public const string Running = "Running";
+
+    public static readonly string[] InterruptedCandidates =
+    [
+        Running,
+        "Planning",
+        "Executing",
+        "Retrying",
+        "Observing",
+        "Correcting"
+    ];
+
+    public static bool IsInterruptedCandidate(string? status)
+    {
+        return status is not null
+            && InterruptedCandidates.Contains(status, StringComparer.Ordinal);
+    }
+}
+
+public sealed record ArchitectureComparisonOption(
+    string Name,
+    string[] Pros,
+    string[] Cons,
+    string Recommendation,
+    string Risk);
 
 public sealed record AgentStepRecord(
     Guid Id,
@@ -46,7 +78,8 @@ public sealed record AgentArtifactRecord(
     string Name,
     string? Path,
     string? ContentHash,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    double DiffPercent = 0.0);
 
 public sealed record AgentApprovalRecord(
     Guid Id,
@@ -74,6 +107,21 @@ public interface IAgentRunStore
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<AgentRun>> GetUnfinishedRunsAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AgentRun>> GetInterruptedRunsAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<Guid?> GetRunIdByStepIdAsync(
+        Guid stepId,
+        CancellationToken cancellationToken = default);
+
+    Task<AgentArtifactRecord?> GetArtifactAsync(
+        Guid artifactId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
         Guid conversationId,
         CancellationToken cancellationToken = default);
 }

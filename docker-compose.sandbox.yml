@@ -1,0 +1,44 @@
+services:
+  nebula-sandbox:
+    build:
+      context: .
+      dockerfile: Nebula.Sandbox/Dockerfile
+    container_name: nebula_sandbox
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - ${NEBULA_SANDBOX_SECURITY_OPT:-label=type:container_runtime_t}
+    userns_mode: "${NEBULA_SANDBOX_USERNS_MODE:-keep-id}"
+    user: "${NEBULA_SANDBOX_USER:-1000:1000}"
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8091"
+      HOME: "/tmp"
+      XDG_RUNTIME_DIR: "/tmp"
+      SANDBOX_TOKEN: "${NEBULA_SANDBOX_TOKEN:?defina NEBULA_SANDBOX_TOKEN no .env}"
+      SANDBOX_RUNTIME: "${NEBULA_SANDBOX_RUNTIME:-Podman}"
+      SANDBOX_CONTAINER_TEMP_ROOT: "/tmp"
+      SANDBOX_HOST_TEMP_ROOT: "${HOME}/nebula-tmp"
+      CONTAINER_HOST: "unix:///run/podman/podman.sock"
+      DOCKER_HOST: "unix:///run/podman/podman.sock"
+      SANDBOX_MAX_TIMEOUT_SECONDS: "300"
+    volumes:
+      - ${HOME}/nebula-tmp:/tmp:z
+      - ${NEBULA_SANDBOX_SOCKET:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  nebula-web:
+    depends_on:
+      nebula-sandbox:
+        condition: service_healthy
+    environment:
+      Nebula__Sandbox__Mode: "Docker"
+      Nebula__Sandbox__SidecarUrl: "http://nebula-sandbox:8091"
+      Nebula__Sandbox__SidecarToken: "${NEBULA_SANDBOX_TOKEN:?defina NEBULA_SANDBOX_TOKEN no .env}"

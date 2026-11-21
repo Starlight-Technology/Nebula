@@ -1,7 +1,9 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+
+using Nebula.Core.Telemetry;
+using Nebula.Llama.Client.Telemetry;
 
 namespace Nebula.Llama.Client;
 
@@ -10,27 +12,41 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
     private const string DefaultContainerName = "ollama";
     private static readonly TimeSpan SnapshotTtl = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan RuntimeModeTtl = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan OllamaStatusTtl = TimeSpan.FromSeconds(5);
 
     private readonly IRuntimeCommandRunner commandRunner;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly string containerName;
     private readonly TimeProvider timeProvider;
+    private readonly IHostHardwareProbe hardwareProbe;
+    private readonly ITelemetrySource? telemetrySource;
+    private readonly ILlamaClient? llamaClient;
 
     private LlamaRuntimeTelemetrySnapshot? cachedSnapshot;
     private DateTimeOffset cachedSnapshotAt;
     private RuntimeModeSnapshot? cachedRuntimeMode;
     private DateTimeOffset cachedRuntimeModeAt;
+    private OllamaStatusSnapshot? cachedOllamaStatus;
+    private DateTimeOffset cachedOllamaStatusAt;
 
     public LlamaRuntimeTelemetryService(
         IRuntimeCommandRunner? commandRunner = null,
         string? containerName = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IHostHardwareProbe? hardwareProbe = null,
+        ITelemetrySource? telemetrySource = null,
+        ILlamaClient? llamaClient = null)
     {
         this.commandRunner = commandRunner ?? new ProcessRuntimeCommandRunner();
         this.containerName = string.IsNullOrWhiteSpace(containerName)
             ? Environment.GetEnvironmentVariable("OLLAMA_CONTAINER_NAME") ?? DefaultContainerName
             : containerName.Trim();
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.hardwareProbe = hardwareProbe ?? new HostHardwareProbe(
+            commandRunner: this.commandRunner,
+            timeProvider: this.timeProvider);
+        this.telemetrySource = telemetrySource;
+        this.llamaClient = llamaClient;
     }
 
     public async Task<LlamaRuntimeTelemetrySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
@@ -64,52 +80,126 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
 
     private async Task<LlamaRuntimeTelemetrySnapshot> BuildSnapshotAsync(CancellationToken cancellationToken)
     {
-        var statsCommand = await commandRunner.RunAsync(
-            "docker",
-            ["stats", "--no-stream", "--format", "{{json .}}", containerName],
-            cancellationToken);
+        var hardware = await GetHardwareSnapshotAsync(cancellationToken);
+        var (dockerStats, dockerError) = await TryGetDockerStatsAsync(cancellationToken);
+        var runtimeMode = dockerStats is null
+            ? null
+            : await GetRuntimeModeAsync(cancellationToken);
+        var ollamaStatus = await GetOllamaStatusAsync(cancellationToken);
 
-        if (!statsCommand.Succeeded || string.IsNullOrWhiteSpace(statsCommand.StandardOutput))
+        var externalOllama = hardware.Ollama;
+        var isOnline = externalOllama?.IsAvailable == true ||
+                       dockerStats is not null ||
+                       ollamaStatus?.IsOnline == true;
+
+        var statusLabel = externalOllama?.StatusLabel;
+        if (string.IsNullOrWhiteSpace(statusLabel))
         {
-            var details = string.IsNullOrWhiteSpace(statsCommand.StandardError)
-                ? statsCommand.StandardOutput.Trim()
-                : statsCommand.StandardError.Trim();
-
-            return new LlamaRuntimeTelemetrySnapshot
-            {
-                IsAvailable = false,
-                ContainerName = containerName,
-                StatusLabel = "Ollama offline",
-                StatusDetail = string.IsNullOrWhiteSpace(details)
-                    ? $"Nao consegui ler o container {containerName} via docker stats."
-                    : details,
-                RuntimeModeLabel = "Runtime indisponivel",
-                RuntimeModeDetail = "O container do Ollama nao respondeu ao docker stats.",
-                LastError = string.IsNullOrWhiteSpace(details) ? null : details,
-                CapturedAt = GetNow()
-            };
+            statusLabel = isOnline ? "Ollama online" : "Ollama offline";
         }
 
-        var stats = ParseDockerStats(statsCommand.StandardOutput);
-        var runtimeMode = await GetRuntimeModeAsync(cancellationToken);
-        var gpuMetric = await GetGpuMetricAsync(runtimeMode, cancellationToken);
+        var statusDetail = BuildStatusDetail(
+            externalOllama,
+            dockerStats,
+            dockerError,
+            ollamaStatus,
+            hardware);
+
+        var cpu = CreateCpuMetric(externalOllama, dockerStats, hardware.Cpu);
+        var memory = CreateMemoryMetric(externalOllama, dockerStats, hardware.Memory);
+        var gpu = CreateGpuMetric(hardware.Gpus) ??
+                  (runtimeMode?.UsesGpu == true
+                      ? await GetGpuMetricAsync(runtimeMode, cancellationToken)
+                      : runtimeMode is not null
+                          ? LlamaRuntimeMetric.Unavailable("Runtime em CPU. Nenhuma GPU foi solicitada.")
+                          : LlamaRuntimeMetric.Unavailable("Nenhuma GPU detectada no host."));
+        var disk = CreateDiskMetric(hardware.Disks);
+        var mode = ResolveRuntimeMode(externalOllama, runtimeMode, hardware);
 
         return new LlamaRuntimeTelemetrySnapshot
         {
-            IsAvailable = true,
-            ContainerName = string.IsNullOrWhiteSpace(stats.Name) ? containerName : stats.Name,
-            StatusLabel = "Ollama online",
-            StatusDetail = $"Container {containerName} ativo. Amostra em {GetNow():HH:mm:ss}.",
-            RuntimeModeLabel = runtimeMode.Label,
-            RuntimeModeDetail = runtimeMode.Detail,
-            Cpu = CreateCpuMetric(stats),
-            Memory = CreateMemoryMetric(stats),
-            Gpu = gpuMetric,
-            CapturedAt = GetNow()
+            IsAvailable = isOnline,
+            StatusLabel = statusLabel,
+            StatusDetail = statusDetail,
+            RuntimeModeLabel = mode.Label,
+            RuntimeModeDetail = mode.Detail,
+            Cpu = cpu,
+            Memory = memory,
+            Gpu = gpu,
+            Disk = disk,
+            Gpus = hardware.Gpus,
+            Hardware = hardware,
+            MetricsSource = ResolveMetricsSource(externalOllama, dockerStats, hardware),
+            ContainerName = externalOllama?.ContainerName ??
+                            (string.IsNullOrWhiteSpace(dockerStats?.Name) ? containerName : dockerStats.Name),
+            CapturedAt = GetNow(),
+            LastError = isOnline ? null : statusDetail
         };
     }
 
-    private async Task<RuntimeModeSnapshot> GetRuntimeModeAsync(CancellationToken cancellationToken)
+    private async Task<HostTelemetrySnapshot> GetHardwareSnapshotAsync(CancellationToken cancellationToken)
+    {
+        if (telemetrySource is not null)
+        {
+            try
+            {
+                var external = await telemetrySource.GetSnapshotAsync(cancellationToken);
+                if (external is not null)
+                {
+                    return external;
+                }
+            }
+            catch
+            {
+                // Sidecar indisponivel: cai para a leitura local.
+            }
+        }
+
+        try
+        {
+            return hardwareProbe.Probe();
+        }
+        catch (Exception ex)
+        {
+            return new HostTelemetrySnapshot
+            {
+                CapturedAt = GetNow(),
+                Source = "local",
+                Warnings = [$"Falha ao ler hardware local: {ex.Message}"]
+            };
+        }
+    }
+
+    private async Task<(DockerStatsSnapshot? Stats, string? Error)> TryGetDockerStatsAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var statsCommand = await commandRunner.RunAsync(
+                "docker",
+                ["stats", "--no-stream", "--format", "{{json .}}", containerName],
+                cancellationToken);
+
+            if (!statsCommand.Succeeded || string.IsNullOrWhiteSpace(statsCommand.StandardOutput))
+            {
+                var details = string.IsNullOrWhiteSpace(statsCommand.StandardError)
+                    ? statsCommand.StandardOutput.Trim()
+                    : statsCommand.StandardError.Trim();
+
+                return (null, string.IsNullOrWhiteSpace(details)
+                    ? $"Nao consegui ler o container {containerName} via docker stats."
+                    : details);
+            }
+
+            return (ParseDockerStats(statsCommand.StandardOutput), null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    private async Task<RuntimeModeSnapshot?> GetRuntimeModeAsync(CancellationToken cancellationToken)
     {
         var now = GetNow();
         if (cachedRuntimeMode is not null && now - cachedRuntimeModeAt < RuntimeModeTtl)
@@ -117,20 +207,59 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
             return cachedRuntimeMode;
         }
 
-        var inspectCommand = await commandRunner.RunAsync(
-            "docker",
-            ["inspect", "--format", "{{json .Config.Env}}", containerName],
-            cancellationToken);
+        try
+        {
+            var inspectCommand = await commandRunner.RunAsync(
+                "docker",
+                ["inspect", "--format", "{{json .Config.Env}}", containerName],
+                cancellationToken);
 
-        cachedRuntimeMode = inspectCommand.Succeeded
-            ? ParseRuntimeMode(inspectCommand.StandardOutput)
-            : RuntimeModeSnapshot.Cpu("Sem dados de ambiente do container; usando CPU como fallback visual.");
+            if (!inspectCommand.Succeeded || string.IsNullOrWhiteSpace(inspectCommand.StandardOutput))
+            {
+                return null;
+            }
 
-        cachedRuntimeModeAt = now;
-        return cachedRuntimeMode;
+            cachedRuntimeMode = ParseRuntimeMode(inspectCommand.StandardOutput);
+            cachedRuntimeModeAt = now;
+            return cachedRuntimeMode;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
-    private async Task<LlamaRuntimeMetric> GetGpuMetricAsync(RuntimeModeSnapshot runtimeMode, CancellationToken cancellationToken)
+    private async Task<OllamaStatusSnapshot?> GetOllamaStatusAsync(CancellationToken cancellationToken)
+    {
+        if (llamaClient is null)
+        {
+            return null;
+        }
+
+        var now = GetNow();
+        if (cachedOllamaStatus is not null && now - cachedOllamaStatusAt < OllamaStatusTtl)
+        {
+            return cachedOllamaStatus;
+        }
+
+        string? version = null;
+        try
+        {
+            version = await llamaClient.GetServerVersionAsync(cancellationToken);
+        }
+        catch
+        {
+            // O status offline e tratado pelo valor nulo.
+        }
+
+        cachedOllamaStatus = new OllamaStatusSnapshot(version is not null, version);
+        cachedOllamaStatusAt = now;
+        return cachedOllamaStatus;
+    }
+
+    private async Task<LlamaRuntimeMetric> GetGpuMetricAsync(
+        RuntimeModeSnapshot runtimeMode,
+        CancellationToken cancellationToken)
     {
         if (!runtimeMode.UsesGpu)
         {
@@ -175,6 +304,234 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
                 "intel" => "Runtime em Intel Vulkan. A telemetria de GPU ainda depende de utilitarios do host e nao foi encontrada nesta maquina.",
                 _ => "A GPU esta habilitada, mas nao consegui um coletor compativel com este host."
             });
+    }
+
+    private static LlamaRuntimeMetric CreateCpuMetric(
+        OllamaContainerTelemetry? externalOllama,
+        DockerStatsSnapshot? dockerStats,
+        HostCpuTelemetry cpu)
+    {
+        if (externalOllama?.CpuPercent is not null)
+        {
+            return new LlamaRuntimeMetric
+            {
+                ShortValue = FormatPercent(externalOllama.CpuPercent),
+                DetailValue = $"CPU do container {externalOllama.ContainerName}: {FormatPercent(externalOllama.CpuPercent)}",
+                Percent = externalOllama.CpuPercent,
+                IsAvailable = true
+            };
+        }
+
+        if (dockerStats?.CpuPercent is not null)
+        {
+            return new LlamaRuntimeMetric
+            {
+                ShortValue = FormatPercent(dockerStats.CpuPercent),
+                DetailValue = $"CPU do container {dockerStats.Name}: {FormatPercent(dockerStats.CpuPercent)}",
+                Percent = dockerStats.CpuPercent,
+                IsAvailable = true
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(cpu.Model) && cpu.LogicalCores == 0)
+        {
+            return LlamaRuntimeMetric.Unavailable("Sem leitura de CPU do host.");
+        }
+
+        return new LlamaRuntimeMetric
+        {
+            ShortValue = FormatPercent(cpu.UsagePercent),
+            DetailValue = $"CPU do host: {cpu.Detail} | uso {FormatPercent(cpu.UsagePercent)}",
+            Percent = cpu.UsagePercent,
+            IsAvailable = true
+        };
+    }
+
+    private static LlamaRuntimeMetric CreateMemoryMetric(
+        OllamaContainerTelemetry? externalOllama,
+        DockerStatsSnapshot? dockerStats,
+        HostMemoryTelemetry memory)
+    {
+        if (externalOllama?.MemoryUsedBytes is not null)
+        {
+            return new LlamaRuntimeMetric
+            {
+                ShortValue = FormatBytes(externalOllama.MemoryUsedBytes),
+                DetailValue = $"Memoria do container {externalOllama.ContainerName}: {FormatBytes(externalOllama.MemoryUsedBytes)}" +
+                              (externalOllama.MemoryLimitBytes is null
+                                  ? string.Empty
+                                  : $" / {FormatBytes(externalOllama.MemoryLimitBytes)} ({FormatPercent(externalOllama.MemoryPercent)})"),
+                Percent = externalOllama.MemoryPercent,
+                IsAvailable = true
+            };
+        }
+
+        if (dockerStats?.MemoryUsedBytes is not null)
+        {
+            return new LlamaRuntimeMetric
+            {
+                ShortValue = FormatBytes(dockerStats.MemoryUsedBytes),
+                DetailValue = dockerStats.MemoryLimitBytes is null
+                    ? $"Memoria do container {dockerStats.Name}: {FormatBytes(dockerStats.MemoryUsedBytes)}"
+                    : $"Memoria do container {dockerStats.Name}: {FormatBytes(dockerStats.MemoryUsedBytes)} / {FormatBytes(dockerStats.MemoryLimitBytes)} ({FormatPercent(dockerStats.MemoryPercent)})",
+                Percent = dockerStats.MemoryPercent,
+                IsAvailable = true
+            };
+        }
+
+        if (memory.TotalBytes <= 0)
+        {
+            return LlamaRuntimeMetric.Unavailable("Sem leitura de memoria do host.");
+        }
+
+        return new LlamaRuntimeMetric
+        {
+            ShortValue = FormatBytes(memory.UsedBytes),
+            DetailValue = $"RAM do host: {memory.Detail}",
+            Percent = memory.UsagePercent,
+            IsAvailable = true
+        };
+    }
+
+    private static LlamaRuntimeMetric? CreateGpuMetric(IReadOnlyList<HostGpuTelemetry> gpus)
+    {
+        var gpu = gpus.FirstOrDefault();
+        if (gpu is null || string.IsNullOrWhiteSpace(gpu.Name))
+        {
+            return null;
+        }
+
+        var hasUsage = gpu.UtilizationPercent is not null ||
+                       gpu.MemoryUsedBytes is not null ||
+                       gpu.MemoryTotalBytes is not null;
+
+        if (!hasUsage)
+        {
+            return new LlamaRuntimeMetric
+            {
+                ShortValue = "detectada",
+                DetailValue = $"{gpu.Name} ({gpu.Vendor}) | uso e VRAM indisponiveis sem coletor da GPU.",
+                Percent = null,
+                IsAvailable = true
+            };
+        }
+
+        var memory = gpu.MemoryUsedBytes is null && gpu.MemoryTotalBytes is null
+            ? string.Empty
+            : $" | {FormatBytes(gpu.MemoryUsedBytes)}" +
+              (gpu.MemoryTotalBytes is null ? string.Empty : $" / {FormatBytes(gpu.MemoryTotalBytes)}");
+
+        return new LlamaRuntimeMetric
+        {
+            ShortValue = $"{FormatPercent(gpu.UtilizationPercent)} | {FormatBytes(gpu.MemoryUsedBytes)}",
+            DetailValue = $"{gpu.Name} | {FormatPercent(gpu.UtilizationPercent)}{memory}",
+            Percent = gpu.UtilizationPercent,
+            IsAvailable = true
+        };
+    }
+
+    private static LlamaRuntimeMetric CreateDiskMetric(IReadOnlyList<HostDiskTelemetry> disks)
+    {
+        var disk = disks.FirstOrDefault();
+        if (disk is null)
+        {
+            return LlamaRuntimeMetric.Unavailable("Sem leitura de disco do host.");
+        }
+
+        return new LlamaRuntimeMetric
+        {
+            ShortValue = FormatPercent(disk.UsagePercent),
+            DetailValue = $"{disk.MountPoint}: {FormatBytes(disk.UsedBytes)} / {FormatBytes(disk.TotalBytes)} ({FormatPercent(disk.UsagePercent)}) | {FormatBytes(disk.FreeBytes)} livres",
+            Percent = disk.UsagePercent,
+            IsAvailable = true
+        };
+    }
+
+    private static RuntimeModeSnapshot ResolveRuntimeMode(
+        OllamaContainerTelemetry? externalOllama,
+        RuntimeModeSnapshot? dockerMode,
+        HostTelemetrySnapshot hardware)
+    {
+        if (externalOllama is not null && !string.IsNullOrWhiteSpace(externalOllama.RuntimeModeLabel))
+        {
+            return new RuntimeModeSnapshot(
+                externalOllama.RuntimeModeLabel,
+                externalOllama.RuntimeModeDetail,
+                externalOllama.Vendor,
+                externalOllama.UsesGpu);
+        }
+
+        if (dockerMode is not null)
+        {
+            return dockerMode;
+        }
+
+        var gpu = hardware.Gpus.FirstOrDefault();
+        if (gpu is not null && !string.IsNullOrWhiteSpace(gpu.Name))
+        {
+            return new RuntimeModeSnapshot(
+                "GPU disponivel",
+                $"{gpu.Name} detectada no host; modo do Ollama nao confirmado sem acesso ao container.",
+                gpu.Vendor,
+                false);
+        }
+
+        return RuntimeModeSnapshot.Cpu("Nenhuma GPU detectada no host.");
+    }
+
+    private static string ResolveMetricsSource(
+        OllamaContainerTelemetry? externalOllama,
+        DockerStatsSnapshot? dockerStats,
+        HostTelemetrySnapshot hardware)
+    {
+        if (externalOllama is not null)
+        {
+            return "sidecar+container";
+        }
+
+        if (dockerStats is not null)
+        {
+            return "container";
+        }
+
+        return hardware.Source;
+    }
+
+    private static string BuildStatusDetail(
+        OllamaContainerTelemetry? externalOllama,
+        DockerStatsSnapshot? dockerStats,
+        string? dockerError,
+        OllamaStatusSnapshot? ollamaStatus,
+        HostTelemetrySnapshot hardware)
+    {
+        if (externalOllama is not null)
+        {
+            return externalOllama.StatusDetail;
+        }
+
+        if (dockerStats is not null)
+        {
+            return $"Container {dockerStats.Name} ativo. Amostra em {DateTimeOffset.UtcNow:HH:mm:ss}.";
+        }
+
+        if (ollamaStatus?.IsOnline == true)
+        {
+            var detail = "Ollama respondeu na API HTTP.";
+            if (!string.IsNullOrWhiteSpace(dockerError))
+            {
+                detail += $" Metricas do container indisponiveis ({dockerError}); exibindo hardware do host.";
+            }
+            else if (hardware.Source.Equals("sidecar", StringComparison.OrdinalIgnoreCase))
+            {
+                detail += " Hardware coletado pelo sidecar.";
+            }
+
+            return detail;
+        }
+
+        return string.IsNullOrWhiteSpace(dockerError)
+            ? "Nao consegui falar com o Ollama nem ler o container."
+            : $"Ollama offline: {dockerError}";
     }
 
     private static RuntimeModeSnapshot ParseRuntimeMode(string output)
@@ -336,39 +693,6 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
             entries.Sum(entry => entry.MemoryTotalBytes));
     }
 
-    private static LlamaRuntimeMetric CreateCpuMetric(DockerStatsSnapshot stats)
-    {
-        return stats.CpuPercent is null
-            ? LlamaRuntimeMetric.Unavailable("O docker stats nao retornou CPU%.")
-            : new LlamaRuntimeMetric
-            {
-                ShortValue = FormatPercent(stats.CpuPercent.Value),
-                DetailValue = $"CPU do container {stats.Name}: {FormatPercent(stats.CpuPercent.Value)}",
-                Percent = stats.CpuPercent,
-                IsAvailable = true
-            };
-    }
-
-    private static LlamaRuntimeMetric CreateMemoryMetric(DockerStatsSnapshot stats)
-    {
-        if (stats.MemoryUsedBytes is null)
-        {
-            return LlamaRuntimeMetric.Unavailable("O docker stats nao retornou uso de memoria.");
-        }
-
-        var detail = stats.MemoryLimitBytes is null
-            ? $"Memoria do container {stats.Name}: {FormatBytes(stats.MemoryUsedBytes.Value)}"
-            : $"Memoria do container {stats.Name}: {FormatBytes(stats.MemoryUsedBytes.Value)} / {FormatBytes(stats.MemoryLimitBytes.Value)} ({FormatPercent(stats.MemoryPercent)})";
-
-        return new LlamaRuntimeMetric
-        {
-            ShortValue = FormatBytes(stats.MemoryUsedBytes.Value),
-            DetailValue = detail,
-            Percent = stats.MemoryPercent,
-            IsAvailable = true
-        };
-    }
-
     private DateTimeOffset GetNow() => timeProvider.GetUtcNow();
 
     private static double? ParsePercent(string value)
@@ -444,56 +768,16 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
         return string.Create(CultureInfo.InvariantCulture, $"{bytes.Value:0} B");
     }
 
+    private static string FormatBytes(long? bytes)
+    {
+        return FormatBytes(bytes is null ? null : (double?)bytes.Value);
+    }
+
     private static string FormatPercent(double? value)
     {
         return value is null
             ? "--"
             : string.Create(CultureInfo.InvariantCulture, $"{value.Value:0.#}%");
-    }
-
-    private sealed class ProcessRuntimeCommandRunner : IRuntimeCommandRunner
-    {
-        public async Task<RuntimeCommandResult> RunAsync(
-            string fileName,
-            IReadOnlyList<string> arguments,
-            CancellationToken cancellationToken = default)
-        {
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = fileName,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
-            }
-
-            try
-            {
-                process.Start();
-            }
-            catch (Exception ex)
-            {
-                return new RuntimeCommandResult(-1, string.Empty, ex.Message);
-            }
-
-            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-
-            await process.WaitForExitAsync(cancellationToken);
-
-            return new RuntimeCommandResult(
-                process.ExitCode,
-                await stdout,
-                await stderr);
-        }
     }
 
     private sealed class DockerStatsRow
@@ -532,4 +816,6 @@ public sealed class LlamaRuntimeTelemetryService : ILlamaRuntimeTelemetryService
     }
 
     private sealed record NvidaHostSnapshot(string Name, double UtilizationPercent, double MemoryUsedBytes, double MemoryTotalBytes);
+
+    private sealed record OllamaStatusSnapshot(bool IsOnline, string? Version);
 }

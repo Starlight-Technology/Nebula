@@ -147,6 +147,97 @@ public sealed class CommandResolverTest
         Assert.Contains(expectedCommand, resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void list_files_in_current_directory_is_not_mapped_to_pwd()
+    {
+        var environment = new RuntimeCommandEnvironment(
+            OperatingSystemKind.Linux,
+            ShellKind.Bash,
+            "/workspace");
+        var request = parser.Parse(
+            "Liste os arquivos do diretorio atual.",
+            "ls",
+            environment.WorkingDirectory);
+
+        var resolved = resolver.Resolve(request, environment);
+
+        Assert.Contains("ls -la", resolved.DisplayCommand);
+        Assert.DoesNotContain("pwd", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("atual", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void list_files_command_with_trailing_flag_is_not_treated_as_path()
+    {
+        var environment = new RuntimeCommandEnvironment(
+            OperatingSystemKind.Linux,
+            ShellKind.Bash,
+            "/workspace");
+        var request = parser.Parse(
+            "Liste os arquivos do diretorio atual.",
+            "ls -la",
+            environment.WorkingDirectory);
+
+        var resolved = resolver.Resolve(request, environment);
+
+        Assert.Contains("ls -la", resolved.DisplayCommand);
+        Assert.DoesNotContain("\"-la\"", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("-la -la", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void shell_wrapped_list_command_is_unwrapped_before_listing_targets()
+    {
+        var environment = new RuntimeCommandEnvironment(
+            OperatingSystemKind.Linux,
+            ShellKind.Bash,
+            "/workspace");
+        var request = parser.Parse(
+            "Liste os arquivos do diretorio atual.",
+            "/bin/bash -c \"ls -la\"",
+            environment.WorkingDirectory);
+
+        var resolved = resolver.Resolve(request, environment);
+
+        Assert.Equal("ls -la", request.RawCommand);
+        Assert.Contains("ls -la", resolved.DisplayCommand);
+        Assert.DoesNotContain("\"/bin/bash\"", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("/workspace", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void shell_wrapped_command_on_windows_is_unwrapped()
+    {
+        var environment = new RuntimeCommandEnvironment(
+            OperatingSystemKind.Windows,
+            ShellKind.PowerShell,
+            @"C:\workspace");
+        var request = parser.Parse(
+            "Liste os arquivos.",
+            "powershell -Command \"dir\"",
+            environment.WorkingDirectory);
+
+        Assert.Equal("dir", request.RawCommand);
+    }
+
+    [Fact]
+    public void create_folder_in_current_directory_is_not_mapped_to_pwd()
+    {
+        var environment = new RuntimeCommandEnvironment(
+            OperatingSystemKind.Linux,
+            ShellKind.Bash,
+            "/workspace");
+        var request = parser.Parse(
+            "Crie uma pasta chamada NebulaSandbox no diretorio atual.",
+            "mkdir NebulaSandbox",
+            environment.WorkingDirectory);
+
+        var resolved = resolver.Resolve(request, environment);
+
+        Assert.Contains("mkdir", resolved.DisplayCommand);
+        Assert.DoesNotContain("pwd", resolved.DisplayCommand, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static RuntimeCommandEnvironment WindowsPowerShell() =>
         new(
             OperatingSystemKind.Windows,

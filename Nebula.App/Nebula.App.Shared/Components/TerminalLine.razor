@@ -1,0 +1,203 @@
+@using Microsoft.JSInterop
+
+<div class="nebula-terminal-line @GetLineClass()">
+    @if (ShowTimestamp)
+    {
+        <span class="nebula-terminal-line__timestamp">@Line.Timestamp.ToString("HH:mm:ss")</span>
+    }
+
+    @if (Line.IsCommand)
+    {
+        <span class="nebula-terminal-line__prompt">$ </span>
+        <span class="nebula-terminal-line__command">@Line.Text</span>
+    }
+    else
+    {
+        @if (Line.IsError)
+        {
+            <span class="nebula-terminal-line__prompt">! </span>
+        }
+        else
+        {
+            <span class="nebula-terminal-line__prompt">> </span>
+        }
+        @if (AnsiColorsEnabled)
+        {
+            @RenderAnsiLine(Line.Text)
+        }
+        else
+        {
+            <span class="@(Line.IsError ? "nebula-terminal-line__error" : "nebula-terminal-line__output")">@Line.Text</span>
+        }
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Line.CommandId) && CanCopy)
+    {
+        <CoronaButton Variant="CoronaButtonVariant.Text"
+                      Size="CoronaComponentSize.Small"
+                      Icon="@CoronaIcons.Copy"
+                      Class="nebula-terminal-line__copy"
+                      OnClick="CopyLine"
+                      Title="Copiar linha">
+        </CoronaButton>
+    }
+</div>
+
+@code {
+    [Parameter] public TerminalOutput.TerminalLineData Line { get; set; } = default!;
+    [Parameter] public bool ShowTimestamp { get; set; } = false;
+    [Parameter] public bool AnsiColorsEnabled { get; set; } = true;
+    [Parameter] public bool CanCopy { get; set; } = true;
+
+    private string GetLineClass()
+    {
+        var classes = new List<string>();
+        if (Line.IsError) classes.Add("nebula-terminal-line--error");
+        if (Line.IsCommand) classes.Add("nebula-terminal-line--command");
+        return string.Join(" ", classes);
+    }
+
+    private RenderFragment RenderAnsiLine(string text)
+    {
+        return builder =>
+        {
+            var segments = ParseAnsi(text);
+            int index = 0;
+            foreach (var segment in segments)
+            {
+                builder.OpenElement(index++, "span");
+                if (!string.IsNullOrWhiteSpace(segment.Style))
+                {
+                    builder.AddAttribute(index++, "style", segment.Style);
+                }
+                builder.AddContent(index++, segment.Text);
+                builder.CloseElement();
+            }
+        };
+    }
+
+    private List<AnsiSegment> ParseAnsi(string text)
+    {
+        var segments = new List<AnsiSegment>();
+        var currentText = new System.Text.StringBuilder();
+        var currentStyle = string.Empty;
+
+        var ansiRegex = new System.Text.RegularExpressions.Regex(@"\x1b\[([0-9;]*)m");
+        int lastIndex = 0;
+
+        foreach (System.Text.RegularExpressions.Match match in ansiRegex.Matches(text))
+        {
+            if (match.Index > lastIndex)
+            {
+                currentText.Append(text.Substring(lastIndex, match.Index - lastIndex));
+            }
+
+            if (currentText.Length > 0)
+            {
+                segments.Add(new AnsiSegment { Text = currentText.ToString(), Style = currentStyle });
+                currentText.Clear();
+            }
+
+            var codes = match.Groups[1].Value.Split(';');
+            currentStyle = BuildStyle(codes);
+            lastIndex = match.Index + match.Length;
+        }
+
+        if (lastIndex < text.Length)
+        {
+            currentText.Append(text.Substring(lastIndex));
+        }
+
+        if (currentText.Length > 0)
+        {
+            segments.Add(new AnsiSegment { Text = currentText.ToString(), Style = currentStyle });
+        }
+
+        if (segments.Count == 0)
+        {
+            segments.Add(new AnsiSegment { Text = text, Style = string.Empty });
+        }
+
+        return segments;
+    }
+
+    private string BuildStyle(string[] codes)
+    {
+        var styles = new List<string>();
+
+        foreach (var code in codes)
+        {
+            if (int.TryParse(code, out var c))
+            {
+                styles.AddRange(GetAnsiStyle(c));
+            }
+        }
+
+        return string.Join("; ", styles);
+    }
+
+    private IEnumerable<string> GetAnsiStyle(int code)
+    {
+        return code switch
+        {
+            0 => ["color: var(--nebula-text); font-weight: normal; text-decoration: none"], // Reset
+            1 => ["font-weight: bold"],
+            2 => ["opacity: 0.7"],
+            3 => ["font-style: italic"],
+            4 => ["text-decoration: underline"],
+            7 => ["filter: invert(1)"],
+            9 => ["text-decoration: line-through"],
+            22 => ["font-weight: normal"],
+            23 => ["font-style: normal"],
+            24 => ["text-decoration: none"],
+            27 => ["filter: none"],
+            29 => ["text-decoration: none"],
+            30 => ["color: #1e1e1e"],
+            31 => ["color: #ff6b6b"], // Red
+            32 => ["color: #6bff6b"], // Green
+            33 => ["color: #ffd76b"], // Yellow
+            34 => ["color: #6bb3ff"], // Blue
+            35 => ["color: #d76bff"], // Magenta
+            36 => ["color: #6bffff"], // Cyan
+            37 => ["color: #f4f0e8"], // White
+            90 => ["color: #8f9a9a"], // Bright black (gray)
+            91 => ["color: #ff8b8b"], // Bright red
+            92 => ["color: #8bff8b"], // Bright green
+            93 => ["color: #fff78b"], // Bright yellow
+            94 => ["color: #8bc3ff"], // Bright blue
+            95 => ["color: #f78bff"], // Bright magenta
+            96 => ["color: #8bffff"], // Bright cyan
+            97 => ["color: #ffffff"], // Bright white
+            40 => ["background-color: #1e1e1e"],
+            41 => ["background-color: #3d1e1e"],
+            42 => ["background-color: #1e3d1e"],
+            43 => ["background-color: #3d3d1e"],
+            44 => ["background-color: #1e2d3d"],
+            45 => ["background-color: #3d1e3d"],
+            46 => ["background-color: #1e3d3d"],
+            47 => ["background-color: #f4f0e8"],
+            100 => ["background-color: #3d3d3d"],
+            101 => ["background-color: #5d2e2e"],
+            102 => ["background-color: #2e5d2e"],
+            103 => ["background-color: #5d5d2e"],
+            104 => ["background-color: #2e3d5d"],
+            105 => ["background-color: #5d2e5d"],
+            106 => ["background-color: #2e5d5d"],
+            107 => ["background-color: #ffffff"],
+            _ => []
+        };
+    }
+
+    private async Task CopyLine()
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Line.Text);
+    }
+
+    private class AnsiSegment
+    {
+        public string Text { get; set; } = string.Empty;
+        public string Style { get; set; } = string.Empty;
+    }
+
+    [Inject] public IJSRuntime JSRuntime { get; set; } = default!;
+}

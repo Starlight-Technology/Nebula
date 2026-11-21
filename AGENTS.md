@@ -1,6 +1,7 @@
 # AGENTS.md - Nebula Repository Guide
 
-Last verified: 2026-06-22.
+Last verified: 2026-11-14 (agent tool catalog and full solution build/tests
+re-run) on integration branch `reconcile/b-into-a-20261025`.
 
 This guide is for coding agents working in the Nebula repository. It is based on
 the current code, project files, docs, tests, Docker files, and local validation
@@ -66,7 +67,8 @@ Use these categories when describing Nebula:
 | Shell command execution | Implemented | `ShellExecutor`, `CommandResolver`, `RuntimeCommandEnvironmentDetector`, `InteractivePromptDetector` (encerra comandos que esperam input manual com mensagem clara e exit code -1), command tests. |
 | File read/write operations | Implemented | `OperationKind.FileRead`, `OperationKind.FileWrite`, `ExecuteFileReadAsync`, `ExecuteFileWriteAsync`, operation safety tests. |
 | Script content and script execution | Implemented with safety limits | `OperationKind.ScriptContent`, `OperationKind.ScriptExecution`, `ScriptContentSafetyClassifier`, `SessionArtifactPolicy`. |
-| Human approval | Partial | UI can approve pending terminal/script commands; `AskApproval` exists. Approval scope is narrow and not a durable approval workflow. |
+| Human approval | Implemented | UI approves pending terminal/script/file/patch actions with a scope selector; the approved action continues as a new run (`RunApprovedCommandAsync`) without another LLM decision, and `ParentRunId` links it to the originating run. The CLI approval loop handles continuation prompts (max 10 rounds per turn). Approval records persist in `agent_approvals`. |
+| Approved-action continuation | Implemented | `AgentRunOrchestrator.RunApprovedCommandAsync` replays the approved action without calling the LLM; `IAgentRunStore.GetRunIdByStepIdAsync` resolves the originating run and `AgentActionRunRequest.ParentRunId` is persisted in `agent_runs.ParentRunId` (migration `add_agent_run_parent_run_id`). Resumed runs also link to the resumed run. UI history shows a parent link. |
 | Approval override service | Implemented | `ICommandApprovalService`/`CommandApprovalService` (`ApprovalOverrideSource` None/Manual/Conversation/Workspace/Category/Auto, `ApprovalOverrideInput`, `ApprovalScope` Once/Conversation/Workspace/Category, `EvaluateOverride` com precedencia Manual > Conversation > Categoria > Auto); `ApprovalOverrideResult.CanProceed`; overridable kinds sao `TerminalCommand`, `ScriptExecution`, `FileRead`; categorias via `CategorizeIntent` (package-install, network-access, privileged-operation, destructive-operation, data-exfiltration, read-only, write-local, execute-local, blocked, needs-approval); normalizacao de comando compartilhada `CommandNormalization.Normalize` (lowercase + espacos colapsados). |
 | Granular approval scope | Implemented | `ApprovalScope` no `AgentApprovedAction` + select na UI (Once/Conversation/Workspace/Category): Once aprova so a acao; Conversation rastreia comandos por conversa em memoria no `Manager` (`approvedCommandsByConversation` -> `ConversationApprovedCommands` no request -> `AgentActionSession.ApprovedCommandsForConversation`); Workspace salva o comando na allowlist do workspace (mesma persistencia/`AddAsync` do allowlist) e nota "Aprovado manualmente e salvo na allowlist deste workspace."; Category adiciona a categoria as categorias auto-aprovadas DO workspace (`IWorkspaceCategoryPolicyService`), nao global, e nota "Aprovado manualmente; a categoria 'x' agora e auto-aprovada neste workspace.". |
 | Per-workspace auto-approve categories | Implemented | `IWorkspaceCategoryPolicyService`/`WorkspaceCategoryPolicyService` (categorias auto-aprovadas por workspace, kind `WorkspaceMemoryKind.AutoApprovedCategory` na tabela `workspace_memory`, normalizacao `CommandNormalization.Normalize`, `AddAsync` idempotente); no runner (`AgentActionRunner.TryApplyApprovalOverrideAsync`) as categorias do workspace sao carregadas (`ListAsync`) e combinadas com as globais (`NebulaRuntimeSettings.AutoApproveCategories`) na avaliacao do override (`ApprovalOverrideInput.WorkspaceAutoApproveCategories`, check unificado no `CommandApprovalService.EvaluateOverride`); registro via DI nas 3 raizes (`AddScoped`); UI: campo em `Settings.razor` + `NebulaWorkspaceState.LoadWorkspaceCategoriesAsync`/`AddWorkspaceCategoryAsync`. |
@@ -83,9 +85,12 @@ Use these categories when describing Nebula:
 | Deterministic command safety | Implemented | `DeterministicCommandClassifier`, `CommandPolicyEngine`, `OperationPolicyEngine`, safety matrix tests. |
 | ML.NET command safety classifier | Implemented as advisory | `MlNetCommandClassifier`, `CommandSafetyTrainer`, `PostgresMlModelStore`. ML never authorizes execution by itself. |
 | PostgreSQL persistence | Implemented | `PostgresContext`, EF migrations, stores for prompts, conversations, commands, knowledge, fetched pages, ML artifacts. |
+| Graceful MAUI Postgres initialization | Implemented | `MauiDatabaseInitializationService` starts migrations in the background after `builder.Build()`; `DatabaseInitializationRetry` retries with exponential backoff (fresh scope per attempt); `DatabaseInitializationState` drives a banner and manual retry in `MainLayout`; retry/state tests cover success, exhaustion, delay cap, cancellation, and state transitions. The `net10.0-android` build is validated; manual banner/retry validation on an emulator/device remains pending. |
 | MongoDB persistence | Legacy/complementary | Mongo prompt/conversation stores exist and are conditionally registered after a ping. PostgreSQL is the durable primary path in current app setup. |
 | Conversation history/context | Implemented | `ConversationContextService`, `NebulaContextBuilder`, conversation state/message repositories. |
-| Persistent agent run/task session store | Implemented | `AgentRun`/`AgentStepRecord`/`AgentArtifactRecord`/`AgentApprovalRecord` + `IAgentRunStore`/`PostgresAgentRunStore` (tables `agent_runs`, `agent_step_records`, `agent_artifacts`, `agent_approvals`), checkpoints no meio do loop, `GetUnfinishedRunsAsync`; `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) restaurado em `Manager.ResumeTaskAsync`. |
+| Persistent agent run/task session store | Implemented | `AgentRun`/`AgentStepRecord`/`AgentArtifactRecord`/`AgentApprovalRecord` + `IAgentRunStore`/`PostgresAgentRunStore` (tables `agent_runs`, `agent_step_records`, `agent_artifacts`, `agent_approvals`), checkpoints no meio do loop, `GetUnfinishedRunsAsync`, `GetInterruptedRunsAsync`, `GetRunIdByStepIdAsync`; `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) restaurado em `Manager.ResumeTaskAsync`; `agent_runs.ParentRunId` (migração `add_agent_run_parent_run_id`) liga continuacoes ao run de origem. Falhas e cancelamentos do `AgentRunBackgroundService` agora persistem `Status` `Failed`/`Cancelled` + `FinishedAt`/`Response`, e o startup reconcilia runs ativos interrompidos (`Running`, `Planning`, `Executing`, `Retrying`, `Observing`, `Correcting`) com janela de 30 s para evitar corrida com runs recem-criados; `AwaitingApproval`/`Blocked` sao preservados. |
+| Placeholder script rejection | Implemented | `PlannedPatchContentValidator` rejeita conteúdo claramente placeholder em arquivos de código (ex.: `HTML and JS code for calculator`) tanto em `FileWrite`/`ScriptContent` quanto em `PlannedPatch`; o prompt do planner proíbe `echo`/`cat`/redirecionamento para criar arquivos e exige conteúdo real completo. |
+| LLM model load diagnostics | Implemented | `LlamaClient` consulta `/api/ps`; quando o modelo pedido não está carregado, faz um warm-up minimo (`num_predict=1`) limitado por `LlmLoadTimeoutSeconds` (default 180) para falhar rápido e com mensagem clara se o Ollama não conseguir carregar (ex.: `nemotron-3.5-lightning`). Se o modelo já está carregado, a requisição real usa apenas `LlmTimeoutSeconds` (default 300), evitando cortar prompts grandes durante o processamento. Também reconhece corpos de falha como `timed out waiting for llama-server`/`out of memory`. |
 | Learning from local/user sources | Implemented | `LearningEngine`, `LearningOrchestrator`, `LearningSourceReader`, knowledge tests. |
 | RAG no Chat mode | Implemented | `ConversationContextService.AugmentWithKnowledgeAsync` injeta conhecimento armazenado (`IKnowledgeQueryService.AnswerAsync`) no `ModelPrompt` do Chat como bloco `[knowledge]` (max 3000 chars, truncado), somente em `InteractionMode.Chat`; log `[CHAT] Injected ...`; falha nao fatal volta ao prompt original. |
 | LLM como extractor no path padrao | Implemented | `IKnowledgeExtractor` nos 3 roots e registrado como `LlamaKnowledgeExtractor` (via DI factory) com `fallbackExtractor: new KnowledgeExtractor()` deterministico; se o LLM falhar (offline, JSON invalido) cai no fallback determinístico. |
@@ -95,18 +100,40 @@ Use these categories when describing Nebula:
 | Aprendizado pos-tarefa via sintese LLM | Implemented | `IPostTaskLearningService`/`PostTaskLearningService` (`Nebula.Agent/Application/PostTaskLearningService.cs`): apos `session.Complete` no `RunCoreAsync`, hook `TryLearnFromPostTaskAsync` monta `PostTaskRunSnapshot` (comandos bem-sucedidos + artefatos criados), sintetiza resumo com o LLM (`LlamaKnowledgeExtractor`-style, com fallback deterministico) e persiste `KnowledgeItem` Kind `Procedure` (tags `task-summary,post-task,auto-learned`) via `IKnowledgeStore.SaveAsync`; hook nao-fatal (try/catch). |
 | Revalidacao de conhecimento antigo | Implemented | `KnowledgeQueryService` (default offset de 90 dias via `stalenessThreshold`): `AnswerForAutomationAsync` exclui itens stale (`LastSeenAt` antigo) e avisa que existem itens desatualizados; `AnswerAsync` (Chat) mantem itens stale mas adiciona linha "Alerta: conhecimento desatualizado"; teste em `KnowledgeAutomationLearningTest`. |
 | Automation policy ligada | Implemented | `IKnowledgeAutomationPolicy`/`KnowledgeAutomationPolicy` agora e consultada: `IKnowledgeQueryService.AnswerForAutomationAsync` filtra por `CanUseAutomatically` (FinalScore >= 0.75, nao-dangerous) e `AgentActionRunner.QueryRelevantKnowledgeAsync` usa essa rota para injetar conhecimento automatico no planner do Agent. |
+| Result validation, environment checks, and error recovery | Implemented | `ResultValidator` valida evidencias com o LLM e pode propor uma acao corretiva; ela entra no retry normal da sessao com `RequiresSafetyReview=true`, portanto continua sujeita aos classificadores e politicas. `EnvironmentValidator` fornece avisos advisory antes da execucao, controlado por `Nebula:EnableEnvironmentValidation`. `ErrorFixService` agrega estrategias do workspace, conhecimento e sugestoes deterministicas. As validacoes podem ser desligadas por `Nebula:EnableResultValidation` e `Nebula:EnableEnvironmentValidation`; `MaxConsecutiveErrorRetries` limita repeticoes do mesmo erro. |
 | Web research | Implemented | Direct docs, SearXNG, Bing HTML, Brave optional, configurable/free providers. |
 | Safe experiment runner | Partial | `ISafeExperimentRunner` and `SafeExperimentRunner` exist, but the current learning orchestrator records source-only experiments instead of invoking it. |
-| Project templates/scaffolding | Implemented | `IProjectTemplateCatalog`/`ProjectTemplateCatalog` (dotnet-console, dotnet-api, python-script, python-package, node-cli), `IProjectScaffolder`/`ProjectScaffolder` (raiz restrita a workspace/temp), `OperationKind.ProjectScaffold` + `AgentToolAction.TemplateId` + JSON schema, dispatch em `ExecuteProjectScaffoldAsync`. |
+| Project templates/scaffolding | Implemented | `IProjectTemplateCatalog`/`ProjectTemplateCatalog` (dotnet-console, dotnet-api, python-script, python-package, node-cli), `IProjectScaffolder`/`ProjectScaffolder` (raiz restrita a workspace/temp), `OperationKind.ProjectScaffold` + `AgentToolAction.TemplateId` + JSON schema, dispatch em `ExecuteProjectScaffoldAsync`; `AgentActionRunner.ValidateProjectScaffoldIntent` rejeita scaffold quando o pedido nomeia arquivos, pede HTML/CSS/JS/frontend, usa template desconhecido ou escolhe stack incompatível com o pedido. |
 | Workspace map | Implemented | `IWorkspaceMapService`/`WorkspaceMapService` indexa arquivos, modulos, testes, dependencias e comandos conhecidos; `BuildSummary` injetado no decision prompt; `IProjectStackValidator` valida arquivos essenciais por template. |
-| Reference workspace | Implemented | `ReferenceWorkspace.Resolve` (`Nebula.Core/Projects/ReferenceWorkspace.cs`) define a pasta do projeto em que o agente trabalha: caminho explicito e criado quando faltar (mesmo vazio) ou workspace novo vazio em `%TEMP%/nebula-workspace` quando nada for especificado; `NebulaRuntimeSettings.WorkspaceRoot` (config `Nebula:WorkspaceRoot`, env `NEBULA_WORKSPACE_ROOT`) → `UserMessage.WorkspaceRoot` → `ConversationRequest` → `AgentActionRunRequest.WorkspaceRoot` → `AgentActionSession.WorkspaceRoot`; o runner usa o workspace resolvido no lugar de `Environment.CurrentDirectory` (detecção de operação, ambiente, `ResolveSessionWorkingDirectory`, workspace map/memory no decision prompt); `AgentRun.WorkspaceRoot` persistido em `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) e restaurado em `Manager.ResumeTaskAsync`; UI: campo em `Settings.razor` + `QuickSettings.WorkspaceRoot` persistido em `nebula.quick-settings.v1` + `WorkspaceState.ResolvedWorkspace`. |
-| Multi-file planned patches | Implemented | `OperationKind.PlannedPatch` + `AgentToolAction.PlannedFiles` (`plannedFiles` [{path, content}] no JSON de decisao), `IPlannedPatchApplier`/`PlannedPatchApplier` (raiz restrita a workspace/temp, arquivos relativos ao target, path traversal bloqueado), classificacao agregada por arquivo (`FileWriteSafetyClassifier`); extensao de script ou arquivo fora das raizes pedem aprovacao antes de aplicar (revisao visivel nas Notes do card). |
+| Reference workspace | Implemented | `ReferenceWorkspace.Resolve` (`Nebula.Core/Projects/ReferenceWorkspace.cs`) define a pasta do projeto em que o agente trabalha: caminho explicito e criado quando faltar (mesmo vazio) ou workspace novo vazio em `%TEMP%/nebula-workspace/<conversationId>` quando nada for especificado (raiz explicita e usada como esta); `NebulaRuntimeSettings.WorkspaceRoot` (config `Nebula:WorkspaceRoot`, env `NEBULA_WORKSPACE_ROOT`) → `UserMessage.WorkspaceRoot` → `ConversationRequest` → `AgentActionRunRequest.WorkspaceRoot` → `AgentActionSession.WorkspaceRoot`; o runner usa o workspace resolvido no lugar de `Environment.CurrentDirectory` (detecção de operação, ambiente, `ResolveSessionWorkingDirectory`, workspace map/memory no decision prompt); `AgentRun.WorkspaceRoot` persistido em `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) e restaurado em `Manager.ResumeTaskAsync`; UI: campo em `Settings.razor` + `QuickSettings.WorkspaceRoot` persistido em `nebula.quick-settings.v1` + `WorkspaceState.ResolvedWorkspace`. |
+| Action path validation | Implemented | `AgentActionRunner.ValidateDecision` rejects control characters in `targetPath`/`workingDirectory`/`PlannedFiles[].RelativePath`, normalizes Windows-style relative separators (`NormalizePathSeparators`), and rejects drive-rooted relative paths; `PlannedPatchApplier` applies the same checks and never falls back to the process cwd when a target is invalid. |
+| Database migrations with explicit approval | Implemented | `OperationKind.Migration` + `AgentToolAction.MigrationAction/MigrationFramework/MigrationName/MigrationContext`; `AgentActionRunner.ExecuteMigrationAsync` runs `Create`/`Apply` only after a manual `AgentApprovedAction` (scope forced to `Once`) and never through auto-approve, allowlist, conversation or category scopes; `List` is read-only and allowed. `MigrationService` supports EF Core and Node.js, validates names/contexts, and `DryRun` returns the planned command without executing. See `Nebula.Agent/Infrastructure/MigrationService.cs` and `Nebula.Core/Agent/MigrationContracts.cs`. |
+| Multi-file planned patches | Implemented | `OperationKind.PlannedPatch` + `AgentToolAction.PlannedFiles` (`plannedFiles` [{path, content}] no JSON de decisao), `IPlannedPatchApplier`/`PlannedPatchApplier` (raiz restrita a workspace/temp, arquivos relativos ao target, path traversal bloqueado, sem fallback para o cwd em caminho invalido), validacao de conteudo (`PlannedPatchContentValidator`) e classificacao agregada por arquivo (`FileWriteSafetyClassifier`); extensao de script ou arquivo fora das raizes pedem aprovacao antes de aplicar (revisao visivel nas Notes do card). |
+| Agent tool catalog | Implemented | `IAgentToolRegistry`/`AgentToolRegistry` define `read`, `write`, `edit`, `patch`, `shell`, `scaffold`, `migration`, `glob` e `grep`; `AgentToolAction.Tool` (opcional) e validado no `ValidateDecision`, mapeado para o `OperationKind` compativel e o schema/prompt listam as ferramentas. `edit` faz substituicao exata e unica e reusa o pipeline de `FileWrite` (inclusive aprovacao/replay); `glob`/`grep` sao buscas read-only limitadas ao workspace, ignoram `bin`/`obj`/`node_modules`/`.git` e aplicam limites de arquivos/tamanho/resultados. Native tool calling e `toolCalls` multi-acao ainda nao existem. |
 | Self-programming loop (DoD, lint/format, timeouts, diff review, overwrite guard, repair loop) | Implemented | `RequireDeterministicVerification` (gate no `VerifyCompletionDeterministicallyAsync`), `WorkspaceStack.LintCommand` (`.NET` `dotnet format --verify-no-changes --no-restore`; Node `npm run lint` quando o script existe; falha reprova o DoD e `dotnet format` e permitido pela policy para corrigir), `CommandTimeoutSeconds`/`ScriptTimeoutSeconds` (`CreateToolCancellationToken` com falha clara e retry), `IGitDiffService`/`GitDiffService` (read-only: `rev-parse`, `diff --name-only`, `diff --stat`) com secoes de diff e aviso de alteracoes fora da acao no `FinalReport`, `ConcurrentModificationGuard` (arquivo alterado apos `RunStartedUtc` pede aprovacao antes de sobrescrever, incluindo patches), `MaxVerificationRetries` (repair loop: falha do DoD volta para o agente corrigir; limite de correcoes seguidas configuravel). |
-| Optional per-workspace Docker sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw`, imagem default `mcr.microsoft.com/powershell:lts`; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
+| Optional per-workspace container sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker`/`podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw` (Podman no Linux usa `:rw,Z`), imagem default `mcr.microsoft.com/powershell:lts`; `SandboxRuntime` (`Auto`/`Docker`/`Podman`) e resolvido por `ISandboxRuntimeLocator`/`SandboxRuntimeLocator` (Auto prefere Docker e depois Podman; runtime explicito nao faz fallback) e a ausencia de runtime falha antes da execucao, sem cair para o host; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Runtime|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|RUNTIME|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
+| Sandbox settings persistence and profile policy | Implemented | Settings UI ("Sandbox de comandos") exposes mode/image/memory/CPU/scope; `ISandboxSettingsStore`/`PostgresSandboxSettingsStore` persist `sandbox_settings` keyed by `(UserId, Workspace)` with global fallback (`Workspace = ""`); `NebulaWorkspaceState` applies localStorage v1 (ignoring sandbox fields when `SandboxConfigured` is false), then DB exact/global overrides, otherwise server/env defaults, and saves DB + localStorage (DB failure is non-fatal; saving scope global deletes the workspace override); `NebulaRuntimeSettings.SandboxModeFloor` comes from server `Nebula:Sandbox:Mode` and `ResolveSandboxMode` prevents Conservative/Standard from disabling Docker while Autonomous/Lab may override it; sandbox images are restricted to Docker-reference characters (no leading `-`, whitespace, or shell metacharacters) and invalid values fall back to the default image; migration `add_sandbox_settings`; DI in Web/MAUI; tests cover policy, floor, snapshot, store roundtrip/fallback/upsert/delete and Settings UI. |
+| Container sandbox sidecar (compose) | Implemented | `Nebula.Sandbox` exposes authenticated `/run` and `/health`; Web/CLI use `Nebula:Sandbox:SidecarUrl`/`SidecarToken` to delegate sandbox execution, while `docker-compose.sandbox.yml` runs the sidecar with the host runtime socket and `${HOME}/nebula-tmp:/tmp:z`; the sidecar maps `/tmp` to the host root and mounts the host path into the execution container, so scripts created by the agent in its workspace can run without mounting a socket into `nebula-web`. Sidecar requires `NEBULA_SANDBOX_TOKEN` and an active socket (`NEBULA_SANDBOX_RUNTIME`/`NEBULA_SANDBOX_SOCKET`; default rootless Podman), runs as `1000:1000` with `userns_mode=keep-id`, and uses `label=type:container_runtime_t` for the socket mount; `/health` probes the runtime. Docker overrides identity/userns/SELinux via `NEBULA_SANDBOX_USER`/`NEBULA_SANDBOX_USERNS_MODE`/`NEBULA_SANDBOX_SECURITY_OPT`. |
+| Dedicated Agent Run screen | Implemented | `/agent-run/{RunId}` page (`AgentRunLive.razor`) with 3-panel layout: Plan (left), Terminal (center), Artifacts (right). Real-time event streaming via `IAgentRunOrchestrator.SubscribeAsync`. Live plan updates, ANSI terminal output, artifact actions, and a parent-run link for continuations. |
+| Real-time command status | Implemented | `CommandCard` component shows pending/executing/passed/failed/blocked/awaiting-approval badges. `TerminalOutput` streams stdout/stderr with ANSI colors. |
+| Command approval from card | Implemented | `CommandCard` has inline approval with scope selector (Once/Conversation/Workspace/Category). `CanApprove` gating via `WorkspaceState.CanApproveCommand`. |
+| Command editing before approval | Implemented | `CommandCard` edit mode with textarea, `OnEdit`/`OnCancelEdit` callbacks, `ApproveCommand` uses edited value. |
+| Policy decision explanation | Implemented | `CommandCard` shows safety decision badge, intent, classification source. `TimelineEventItem` renders classification reasons. Policy simulator in Settings. |
+| Timeline with filters | Implemented | `AgentRunTimeline` component with search, kind filter (all `ActionExecutionEventKind`), status filter (all `ActionExecutionStatus`), errors-only toggle. Used in Chat and AgentRunLive. |
+| Artifacts panel | Implemented | `ArtifactPanel` component shows files/scripts/logs with type icons, copy path, open actions. Integrated in Chat side rail and AgentRunLive. |
+| Compact mode | Implemented | `TerminalOutput.CompactMode` (last 50 lines), Chat composer toggle, `QuickSettings.CompactMode` persisted in localStorage. `data-compact` attribute on agent turns. |
+| Reusable Blazor components | Implemented | `CommandCard`, `StepCard`, `AgentRunTimeline`, `TimelineEventItem`, `ArtifactPanel`, `PlanView`, `TerminalOutput`, `TerminalLine` in `Nebula.App.Shared/Components/`. Used in Chat, AgentRuns, AgentRunLive, Settings. |
+| Typed progress events / background worker | Implemented | `AgentRunEvent` hierarchy (16 event types), `IAgentRunEventPublisher`/`ChannelAgentRunEventPublisher`, `IAgentRunQueue`/`AgentRunBackgroundService` (BackgroundService), `IAgentRunOrchestrator`/`AgentRunOrchestrator`. Real-time streaming to UI. |
 | OpenClaw integration | Not found | No `OpenClaw` references were found outside the user request. |
-| Redis/SQLite/queues/background worker | Not found | No Redis, SQLite, Hangfire, Quartz, `BackgroundService`, `IHostedService`, or queue worker implementation found. |
-| Web app Docker service | Implemented | `nebula-web` service is active in `docker-compose.yml` (container runs the built web app). Docker daemon was unavailable on some machines during build validation. |
-| GPU acceleration profiles | Experimental/configured | Compose override files exist for NVIDIA, AMD ROCm, and Intel Vulkan. Runtime telemetry mainly supports Docker stats and optional NVIDIA metrics. |
+| Redis/SQLite/queues/background worker | Partial | `BackgroundService`/`IHostedService` implemented via `AgentRunBackgroundService` for agent run queue. No Redis, SQLite, Hangfire, Quartz, or general queue worker. |
+| Git workspace operations and PR | Implemented | `GitService` covers diff/status/branch/commit/amend/revert by commit/log/remotes and selective file revert (`RevertFileAsync`: path containment, protected-branch block, optional `staged`/source commit); commit-message generation and two-click file revert are wired in `Git.razor`. `PullRequestService` supports GitHub/GitLab with server-side `PullRequestOptions` tokens, branch validation, optional push and default target branch; the `/git` PR card is wired and tested. `GitServiceTest` covers selective revert; `PullRequestServiceTest`/`GitPageTests` cover PR behavior. The other `GitService` flows still have no direct tests. |
+| Post-frontend verification tooling | Partial | `TestRunnerService.RunTargetedTestsAsync` is wired in `TestRunnerCard`/`AgentRunLive`; `MigrationService` is wired through `OperationKind.Migration`; `ProjectDoctorService` is implemented. `SmokeTestService` gates the DoD through `AgentActionRunner.VerifySmokeTestsAsync` (explicit URLs only; reachable non-2xx fails, no reachable URL skips); `PortDetectionService` enriches `EADDRINUSE` failures with owner/busy port and free alternatives; `ScreenshotService` runs `TryRunVisualVerificationAsync` after frontend changes and writes baseline/current/diff artifacts under `.nebula/screenshots`, with Web endpoints `/api/screenshots/{baseline\|current\|diff}/{artifactId}` and the `ArtifactPanel` comparison. MAUI has no HTTP host for those endpoints and visual regression is not asserted automatically. |
+| Autonomy profiles | Implemented | `AutonomyProfile` defaults are resolved by `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` (profile defaults merged with explicit config; `AutoApproveCommandsConfigured` preserves explicit false) and used by both `AgentActionRunner` and `PolicySimulator`; `Block` decisions are never overridden. |
+| Secret redaction | Implemented | Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting are redacted. Structured log scope values are not redacted. |
+| Web app Docker service | Implemented | `nebula-web` service is active in `docker-compose.yml` (container runs the built web app), binds loopback by default, and requires `NEBULA_WEB_AUTH_TOKEN`. Docker daemon was unavailable on some machines during build validation. |
+| Web authentication | Implemented | Single local operator token (`Nebula:Web:AuthToken`/`NEBULA_WEB_AUTH_TOKEN`, minimum 32 chars) exchanged for an `HttpOnly` cookie. UI, API, and `/_blazor` are protected; Development without a token disables auth with a warning. Integration-tested in `Nebula.App.Web.Test`; manual browser/compose validation pending. |
+| GPU acceleration profiles | Experimental/configured | Compose override files exist for NVIDIA, AMD ROCm, and Intel Vulkan. Runtime telemetry uses the host telemetry sidecar for CPU/RAM/disk/GPU discovery; real-time GPU utilization/VRAM depends on the sidecar image and host tooling. |
+| Host telemetry sidecar | Implemented | `Nebula.Telemetry` exposes `/snapshot` and `/health`; `HostHardwareProbe` reads host `/proc`, `/sys`, and host root read-only. `nebula-web` consumes it via `NEBULA_TELEMETRY_URL` and falls back to local probing. Docker/Podman API access is optional and only in the sidecar. |
 | Corona design system | Implemented dependency/submodule | `Corona/Corona/Corona.csproj` is in the solution; `Corona/Corona.Tests` exists outside `Nebula.slnx`. |
 | Nebula.Shell | Legacy/placeholder | `Nebula.Shell` exists as an empty class library and is not included in `Nebula.slnx`. |
 
@@ -142,6 +169,8 @@ Nebula.Agent.Test/
 Nebula.App/
   Nebula.App/
   Nebula.App.Shared/
+    Components/          # Reusable Blazor components (Phase 7)
+    Pages/               # Chat.razor, AgentRuns.razor, AgentRunLive.razor, Settings.razor, etc.
   Nebula.App.Web/
   Nebula.App.Web.Client/
 Nebula.App.Test/
@@ -153,6 +182,7 @@ Nebula.Postgres.Context/
 Nebula.Runner/
 Nebula.Services/
 Nebula.Shell/
+Nebula.Telemetry/
 ```
 
 Projects included in `Nebula.slnx`:
@@ -172,6 +202,7 @@ Projects included in `Nebula.slnx`:
 - `Nebula.Postgres.Context/Nebula.Postgres.Context.csproj`
 - `Nebula.Runner/Nebula.Runner.csproj`
 - `Nebula.Services/Nebula.Services.csproj`
+- `Nebula.Telemetry/Nebula.Telemetry.csproj`
 
 Projects found but not included in `Nebula.slnx`:
 
@@ -243,18 +274,26 @@ Primary domain abstractions:
 
 `Nebula.App/Nebula.App.Web/Program.cs` performs these major steps:
 
-1. Registers Razor components with server interactivity and WebAssembly support.
-2. Registers `ILlamaClient` as `LlamaClient`.
-3. Registers runtime settings from configuration and environment variables.
-4. Registers UI state, command execution, environment detection, safety classifiers,
+1. Loads `WebAuthOptions` from `Nebula:Web:AuthToken`/`NEBULA_WEB_AUTH_TOKEN`.
+   Production/Staging fail fast without a token of at least 32 characters;
+   Development without a token disables auth and logs a warning.
+2. Registers Razor components with server interactivity and WebAssembly support.
+3. Registers `ILlamaClient` as `LlamaClient`.
+4. Registers runtime settings from configuration and environment variables.
+5. Registers UI state, command execution, environment detection, safety classifiers,
    operation detection, command policy, operation policy, web research, learning, and
    knowledge services.
-5. Attempts a MongoDB ping. If successful, Mongo prompt/conversation stores are
+6. Registers cookie authentication, authorization with a fallback policy, and the
+   local token validator.
+7. Attempts a MongoDB ping. If successful, Mongo prompt/conversation stores are
    registered. If not, a no-op prompt repository is used at that stage.
-6. Registers PostgreSQL services and repositories.
-7. Runs `PostgresDatabaseInitializer.InitializeAsync` on startup.
-8. Maps `/api/research/search?q=...` for search diagnostics.
-9. Serves the Blazor app with antiforgery and static assets.
+8. Registers PostgreSQL services and repositories.
+9. Runs `PostgresDatabaseInitializer.InitializeAsync` on startup and marks the
+   shared `DatabaseInitializationState` ready (Web remains fail-fast).
+10. Maps `/login` and `/logout` and exposes the auth state to the UI.
+11. Maps `/api/research/search?q=...` for search diagnostics behind authorization.
+12. Serves the Blazor app with authentication, authorization, antiforgery, and
+    anonymous static assets.
 
 Default launch profile URLs are in
 `Nebula.App/Nebula.App.Web/Properties/launchSettings.json`:
@@ -267,7 +306,13 @@ https://localhost:7157
 ### MAUI startup
 
 `Nebula.App/Nebula.App/MauiProgram.cs` registers the same core services for the
-native shell and initializes PostgreSQL synchronously during app creation.
+native shell. After `builder.Build()`, `MauiDatabaseInitializationService` starts
+the PostgreSQL initialization in the background so the window can open while the
+database is unavailable. The service creates a fresh scope per attempt and uses
+`DatabaseInitializationRetry` with exponential backoff. `DatabaseInitializationState`
+drives the banner and manual "Tentar novamente" action in
+`Nebula.App.Shared/Layout/MainLayout.razor`; Web keeps its fail-fast startup and
+marks the same state as ready after migrations.
 
 ### CLI startup
 
@@ -333,6 +378,7 @@ Supported operation kinds are defined in `Nebula.Core/Operations`:
 - `ScriptExecution`
 - `ProjectScaffold`
 - `PlannedPatch`
+- `Migration`
 - `Research`
 - `Learning`
 - `Chat`
@@ -354,6 +400,10 @@ Actions can include:
 - `targetPath`
 - `templateId`
 - `plannedFiles` (array of `{path, content}` for `PlannedPatch`; paths are relative to `targetPath`)
+- `migrationAction` (`Create`/`Apply`/`List`)
+- `migrationFramework` (`EfCore`/`NodeJs`)
+- `migrationName` and `migrationContext`
+- `migrationDryRun`
 - `language`
 - `workingDirectory`
 - `retryJustification`
@@ -396,6 +446,33 @@ container shell, and translates absolute host workspace paths to `/workspace` so
 commands that reference the mounted workspace can find their files in the
 container.
 
+The container runtime is resolved by `ISandboxRuntimeLocator`: `Auto` prefers
+`docker` and then `podman`, while explicit `Docker`/`Podman` never falls back to
+the other binary. The resolved executable is used for `run`, and Podman on Linux
+mounts the workspace with `:rw,Z` for SELinux relabeling. If no runtime is found,
+the sandbox fails before execution and the host command is not run. The runtime
+must be available inside the process running Nebula. Native Web/CLI/MAUI resolve
+it locally. Inside compose, enable the opt-in `docker-compose.sandbox.yml`:
+`nebula-web` delegates to `nebula-sandbox` through
+`Nebula:Sandbox:SidecarUrl`/`SidecarToken`, and the sidecar holds the container
+socket and the host workspace mount. The sidecar maps its `/tmp` workspace to
+`${HOME}/nebula-tmp`, validates the mapped path, and mounts that host path into
+the execution container, so files created by the agent in the workspace are
+visible to the sandboxed process. `NEBULA_SANDBOX_TOKEN` is required; under
+Podman the sidecar runs non-root as `1000:1000` with `userns_mode=keep-id` and
+`label=type:container_runtime_t`, and its `/health` endpoint probes the runtime.
+Docker requires the documented user/userns/SELinux overrides. The sidecar can
+control the host runtime and should still be treated as privileged. The base
+compose still does not mount a socket into `nebula-web`.
+
+Web/MAUI persist the UI selection in `sandbox_settings` per `(UserId, Workspace)`,
+with the empty workspace as the user-global fallback. The server value
+`Nebula:Sandbox:Mode` is also the floor: Conservative/Standard profiles cannot
+disable a Docker floor, while Autonomous/Lab can. The UI keeps a
+`nebula.quick-settings.v1` localStorage cache; snapshots without
+`SandboxConfigured` are treated as legacy and do not override the server/env
+sandbox mode.
+
 ### File reads
 
 File reads are allowed only when policy classifies them as safe. Sensitive paths
@@ -428,7 +505,10 @@ that are still blocked even with the sandbox enabled:
   still escalated to approval (`ConcurrentModificationGuard`).
 
 Script content is separately inspected for destructive APIs, subprocess/network
-usage, prompt-injection text, and sensitive data patterns.
+usage, prompt-injection text, and sensitive data patterns. Action paths are
+normalized and rejected when they contain control characters, drive-rooted
+relative paths, or separators that escape the target root; `PlannedPatchApplier`
+does not fall back to the process cwd for invalid paths.
 
 ### Script execution
 
@@ -482,6 +562,38 @@ Changing or creating several files in one step uses `OperationKind.PlannedPatch`
 
 `AgentApprovedAction` carries `PlannedFiles` so an approved patch can be replayed
 without the LLM.
+
+### Database migrations
+
+Database schema changes use `OperationKind.Migration`:
+
+1. The planner emits `migrationAction` (`Create`, `Apply` or `List`),
+   `migrationFramework` (`EfCore` or `NodeJs`), `migrationName` for `Create`,
+   and `migrationContext` when an EF Core project has multiple contexts.
+2. `AgentActionRunner.ExecuteMigrationAsync` resolves the project directory,
+   validates `migrationName`/`migrationContext` (letters, digits, underscores;
+   no shell metacharacters), and classifies `List` as read-only.
+3. `Create` and `Apply` always require a manual `AgentApprovedAction` with
+   `ApprovalScope.Once`. Auto-approval, allowlists, conversation scopes and
+   auto-approved categories are intentionally ignored for migrations.
+4. `MigrationService` runs `dotnet ef` for EF Core and `npx knex`/`typeorm`/
+   `prisma`/`sequelize` for Node.js. `DryRun` returns the planned command without
+   executing it.
+5. Evidence, output, and the created migration file (when available) are recorded
+   on the run; the approval card hides the scope selector and states that only a
+   one-time approval is accepted.
+
+### Approval continuation and run linking
+
+Approving an action creates a new run that replays the approved action
+(`AgentRunOrchestrator.RunApprovedCommandAsync`) without calling the LLM. The
+originating run is resolved from the approved step id
+(`IAgentRunStore.GetRunIdByStepIdAsync`) and stored as `ParentRunId`
+(`agent_runs.ParentRunId`, migration `add_agent_run_parent_run_id`). If the
+continuation itself requests approval, the UI shows the new pending card and the
+CLI approval loop handles up to 10 rounds per turn. The history pages
+(`/agent-runs` and `/agent-run/{id}`) show a "Continuacao de Run ..." link to the
+parent run. Resumed runs are linked to the run they resumed.
 
 ### Self-programming loop (DoD, timeouts, diff review, overwrite guard)
 
@@ -613,9 +725,16 @@ The client:
 
 Runtime telemetry:
 
-- `LlamaRuntimeTelemetryService` reads Docker container stats.
-- It can parse NVIDIA metrics when `nvidia-smi` output is available.
-- AMD/Intel telemetry is mostly configuration-level at this point.
+- `LlamaRuntimeTelemetryService` prefers `ITelemetrySource` (`HttpTelemetrySource`,
+  sidecar URL from `NEBULA_TELEMETRY_URL`) and falls back to local probing.
+- `HostHardwareProbe` reads CPU/memory from `/proc`, GPUs from
+  `/proc/driver/nvidia`, `/sys/class/drm`, and `nvidia-smi` when available, and
+  disks from the host root (including the host `/var` data mount).
+- The `Nebula.Telemetry` sidecar exposes `/snapshot` and `/health`; it reads
+  host `/proc`, `/sys`, and host root read-only. Docker/Podman stats are optional
+  and only the sidecar receives a socket (when configured).
+- NVIDIA is the validated sidecar path; AMD/Intel GPU utilization/VRAM is not
+  confirmed beyond device/sysfs discovery.
 
 No alternative LLM provider abstraction beyond `ILlamaClient` was found. Adding
 a non-Ollama provider currently requires an implementation and DI changes in the
@@ -649,6 +768,7 @@ Current tables include:
 - `ml_model_artifacts`
 - `workspace_memory` (unique `{workspace, kind, key}`)
 - `user_memory` (unique `{userId, kind, key}`, migração `add_user_memory`)
+- `sandbox_settings` (unique `{userId, workspace}`, migração `add_sandbox_settings`; `workspace = ''` is the user-global fallback)
 
 `PostgresDatabaseInitializer` contains compatibility logic for older baseline
 tables and then runs EF migrations. Treat migrations as the authoritative schema.
@@ -827,10 +947,43 @@ contain local secrets and should be treated carefully.
 | `Nebula:CommandTimeoutSeconds` | Max runtime for terminal commands before kill + retry | 300 (env: `NEBULA_COMMAND_TIMEOUT_SECONDS`; 0 disables) |
 | `Nebula:ScriptTimeoutSeconds` | Max runtime for script executions before kill + retry | 300 (env: `NEBULA_SCRIPT_TIMEOUT_SECONDS`; 0 disables) |
 | `Nebula:MaxVerificationRetries` | Repair loop limit: consecutive DoD verification failures allowed before failing the run | 2 (env: `NEBULA_MAX_VERIFICATION_RETRIES`; 0 = no dedicated limit) |
-| `Nebula:Sandbox:Mode` | Docker sandbox switch for approval-required terminal commands (`Disabled`/`Docker`) | `Disabled` (env: `NEBULA_SANDBOX_MODE`) |
-| `Nebula:Sandbox:Image` | Sandbox container image | `mcr.microsoft.com/powershell:lts` (env: `NEBULA_SANDBOX_IMAGE`) |
-| `Nebula:Sandbox:MemoryLimitMb` | Optional sandbox memory limit in MB (0 = no limit) | 0 (env: `NEBULA_SANDBOX_MEMORY_LIMIT_MB`) |
-| `Nebula:Sandbox:CpuLimit` | Optional sandbox CPU limit (0 = no limit) | 0 (env: `NEBULA_SANDBOX_CPU_LIMIT`) |
+| `Nebula:MaxConsecutiveErrorRetries` | Max consecutive retries for the same error signature before escalation | 3 (env: `Nebula__MaxConsecutiveErrorRetries`) |
+| `Nebula:LlmTimeoutSeconds` | Total HTTP timeout for an LLM request/stream | 300 |
+| `Nebula:LlmLoadTimeoutSeconds` | Max time for the model warm-up/load when the model is not already loaded (`/api/ps`); does not bound prompt processing of an already-loaded model | 180 (Web/CLI env: `Nebula__LlmLoadTimeoutSeconds`; MAUI env: `NEBULA_LLM_LOAD_TIMEOUT_SECONDS`) |
+| `Nebula:Web:AuthToken` | Web local operator token (at least 32 characters) | Empty (env: `NEBULA_WEB_AUTH_TOKEN`; required by compose) |
+| `NEBULA_WEB_AUTH_TOKEN` | Web local operator token; Development without it disables auth, Production/Staging fails fast | Empty |
+| `NEBULA_WEB_BIND` / `NEBULA_WEB_PORT` | Compose bind address and published web port | `127.0.0.1` / `8081` |
+| `NEBULA_DB_INIT_MAX_ATTEMPTS` | MAUI background Postgres initialization attempts per cycle | 5 (clamped 1..20) |
+| `NEBULA_DB_INIT_INITIAL_DELAY_MS` | Initial retry delay for MAUI Postgres initialization | 1000 (clamped 100..60000) |
+| `NEBULA_DB_INIT_MAX_DELAY_MS` | Maximum exponential backoff delay for MAUI Postgres initialization | 30000 (clamped 100..300000) |
+| `Nebula:EnableResultValidation` | Enable LLM validation of action evidence and safety-checked corrective retries | true (env: `Nebula__EnableResultValidation`) |
+| `Nebula:EnableEnvironmentValidation` | Enable advisory checks for required tools before command execution | true (env: `Nebula__EnableEnvironmentValidation`) |
+| `Nebula:SmokeTest:Enabled` | Run smoke tests on detected explicit web app URLs before accepting completion | true (env: `Nebula__SmokeTest__Enabled`; MAUI env: `NEBULA_SMOKE_TEST_ENABLED`) |
+| `Nebula:SmokeTest:TimeoutSeconds` | Timeout per smoke test URL | 10 (env: `Nebula__SmokeTest__TimeoutSeconds`; MAUI env: `NEBULA_SMOKE_TEST_TIMEOUT_SECONDS`) |
+| `Nebula:Screenshot:Enabled` | Capture baseline/current/diff screenshots after frontend changes | true (env: `Nebula__Screenshot__Enabled`; MAUI env: `NEBULA_SCREENSHOT_ENABLED`) |
+| `Nebula:Screenshot:DiffThresholdPercent` | Pixel difference percentage that marks a visual change | 0.1 (env: `Nebula__Screenshot__DiffThresholdPercent`; MAUI env: `NEBULA_SCREENSHOT_DIFF_THRESHOLD`) |
+| `Nebula:Screenshot:CaptureDelayMs` | Wait after page load before capturing | 1000 (env: `Nebula__Screenshot__CaptureDelayMs`; MAUI env: `NEBULA_SCREENSHOT_CAPTURE_DELAY_MS`) |
+| `Nebula:Sandbox:Mode` | Server sandbox floor/initial mode for approval-required terminal commands (`Disabled`/`Docker`); UI may opt in when Disabled, but Conservative/Standard cannot disable a Docker floor | `Disabled` (Web/CLI env: `Nebula__Sandbox__Mode`; MAUI env: `NEBULA_SANDBOX_MODE`) |
+| `Nebula:Sandbox:Runtime` | Container runtime preference (`Auto`/`Docker`/`Podman`); Auto prefers Docker, then Podman, and explicit values do not fall back | `Auto` (Web/CLI env: `Nebula__Sandbox__Runtime`; MAUI env: `NEBULA_SANDBOX_RUNTIME`) |
+| `Nebula:Sandbox:Image` | Sandbox container image | `mcr.microsoft.com/powershell:lts` (Web/CLI env: `Nebula__Sandbox__Image`; MAUI env: `NEBULA_SANDBOX_IMAGE`) |
+| `Nebula:Sandbox:MemoryLimitMb` | Optional sandbox memory limit in MB (0 = no limit) | 0 (Web/CLI env: `Nebula__Sandbox__MemoryLimitMb`; MAUI env: `NEBULA_SANDBOX_MEMORY_LIMIT_MB`) |
+| `Nebula:Sandbox:CpuLimit` | Optional sandbox CPU limit (0 = no limit) | 0 (Web/CLI env: `Nebula__Sandbox__CpuLimit`; MAUI env: `NEBULA_SANDBOX_CPU_LIMIT`) |
+| `Nebula:Sandbox:SidecarUrl` | Optional sidecar base URL; when set, Web/CLI delegate sandbox runs instead of using a local runtime | Empty (env: `Nebula__Sandbox__SidecarUrl`; compose override uses `http://nebula-sandbox:8091`) |
+| `Nebula:Sandbox:SidecarToken` | Shared token sent to the sidecar | Empty (env: `Nebula__Sandbox__SidecarToken`; compose uses `NEBULA_SANDBOX_TOKEN`) |
+| `Nebula:PullRequest:GitHubToken` | GitHub token used server-side for PR creation | Empty (env: `Nebula__PullRequest__GitHubToken`) |
+| `Nebula:PullRequest:GitLabToken` | GitLab token used server-side for MR creation | Empty (env: `Nebula__PullRequest__GitLabToken`) |
+| `Nebula:PullRequest:GitLabProjectId` | Optional GitLab project id/path override | Empty (env: `Nebula__PullRequest__GitLabProjectId`) |
+| `Nebula:PullRequest:DefaultTargetBranch` | Default target branch shown in the PR card | `main` (env: `Nebula__PullRequest__DefaultTargetBranch`) |
+| `Nebula:PullRequest:PushBranchIfNeeded` | Push the source branch automatically before opening the PR | true (env: `Nebula__PullRequest__PushBranchIfNeeded`) |
+| `NEBULA_SANDBOX_TOKEN` | Shared token for the compose sidecar and `nebula-web` | Required by `docker-compose.sandbox.yml` |
+| `NEBULA_SANDBOX_USER` / `NEBULA_SANDBOX_USERNS_MODE` / `NEBULA_SANDBOX_SECURITY_OPT` | Compose sidecar identity, user namespace, and SELinux option | `1000:1000` / `keep-id` / `label=type:container_runtime_t` (Docker: `0:0` / `host` / `label=disable`) |
+| `NEBULA_TELEMETRY_URL` | Web/MAUI sidecar base URL | Empty disables sidecar; compose uses `http://nebula-telemetry:8090` |
+| `TELEMETRY_PROC_ROOT` | Sidecar host `/proc` mount | `/host/proc` in compose |
+| `TELEMETRY_SYS_ROOT` | Sidecar host `/sys` mount | `/host/sys` in compose |
+| `TELEMETRY_HOST_ROOT` | Sidecar host root mount | `/host/root` in compose |
+| `TELEMETRY_DOCKER_SOCKET` | Optional Docker/Podman Unix socket for container stats | Empty disables Docker stats; never mounted into `nebula-web` |
+| `TELEMETRY_INTERVAL_MS` | Sidecar sampling interval | 1000 |
+| `OLLAMA_CONTAINER_NAME` | Container name used for Ollama container stats | `ollama` |
 | `COMMAND_SAFETY_TRAINING_DATA` | Command safety CSV path | `Nebula.Services/Safety/Training/command-training-data.csv` |
 | `COMMAND_SAFETY_MODEL` | Optional fallback ML model path | Used by trainer/classifier fallback |
 | `COMMAND_SAFETY_MODEL_VERSION` | Optional trained model version | Timestamp fallback |
@@ -854,26 +1007,62 @@ of colon-separated configuration keys.
 
 ## Docker and Local Services
 
-`docker-compose.yml` defines four active services:
+`docker-compose.yml` defines these active services:
 
 - `ollama`
 - `mongodb`
 - `postgres`
 - `searxng`
+- `nebula-telemetry`
+- `nebula-web`
 
-It also contains a `nebula-web` service that builds and runs the web app container.
-`docker compose up -d` starts it alongside the other services (validated under
-Podman rootless; the SearXNG service requires SELinux relabel for bind mounts —
-see the Compose `:Z` flag).
+`nebula-web` builds and runs the web app container on
+`${NEBULA_WEB_BIND:-127.0.0.1}:${NEBULA_WEB_PORT:-8081}` and requires
+`NEBULA_WEB_AUTH_TOKEN`. `nebula-telemetry` is the host telemetry sidecar; it
+mounts host `/proc`, `/sys`, and `/` read-only, has no
+public port, and is reached by the web container through
+`NEBULA_TELEMETRY_URL=http://nebula-telemetry:8090`. Docker/Podman stats are
+optional and only the sidecar receives a socket when configured. `docker compose
+up -d` (with `NEBULA_WEB_AUTH_TOKEN` set) starts the services (validated under
+Podman rootless; SearXNG bind mounts use the Compose `:Z` flag).
 
-Validation result on 2026-06-22:
+`docker-compose.sandbox.yml` adds the optional `nebula-sandbox` service. It is
+not part of the base stack; start it with
+`docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d`.
+The sidecar mounts `${HOME}/nebula-tmp:/tmp:z` and the socket selected by
+`NEBULA_SANDBOX_SOCKET` (default rootless Podman), requires
+`NEBULA_SANDBOX_TOKEN`, and is reached only on the compose network. Under Podman
+it runs as `NEBULA_SANDBOX_USER=1000:1000` with
+`NEBULA_SANDBOX_USERNS_MODE=keep-id` and
+`NEBULA_SANDBOX_SECURITY_OPT=label=type:container_runtime_t`; the compose
+healthcheck calls `/health`, which probes the runtime. For Docker, set
+`NEBULA_SANDBOX_RUNTIME=Docker`,
+`NEBULA_SANDBOX_SOCKET=/var/run/docker.sock`, `NEBULA_SANDBOX_USER=0:0`,
+`NEBULA_SANDBOX_USERNS_MODE=host`, and
+`NEBULA_SANDBOX_SECURITY_OPT=label=disable`. Treat the sidecar as privileged
+because it can control the host container runtime.
 
-- `docker compose config` succeeded and resolved all four active services.
-- `docker compose -f docker-compose.yml -f docker-compose.nvidia.yml config` succeeded.
-- `docker compose -f docker-compose.yml -f docker-compose.amd.yml config` succeeded.
-- `docker compose -f docker-compose.yml -f docker-compose.intel.yml config` succeeded.
+Validation result on 2026-06-22, 2026-10-24, 2026-10-29, and 2026-10-30:
+
+- `docker compose config` (and `podman-compose config`) succeeded with the base
+  compose file and all three GPU overrides.
+- `podman build -f Nebula.Telemetry/Dockerfile --target telemetry` succeeded and
+  the sidecar returned CPU, memory, NVIDIA/Intel GPU discovery, and host `/var`
+  disk data from `/snapshot` under Podman rootless.
+- The NVIDIA sidecar target (`telemetry-nvidia`) has not been built or run yet;
+  verify the CUDA base tag and `gpus: all` support on the host.
+- `podman build -f Nebula.Sandbox/Dockerfile -t nebula-sandbox:test .` succeeded
+  on 2026-10-29. On 2026-10-30 the image was rebuilt and the compose sidecar ran
+  non-root (`1000:1000`, `userns_mode=keep-id`) with
+  `label=type:container_runtime_t`; its compose healthcheck reported healthy,
+  `/run` returned `run-ok`, and `sidecar-hardened` was written back to the host
+  workspace. The Docker CLI path was also exercised with
+  `SANDBOX_RUNTIME=Docker` against Podman's Docker-compatible API: `/health`
+  reported `docker`, `/run` returned `docker-cli-ok`, and `docker-cli-hardened`
+  was written to the host. A real Docker daemon is still absent on this host,
+  so that path remains unvalidated.
 - `docker build -f Nebula.App/Nebula.App.Web/Dockerfile --target build ...` could
-  not run because Docker Desktop's Linux engine was not available on the machine.
+  not be validated when the Docker engine was unavailable.
 
 Important Docker notes:
 
@@ -928,6 +1117,40 @@ diagnostic. Targeted builds below passed.
 Validation result on 2026-08-04: full solution build succeeded with 0 warnings and
 0 errors.
 
+Validation result on 2026-10-14 (toolbox, .NET SDK 10.0.111): full solution
+build succeeded, including `Nebula.App` for `net10.0-android`, after installing
+Java 17 and Android SDK dependencies. In the toolbox, pass both SDK paths to
+MSBuild explicitly:
+
+```bash
+dotnet build Nebula.slnx --no-restore -v minimal \
+  -p:JavaSdkDirectory="$HOME/.local/jdk-17" \
+  -p:AndroidSdkDirectory="$ANDROID_HOME"
+```
+
+Integration validation on 2026-10-25 (container, .NET SDK 10.0.401):
+`Nebula.Agent.Test` 616 passed, `Nebula.App.Test` 22 passed; `Nebula.Agent`,
+`Nebula.App.Web`, `Nebula.App.Web.Client`, `Nebula.Cli`, and `Nebula.Telemetry`
+build successfully. The full `Nebula.slnx` build still requires the
+`maui-android` workload, Java 17, and the Android SDK on Linux; CI installs them.
+
+The earlier 2026-10-14 run passed 569 `Nebula.Agent.Test`, 19 `Nebula.App.Test`,
+and 41 `Corona.Tests` tests (629 total).
+
+Linux builds that include `Nebula.App` require the `maui-android` .NET workload,
+Java 17, and an Android SDK. CI installs these prerequisites explicitly. On a
+local Linux machine, `XA5300` means the Android SDK path is missing; install the
+Android SDK and configure `ANDROID_HOME` before treating the MAUI target as
+validated. The web, CLI, and test projects can be built independently without
+that mobile SDK. After installing Java and the Android command-line tools, the
+SDK dependencies can be prepared with:
+
+```bash
+dotnet build Nebula.App/Nebula.App/Nebula.App.csproj -t:InstallAndroidDependencies \
+  -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" \
+  -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSDKLicenses=True
+```
+
 ```powershell
 dotnet build Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-restore -v minimal
 dotnet build Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj --no-restore -v minimal
@@ -945,6 +1168,7 @@ Main solution tests:
 ```powershell
 dotnet test Nebula.Agent.Test/Nebula.Agent.Test.csproj --no-build -v minimal
 dotnet test Nebula.App.Test/Nebula.App.Test.csproj -v minimal
+dotnet test Nebula.App.Web.Test/Nebula.App.Web.Test.csproj -v minimal
 ```
 
 Submodule tests outside `Nebula.slnx`:
@@ -958,6 +1182,95 @@ Validation result on 2026-06-22:
 - `Nebula.Agent.Test`: 223 passed, 0 failed.
 - `Nebula.App.Test`: 8 passed, 0 failed.
 - `Corona.Tests`: 37 passed, 0 failed.
+
+Validation result on 2026-10-31:
+
+- `Nebula.Agent.Test`: 685 passed, 0 failed.
+- `Nebula.App.Test`: 32 passed, 0 failed.
+- `Nebula.App.Web` built successfully (pre-existing NU1903 warnings remain).
+- `Nebula.App` (`net10.0-android`) built successfully with
+  `-p:JavaSdkDirectory="$HOME/.local/jdk-17"` and
+  `-p:AndroidSdkDirectory="$ANDROID_HOME"`; manual emulator/device validation of
+  the DB banner is still pending.
+- `dotnet build Nebula.slnx --no-restore` with the same Java/Android properties
+  succeeded with 0 errors (2 pre-existing NU1903 warnings).
+
+Validation result on 2026-11-01:
+
+- `Nebula.App.Web.Test`: 24 passed, 0 failed (auth options, token validation,
+  login page, antiforgery rejection, UI/API/`/_blazor` protection, cookie flags,
+  return-url normalization, logout, fallback policy, disabled-auth mode).
+- `Nebula.App.Web` and `Nebula.App.Web.Test` build successfully after updating
+  WebAssembly packages to `10.0.13`.
+- Kestrel smoke (Development, local Postgres): unauthenticated `/` redirects to
+  `/login`, `/auth.css` is anonymous, API returns 401, valid login redirects to
+  `/` and sets `nebula.auth` with `HttpOnly`/`SameSite=Lax`, then `/` and the API
+  return 200.
+- Kestrel smoke without a token (Development): app starts with the disabled-auth
+  warning, `/` and the research API are public, and `/login` returns 404.
+- Production without a token exits before startup with the expected
+  `InvalidOperationException`.
+- Browser/compose login/logout validation and a live Docker image build remain
+  pending.
+
+Validation result on 2026-11-03:
+
+- `Nebula.Agent.Test`: 687 passed, 0 failed (includes 2 `RedactionLoggingTest`
+  cases for `ConsoleLogger` and `RedactingLoggerProvider`).
+- `Nebula.App.Test`: 32 passed, 0 failed.
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `dotnet build Nebula.slnx --no-restore` with the Java/Android properties
+  succeeded with 0 errors; the incremental run did not re-emit pre-existing
+  warnings.
+- Kestrel startup smoke reached logging/auth startup but DB initialization failed
+  because the local shell could not resolve `postgres-nebula`; no
+  redaction-specific runtime failure was observed.
+
+Validation result on 2026-11-05 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
+
+- `Nebula.Agent.Test`: 702 passed, 0 failed (includes profile-default
+  auto-approval coverage in `AgentActionRunnerTest` and `AutonomyProfileTest`).
+- `Nebula.App.Test`: 34 passed, 0 failed (includes profile-change UI normalization).
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `Nebula.Cli` and `Nebula.App.Web` build successfully with 0 errors.
+- `Nebula.App` (`net10.0-android`) builds successfully with the local Java 17 and
+  Android SDK.
+
+Validation result on 2026-11-09 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
+
+- `Nebula.Agent.Test`: 745 passed, 0 failed (includes new `SmokeTestServiceTest`,
+  `PortDetectionServiceTest`, `ScreenshotServiceTest`, and runner smoke-test
+  gating tests).
+- `Nebula.App.Test`: 38 passed, 0 failed.
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `Nebula.Cli`, `Nebula.App.Web`, and `Nebula.App` (`net10.0-android`) build
+  successfully with 0 errors. Building multiple projects in parallel can exhaust
+  memory in the toolbox; use `-m:1` when building the MAUI/CLI targets.
+- `SkiaSharp.NativeAssets.Linux` was added to `Nebula.Agent` so screenshot diff
+  tests and Linux screenshot execution can load the native Skia library.
+
+Validation result on 2026-11-13 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
+
+- `Nebula.Agent.Test`: 761 passed, 0 failed (includes `AgentRunBackgroundServiceTest`
+  for Failed/Cancelled persistence and startup reconciliation of active runs,
+  Llama load-timeout/warm-up diagnostics, placeholder-content rejection,
+  `GetInterruptedRunsAsync` storage, and the ProjectScaffold guard regression for
+  frontend/file requests).
+- `Nebula.App.Test`: 38 passed, 0 failed.
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `dotnet build Nebula.slnx --no-restore -m:1` with the Java/Android properties
+  succeeded with 0 errors (2 pre-existing NU1903 warnings).
+
+Validation result on 2026-11-14 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
+
+- `Nebula.Agent.Test`: 765 passed, 0 failed (includes the tool catalog tests for
+  `edit`, `glob`, `grep` and `read` aliases). One full-suite run hit a transient
+  `FullFlowIntegrationTest.create_folder_and_verify` failure that passed when
+  rerun alone and on the next full run.
+- `Nebula.App.Test`: 38 passed, 0 failed.
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `dotnet build Nebula.slnx --no-restore -m:1` with the Java/Android properties
+  succeeded with 0 errors (2 pre-existing NU1903 warnings).
 
 ### Run web app
 
@@ -990,10 +1303,13 @@ Repository support exists through EF Core packages, migrations, and
 `PostgresContextFactory`. Typical migration command shape:
 
 ```powershell
-dotnet ef migrations add <MigrationName> --project Nebula.Postgres.Context/Nebula.Postgres.Context.csproj --startup-project Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj
+dotnet ef migrations add <MigrationName> --project Nebula.Postgres.Context/Nebula.Postgres.Context.csproj --startup-project Nebula.Postgres.Context/Nebula.Postgres.Context.csproj
 ```
 
-This requires the `dotnet-ef` tool. Verify locally before applying a migration.
+This requires the `dotnet-ef` tool. Using `Nebula.App.Web` as the startup
+project fails unless that project references `Microsoft.EntityFrameworkCore.Design`;
+the Postgres context project already provides the design-time factory. Verify
+locally before applying a migration.
 
 ## Coding Conventions
 
@@ -1040,7 +1356,7 @@ When editing:
 
 ### Add a new executable operation kind
 
-There is no generic tool registry. To add a new operation:
+The generic operation path still uses `OperationKind`. To add a new operation:
 
 1. Update the core operation enum/model.
 2. Update `OperationKindDetector`.
@@ -1049,6 +1365,21 @@ There is no generic tool registry. To add a new operation:
 5. Add safety classification and policy handling.
 6. Add UI rendering if users need to see operation details.
 7. Add tests for planning, safety, execution, evidence, retries, and failure handling.
+
+### Add a new agent tool
+
+The built-in agent tools live in `Nebula.Agent/Tools/AgentToolRegistry.cs`.
+
+1. Add an `AgentToolDefinition` with a unique name, description, compatible
+   `OperationKind`, required/optional parameters, and `ReadOnly` when applicable.
+2. Reuse an existing `OperationKind` when the tool maps to a current pipeline.
+3. If the tool needs custom behavior, add an `AgentToolExecutionKind` and dispatch
+   it in `AgentActionRunner.ExecuteActionAsync`.
+4. Keep the JSON schema and decision prompt in sync (the prompt is generated from
+   the registry; add any tool-specific semantics to `CreateDecisionPrompt`).
+5. Keep read-only searches workspace-contained, bounded, and symlink-safe.
+6. Add tests in `Nebula.Agent.Test/AgentActionRunnerTest.cs` for alias mapping,
+   execution, evidence, and failure paths.
 
 ### Add a project template
 
@@ -1120,6 +1451,8 @@ whether execution is allowed.
 
 These are current gaps or cautions confirmed by inspection.
 
+- `plan.md` was reconciled on 2026-11-02 and now uses `[x]`/`[~]`/`[ ]`; it is a
+  roadmap/status ledger, not proof of runtime behavior.
 - The full `dotnet build Nebula.slnx --no-restore` command timed out locally
   without diagnostics on 2026-06-22; on 2026-08-04 the full solution build
   succeeded with 0 warnings and 0 errors.
@@ -1127,6 +1460,19 @@ These are current gaps or cautions confirmed by inspection.
   could not be validated because Docker Desktop's Linux engine was unavailable.
 - The `nebula-web` compose service is active (not commented). Its Docker image
   build could not be fully validated when the Docker engine was unavailable.
+- The container sandbox supports Docker and Podman on native hosts. The
+  `nebula-web` container still has no runtime or socket; compose sandboxing
+  requires the opt-in sidecar. The sidecar was smoke-tested with rootless Podman
+  and runs non-root with `label=type:container_runtime_t`; its Docker CLI path
+  was exercised against Podman's Docker-compatible API, but a real Docker daemon
+  has not been validated.
+- The `nebula-telemetry` sidecar is built and smoke-tested under Podman rootless;
+  its NVIDIA image and the web UI consumption still need runtime validation.
+- MAUI Postgres initialization now runs in the background with retry and a manual
+  retry banner, and the retry/state logic has unit coverage. The `net10.0-android`
+  target builds successfully with the local Java 17 and Android SDK; manual UI
+  validation (window opening with Postgres stopped and retry after restart) still
+  needs an emulator/device.
 - `ollama-start.sh` is mounted but not invoked by the default compose entrypoint.
 - The Dockerfile should be revalidated when Docker is available. It copies several
   project files before restore; confirm every transitive project reference is copied
@@ -1137,14 +1483,21 @@ These are current gaps or cautions confirmed by inspection.
   PostgreSQL is also active.
 - Learning verification is source-only in the active path. Automatic safe execution
   of learned commands is not confirmed in current repository state.
-- Persistent `AgentRun` storage is implemented (checkpoints, plan, artifacts, approvals). Resume support exists via `IManager.ResumeTaskAsync` and the `/agent-runs` screen; a dedicated `ICommandApprovalService` is not yet extracted.
-- Project scaffolding is implemented with curated templates (`ProjectScaffold`). Multi-file planned patches (`PlannedPatch`) are implemented with review before apply for risky files; the generic tool/plugin catalog is still not confirmed.
+- Persistent `AgentRun` storage is implemented (checkpoints, plan, artifacts, approvals, parent-run links via `agent_runs.ParentRunId`). Resume support exists via `IManager.ResumeTaskAsync` and the `/agent-runs` screen; approval overrides use `ICommandApprovalService`.
+- Project scaffolding is implemented with curated templates (`ProjectScaffold`). Multi-file planned patches (`PlannedPatch`) are implemented with review before apply for risky files. The built-in agent tool catalog (`IAgentToolRegistry`) covers `read`/`write`/`edit`/`patch`/`shell`/`scaffold`/`migration`/`glob`/`grep`; a generic plugin catalog, native tool calling and multi-action `toolCalls` are still not confirmed.
 - The self-programming loop is implemented (DoD gate, lint/format check by stack, timeouts by command type, read-only git diff review in the `FinalReport`, concurrent-modification guard, `MaxVerificationRetries` repair loop). The DoD setting is global rather than per-task-type; the git diff review is appended on the normal (non-approved-action) run path.
+- Fase 8 services are now wired: `SmokeTestService` gates the DoD (explicit project URLs only), `PortDetectionService` enriches `EADDRINUSE` failures, and `ScreenshotService` captures baseline/current/diff artifacts after frontend changes. The Web host serves `/api/screenshots/{baseline|current|diff}/{artifactId}` and the `ArtifactPanel` renders the comparison; MAUI has no HTTP host for those endpoints and visual regression is still not asserted automatically. `MigrationService` has an agent caller and tests, and `PullRequestService` is wired to the `/git` PR card with tests. `GitServiceTest` covers selective file revert; the other `GitService` flows still have no direct tests.
+- `AutonomyProfile` defaults are applied by `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` in both `AgentActionRunner` and `PolicySimulator`. Explicit `AutoApproveCommands` values are preserved via `AutoApproveCommandsConfigured`; profile categories act as a floor merged with explicitly configured categories.
+- Redaction is centralized for Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting; structured log scope values are not redacted.
 - A generic agent tool/plugin catalog is not confirmed in current repository state.
 - OpenClaw integration is not confirmed in current repository state.
-- Redis, SQLite, queues, hosted workers, SerpAPI, and Tavily integrations are not
-  confirmed in current repository state.
-- Authentication/authorization for the web app was not found during this inspection.
+- Redis, SQLite, SerpAPI, and Tavily integrations are not confirmed in current
+  repository state. The only hosted worker/queue found is
+  `AgentRunBackgroundService` (unbounded FIFO for agent runs).
+- Web auth is a single local operator token exchanged for an `HttpOnly` cookie;
+  there are no users/roles. UI, API, and `/_blazor` are protected; compose binds
+  loopback by default and requires `NEBULA_WEB_AUTH_TOKEN`. Integration tests use
+  `TestHost`; manual browser and compose login/logout validation remains pending.
 - `Nebula.Shell` is an empty placeholder outside the solution.
 - Some Corona demo/test projects exist outside `Nebula.slnx`; do not assume solution
   commands cover every project under `Corona/`.
@@ -1153,24 +1506,38 @@ Points needing human confirmation:
 
 - Whether MongoDB should remain a complementary store or be retired in favor of
   PostgreSQL-only persistence.
-- Whether the web app container should be enabled in compose.
+- Whether web auth should remain a single local token or gain users/roles.
 - Whether model pre-pull/warmup through `ollama-start.sh` should be active by default.
 - Whether safe experiment execution should be integrated into learning.
-- Whether `plan.md` is still the authoritative roadmap.
 
 ## Files to Handle Carefully
 
-- `.env`: may contain local secrets.
+- `.env`: may contain local secrets, including `NEBULA_WEB_AUTH_TOKEN`.
 - `docker-compose.yml`: service ports, default credentials, active/commented services.
+- `Nebula.App/Nebula.App.Web/Auth/`: web authentication, token validation, login page, and cookie policy.
+- `Nebula.App.Web.Test/`: auth integration tests using `TestHost`.
+- `Nebula.Agent/ConsoleLogger.cs` and `Nebula.Agent/Logging/`: centralized secret redaction for custom and `Microsoft.Extensions.Logging` output.
 - `docker/searxng/settings.yml`: search behavior and SearXNG server settings.
 - `db-init.sql`: legacy initialization script; do not treat as current schema authority.
 - `Nebula.Postgres.Context/Migrations/`: schema history.
+- `Nebula.Postgres.Context/PostgresSandboxSettingsStore.cs`: per-user/workspace sandbox settings and global fallback.
 - `Nebula.Services/Safety/Training/command-training-data.csv`: ML training data.
 - `Nebula.Agent/Application/AgentActionRunner.cs`: central agent execution path.
 - `Nebula.Agent/Infrastructure/GitDiffService.cs`: read-only working-tree diff used in the final report.
+- `Nebula.Agent/Infrastructure/GitService.cs`: Git operations, including selective file revert with path validation and protected-branch checks.
+- `Nebula.Agent/Infrastructure/PullRequestService.cs`: GitHub/GitLab PR creation with server-side tokens, branch validation, and optional push.
 - `Nebula.Agent/Safety/*`: safety-critical policy.
 - `Nebula.Runner/ShellExecutor.cs`: process execution.
-- `Nebula.Runner/CommandSandbox.cs`: Docker sandbox execution for approval-required terminal commands.
+- `Nebula.Runner/CommandSandbox.cs`: container sandbox execution (Docker/Podman) for approval-required terminal commands.
+- `Nebula.Runner/SandboxRuntimeLocator.cs`: resolves Docker/Podman from `SandboxRuntime` and PATH.
+- `Nebula.Runner/SandboxSidecarCommandSandbox.cs`: HTTP client that delegates sandbox execution to `Nebula.Sandbox`.
+- `Nebula.Runner/SandboxWorkspacePathMapper.cs`: maps the sidecar container workspace root to the host root.
+- `Nebula.Core/Sandbox/SandboxProtocol.cs`: sidecar request/response contract.
+- `Nebula.Sandbox/`: authenticated sidecar service, Dockerfile, and execution validation.
+- `docker-compose.sandbox.yml`: opt-in sidecar with Podman socket and host workspace mount.
+- `Nebula.Core/Safety/PathContainment.cs`: path containment used by workspace and sidecar validation; resolves symlinked roots.
+- `Nebula.Telemetry/`: host telemetry sidecar; mounts host `/proc`, `/sys`, and `/` read-only.
+- `Nebula.Llama.Client/Telemetry/HostHardwareProbe.cs`: host hardware probing used by the sidecar and local fallback.
 - `Nebula.App/Nebula.App.Shared/State/NebulaWorkspaceState.cs`: UI orchestration and local settings.
 - `Corona/`: git submodule; avoid accidental broad edits.
 

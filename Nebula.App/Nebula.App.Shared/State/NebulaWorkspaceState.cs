@@ -8,12 +8,14 @@ using Nebula.Agent.Data;
 using Nebula.App.Shared.Setup;
 using Nebula.Core.Agent;
 using Nebula.Core.Configuration;
+using Nebula.Core.Execution;
 using Nebula.Core.Interactions;
 using Nebula.Core.Memory;
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
+using Nebula.Runner;
 
 using System.Text.Json;
 
@@ -33,7 +35,10 @@ public sealed class NebulaWorkspaceState(
     ICommandAllowlistService? commandAllowlistService = null,
     IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
     IPolicySimulator? policySimulator = null,
-    IUserMemoryService? userMemoryService = null) : IDisposable, IAsyncDisposable
+    IUserMemoryService? userMemoryService = null,
+    Core.Agent.IGitService? gitService = null,
+    Nebula.Runner.IShellExecutor? shellExecutor = null,
+    ISandboxSettingsStore? sandboxSettingsStore = null) : IDisposable, IAsyncDisposable
 {
     private const string QuickSettingsStorageKey = "nebula.quick-settings.v1";
 
@@ -46,9 +51,17 @@ public sealed class NebulaWorkspaceState(
     private IJSObjectReference? environmentModule;
     private CancellationTokenSource? activeTurnCancellationSource;
     private bool settingsLoaded;
+    private bool sandboxInheritedFromGlobal;
+    private string sandboxSettingsOrigin = "server";
     private bool isDisposed;
 
+    private readonly Core.Agent.IGitService? _gitService = gitService;
+    private readonly Nebula.Runner.IShellExecutor? _shellExecutor = shellExecutor;
+
     public event Action? Changed;
+
+    public Core.Agent.IGitService? GitService => _gitService;
+    public Nebula.Runner.IShellExecutor? ShellExecutor => _shellExecutor;
 
     public IReadOnlyList<string> StarterPrompts { get; } =
     [
@@ -146,7 +159,25 @@ public sealed class NebulaWorkspaceState(
         AccelerationProfile = runtimeSettings.AccelerationProfile,
         ResponseLanguageCode = runtimeSettings.ResponseLanguageCode,
         WorkspaceRoot = runtimeSettings.WorkspaceRoot,
-        AutoApproveCommands = runtimeSettings.AutoApproveCommands
+        UserId = runtimeSettings.UserId,
+        AutonomyProfile = FormatAutonomyProfile(runtimeSettings.AutonomyProfile),
+        ProviderMode = runtimeSettings.ProviderMode,
+        AutoApproveCommands = runtimeSettings.EffectiveAutoApproveCommands,
+        AutoApproveCommandsConfigured = runtimeSettings.AutoApproveCommandsConfigured,
+        CompactMode = runtimeSettings.CompactMode,
+        SmokeTestEnabled = runtimeSettings.SmokeTestEnabled,
+        SmokeTestTimeoutSeconds = runtimeSettings.SmokeTestTimeoutSeconds,
+        ScreenshotEnabled = runtimeSettings.ScreenshotEnabled,
+        ScreenshotDiffThresholdPercent = runtimeSettings.ScreenshotDiffThresholdPercent,
+        ScreenshotViewportsText = runtimeSettings.ScreenshotViewportsText,
+        ScreenshotCaptureDelayMs = runtimeSettings.ScreenshotCaptureDelayMs,
+        SandboxMode = FormatSandboxMode(runtimeSettings.SandboxMode),
+        SandboxImage = runtimeSettings.SandboxImage,
+        SandboxMemoryLimitMb = runtimeSettings.SandboxMemoryLimitMb,
+        SandboxCpuLimit = runtimeSettings.SandboxCpuLimit,
+        SandboxScope = string.IsNullOrWhiteSpace(runtimeSettings.WorkspaceRoot)
+            ? "global"
+            : "workspace"
     };
 
     public LlamaRuntimeState? RuntimeState { get; private set; }
@@ -237,6 +268,35 @@ public sealed class NebulaWorkspaceState(
 
     public bool IsSavingSettings { get; private set; }
 
+    public bool IsSandboxInheritedFromGlobal => sandboxInheritedFromGlobal;
+
+    public string SandboxSettingsOrigin => sandboxSettingsOrigin;
+
+    public bool IsSandboxModeLockedForSelectedProfile =>
+        RuntimeSettings.SandboxModeFloor == SandboxMode.Docker &&
+        ParseAutonomyProfile(QuickSettings.AutonomyProfile) is
+            AutonomyProfile.Conservative or AutonomyProfile.Standard;
+
+    public string SandboxPolicyHint
+    {
+        get
+        {
+            if (IsSandboxModeLockedForSelectedProfile)
+            {
+                return "O perfil atual exige o sandbox Docker configurado no servidor e nao permite desativa-lo.";
+            }
+
+            if (RuntimeSettings.SandboxModeFloor == SandboxMode.Docker &&
+                ParseAutonomyProfile(QuickSettings.AutonomyProfile) is
+                    AutonomyProfile.Autonomous or AutonomyProfile.Lab)
+            {
+                return "Este perfil pode desativar o sandbox, mas isso reduz o isolamento configurado no servidor.";
+            }
+
+            return "O modo Docker exige o binario docker disponivel no host. Comandos elegiveis rodam sem rede e sem privilegios.";
+        }
+    }
+
     public bool IsRuntimeOnline => RuntimeState?.IsAvailable == true;
 
     public bool CanSend => !IsSending && !string.IsNullOrWhiteSpace(ComposerText);
@@ -262,7 +322,9 @@ public sealed class NebulaWorkspaceState(
     /// falls back to a fresh empty workspace when nothing is configured.
     /// </summary>
     public ReferenceWorkspace ResolvedWorkspace =>
-        ReferenceWorkspace.Resolve(QuickSettings.WorkspaceRoot);
+        ReferenceWorkspace.Resolve(
+            QuickSettings.WorkspaceRoot,
+            ActiveConversationId);
 
     public async Task EnsureRuntimeAsync()
     {
@@ -312,20 +374,48 @@ public sealed class NebulaWorkspaceState(
         }
 
         IsLoadingSettings = true;
+        SettingsFeedback = null;
         NotifyChanged();
 
         try
         {
-            var json = await jsRuntime.InvokeAsync<string?>(
-                "localStorage.getItem",
-                QuickSettingsStorageKey);
-            if (!string.IsNullOrWhiteSpace(json))
+            var serverSandboxMode = RuntimeSettings.SandboxMode;
+            var serverSandboxImage = RuntimeSettings.SandboxImage;
+            var serverSandboxMemoryLimitMb = RuntimeSettings.SandboxMemoryLimitMb;
+            var serverSandboxCpuLimit = RuntimeSettings.SandboxCpuLimit;
+            var usedLocalSandbox = false;
+            var localSandboxScope = string.Empty;
+
+            try
             {
-                var snapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(json);
-                if (snapshot is not null)
+                var json = await jsRuntime.InvokeAsync<string?>(
+                    "localStorage.getItem",
+                    QuickSettingsStorageKey);
+                if (!string.IsNullOrWhiteSpace(json))
                 {
-                    RuntimeSettings.Apply(snapshot);
+                    var snapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(json);
+                    if (snapshot is not null)
+                    {
+                        RuntimeSettings.Apply(snapshot);
+                        if (snapshot.SandboxConfigured)
+                        {
+                            usedLocalSandbox = true;
+                            localSandboxScope = snapshot.SandboxScope;
+                        }
+                        else
+                        {
+                            RuntimeSettings.SandboxMode = serverSandboxMode;
+                            RuntimeSettings.SandboxImage = serverSandboxImage;
+                            RuntimeSettings.SandboxMemoryLimitMb = serverSandboxMemoryLimitMb;
+                            RuntimeSettings.SandboxCpuLimit = serverSandboxCpuLimit;
+                        }
+                    }
                 }
+            }
+            catch (Exception ex) when (ex is JSException or InvalidOperationException or JsonException)
+            {
+                SettingsFeedback =
+                    "Nao consegui carregar as preferencias locais. Tentando a configuracao persistida.";
             }
 
             if (string.IsNullOrWhiteSpace(RuntimeSettings.MainModel))
@@ -338,14 +428,62 @@ public sealed class NebulaWorkspaceState(
                 RuntimeSettings.LearningModel = RuntimeSettings.MainModel;
             }
 
+            var workspace = RuntimeSettings.WorkspaceRoot?.Trim() ?? string.Empty;
+            var usedDatabaseSandbox = false;
+            if (sandboxSettingsStore is not null)
+            {
+                try
+                {
+                    var stored = await sandboxSettingsStore.GetEffectiveAsync(
+                        NormalizeSandboxUserId(RuntimeSettings.UserId),
+                        workspace);
+                    if (stored is not null)
+                    {
+                        usedDatabaseSandbox = true;
+                        RuntimeSettings.SandboxMode = stored.Mode;
+                        RuntimeSettings.SandboxImage = stored.Image;
+                        RuntimeSettings.SandboxMemoryLimitMb = stored.MemoryLimitMb;
+                        RuntimeSettings.SandboxCpuLimit = stored.CpuLimit;
+                        sandboxInheritedFromGlobal =
+                            stored.Workspace.Length == 0 && workspace.Length > 0;
+                        sandboxSettingsOrigin = stored.Workspace.Length == 0
+                            ? "global"
+                            : "workspace";
+                        QuickSettings.SandboxScope = stored.Workspace.Length == 0
+                            ? "global"
+                            : "workspace";
+                    }
+                }
+                catch (Exception)
+                {
+                    SettingsFeedback =
+                        "Nao consegui carregar o sandbox persistido. Usando a configuracao local.";
+                }
+            }
+
+            if (!usedDatabaseSandbox)
+            {
+                sandboxInheritedFromGlobal = false;
+                sandboxSettingsOrigin = usedLocalSandbox ? "local" : "server";
+                QuickSettings.SandboxScope = usedLocalSandbox
+                    ? NormalizeSandboxScope(localSandboxScope, workspace)
+                    : workspace.Length == 0
+                        ? "global"
+                        : "workspace";
+            }
+
+            RuntimeSettings.SandboxMode = NebulaRuntimeSettings.ResolveSandboxMode(
+                RuntimeSettings.AutonomyProfile,
+                RuntimeSettings.SandboxModeFloor,
+                RuntimeSettings.SandboxMode);
+            RuntimeSettings.SandboxImage = NebulaRuntimeSettings.NormalizeSandboxImage(
+                RuntimeSettings.SandboxImage);
+            RuntimeSettings.SandboxMemoryLimitMb = Math.Max(0, RuntimeSettings.SandboxMemoryLimitMb);
+            RuntimeSettings.SandboxCpuLimit = Math.Max(0, RuntimeSettings.SandboxCpuLimit);
+
             SyncQuickSettingsDraft();
             await ApplyConfiguredMainModelAsync();
             settingsLoaded = true;
-        }
-        catch (Exception ex) when (ex is JSException or InvalidOperationException or JsonException)
-        {
-            SettingsFeedback =
-                "Nao consegui carregar as preferencias salvas. Os valores padrao continuam ativos.";
         }
         finally
         {
@@ -372,6 +510,21 @@ public sealed class NebulaWorkspaceState(
                         QuickSettings.ResponseLanguageCode,
                         StringComparison.OrdinalIgnoreCase))
                 ?? ResponseLanguages[0];
+            var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+            var requestedSandboxMode = ParseSandboxMode(QuickSettings.SandboxMode);
+            var effectiveSandboxMode = NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                requestedSandboxMode);
+            var workspace = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty;
+            var sandboxScope = NormalizeSandboxScope(QuickSettings.SandboxScope, workspace);
+            var sandboxWorkspace = sandboxScope == "global" ? string.Empty : workspace;
+            var sandboxUserId = NormalizeSandboxUserId(QuickSettings.UserId);
+            var sandboxImage = NebulaRuntimeSettings.NormalizeSandboxImage(
+                QuickSettings.SandboxImage);
+            var sandboxMemoryLimitMb = Math.Max(0, QuickSettings.SandboxMemoryLimitMb);
+            var sandboxCpuLimit = Math.Max(0, QuickSettings.SandboxCpuLimit);
+
             var snapshot = new NebulaRuntimeSettingsSnapshot
             {
                 MainModel = NormalizeModelSetting(
@@ -384,23 +537,99 @@ public sealed class NebulaWorkspaceState(
                 AccelerationProfile = QuickSettings.AccelerationProfile,
                 ResponseLanguageCode = language.Code,
                 ResponseLanguageName = language.Name,
-                WorkspaceRoot = QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty,
-                AutoApproveCommands = QuickSettings.AutoApproveCommands
+                AutoApproveCommands = QuickSettings.AutoApproveCommands,
+                AutoApproveCommandsConfigured = QuickSettings.AutoApproveCommandsConfigured,
+                AutoApproveCategories = RuntimeSettings.AutoApproveCategories.ToList(),
+                WorkspaceRoot = workspace,
+                UserId = QuickSettings.UserId?.Trim() ?? string.Empty,
+                AutonomyProfile = profile,
+                ProviderMode = QuickSettings.ProviderMode,
+                RequireDeterministicVerification = RuntimeSettings.RequireDeterministicVerification,
+                CommandTimeoutSeconds = RuntimeSettings.CommandTimeoutSeconds,
+                ScriptTimeoutSeconds = RuntimeSettings.ScriptTimeoutSeconds,
+                MaxVerificationRetries = RuntimeSettings.MaxVerificationRetries,
+                LlmTimeoutSeconds = RuntimeSettings.LlmTimeoutSeconds,
+                MaxConsecutiveErrorRetries = RuntimeSettings.MaxConsecutiveErrorRetries,
+                EnableResultValidation = RuntimeSettings.EnableResultValidation,
+                EnableEnvironmentValidation = RuntimeSettings.EnableEnvironmentValidation,
+                SandboxMode = effectiveSandboxMode,
+                SandboxConfigured = true,
+                SandboxScope = sandboxScope,
+                SandboxImage = sandboxImage,
+                SandboxMemoryLimitMb = sandboxMemoryLimitMb,
+                SandboxCpuLimit = sandboxCpuLimit,
+                CompactMode = QuickSettings.CompactMode,
+                SmokeTestEnabled = QuickSettings.SmokeTestEnabled,
+                SmokeTestTimeoutSeconds = Math.Max(1, QuickSettings.SmokeTestTimeoutSeconds),
+                ScreenshotEnabled = QuickSettings.ScreenshotEnabled,
+                ScreenshotDiffThresholdPercent = QuickSettings.ScreenshotDiffThresholdPercent,
+                ScreenshotViewports = ParseScreenshotViewports(
+                    QuickSettings.ScreenshotViewportsText,
+                    RuntimeSettings.ScreenshotViewports),
+                ScreenshotCaptureDelayMs = Math.Max(0, QuickSettings.ScreenshotCaptureDelayMs)
             };
 
             RuntimeSettings.Apply(snapshot);
+
+            string? persistenceWarning = null;
+            if (sandboxSettingsStore is not null)
+            {
+                try
+                {
+                    if (sandboxScope == "global" && workspace.Length > 0)
+                    {
+                        await sandboxSettingsStore.DeleteAsync(
+                            sandboxUserId,
+                            workspace);
+                    }
+
+                    await sandboxSettingsStore.SaveAsync(new SandboxSettings(
+                        sandboxUserId,
+                        sandboxWorkspace,
+                        requestedSandboxMode,
+                        sandboxImage,
+                        sandboxMemoryLimitMb,
+                        sandboxCpuLimit,
+                        DateTimeOffset.UtcNow));
+                    sandboxInheritedFromGlobal = false;
+                    sandboxSettingsOrigin = sandboxWorkspace.Length == 0
+                        ? "global"
+                        : "workspace";
+                }
+                catch (Exception ex)
+                {
+                    persistenceWarning =
+                        $"Nao foi possivel persistir o sandbox no banco: {ex.Message}";
+                }
+            }
+
+            if (sandboxSettingsStore is null || persistenceWarning is not null)
+            {
+                sandboxInheritedFromGlobal = false;
+                sandboxSettingsOrigin = "local";
+            }
+
             SyncQuickSettingsDraft();
+            QuickSettings.SandboxScope = sandboxScope;
             var modelApplied = await ApplyConfiguredMainModelAsync();
-            var json = JsonSerializer.Serialize(RuntimeSettings.CreateSnapshot());
+            var persistedSnapshot = RuntimeSettings.CreateSnapshot();
+            persistedSnapshot.SandboxScope = sandboxScope;
+            var json = JsonSerializer.Serialize(persistedSnapshot);
             await jsRuntime.InvokeVoidAsync(
                 "localStorage.setItem",
                 QuickSettingsStorageKey,
                 json);
 
             settingsLoaded = true;
-            SettingsFeedback = modelApplied
+            var feedback = modelApplied
                 ? "Configuracao salva e aplicada nesta sessao."
                 : $"Configuracao salva. O modelo {RuntimeSettings.MainModel} precisa estar instalado para ser ativado.";
+            if (persistenceWarning is not null)
+            {
+                feedback = $"{feedback} {persistenceWarning}";
+            }
+
+            SettingsFeedback = feedback;
         }
         catch (Exception ex) when (ex is JSException or InvalidOperationException)
         {
@@ -471,7 +700,9 @@ public sealed class NebulaWorkspaceState(
             return;
         }
 
-var turn = new ConversationEntryViewModel
+        await EnsureSettingsLoadedAsync();
+
+        var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
             Mode = SelectedInteractionMode,
@@ -511,6 +742,8 @@ var turn = new ConversationEntryViewModel
             return;
         }
 
+        await EnsureSettingsLoadedAsync();
+
         var turn = new ConversationEntryViewModel
         {
             Prompt = normalizedPrompt,
@@ -533,7 +766,7 @@ var turn = new ConversationEntryViewModel
         _ = CompleteTurnAsync(turn, normalizedPrompt, turnCancellationSource, isDryRun: true);
     }
 
-public Task ApproveCommandAsync(CommandExecution command)
+    public Task ApproveCommandAsync(CommandExecution command)
     {
         if (!CanApproveCommand(command))
         {
@@ -560,7 +793,14 @@ public Task ApproveCommandAsync(CommandExecution command)
                 WorkingDirectory = command.WorkingDirectory,
                 TargetPath = command.TargetPath,
                 PlannedFiles = command.PlannedFiles,
-                Content = command.Content
+                Content = command.Content,
+                Language = command.Language,
+                TemplateId = command.TemplateId,
+                MigrationAction = command.MigrationAction,
+                MigrationFramework = command.MigrationFramework,
+                MigrationName = command.MigrationName,
+                MigrationContext = command.MigrationContext,
+                MigrationDryRun = command.MigrationDryRun
             };
 
         var turn = new ConversationEntryViewModel
@@ -582,7 +822,9 @@ public Task ApproveCommandAsync(CommandExecution command)
         var turnCancellationSource = new CancellationTokenSource();
         activeTurnCancellationSource = turnCancellationSource;
 
-        var scope = SelectedApprovalScope;
+        var scope = command.OperationKind == OperationKind.Migration
+            ? ApprovalScope.Once
+            : SelectedApprovalScope;
         _ = CompleteApprovedCommandTurnAsync(
             turn,
             commandToRun,
@@ -1050,7 +1292,9 @@ public Task ApproveCommandAsync(CommandExecution command)
         return run.FinishedAt is null &&
                run.Status != nameof(ActionExecutionStatus.Completed) &&
                run.Status != nameof(ActionExecutionStatus.Failed) &&
-               run.Status != nameof(ActionExecutionStatus.Unsafe);
+               run.Status != nameof(ActionExecutionStatus.Unsafe) &&
+               run.Status != nameof(ActionExecutionStatus.Blocked) &&
+               run.Status != nameof(ActionExecutionStatus.Cancelled);
     }
 
     public ConversationEntryViewModel? ActiveMissionTurn
@@ -1653,7 +1897,8 @@ public Task ApproveCommandAsync(CommandExecution command)
                    OperationKind.FileWrite or
                    OperationKind.ScriptContent or
                    OperationKind.PlannedPatch or
-                   OperationKind.ProjectScaffold) &&
+                   OperationKind.ProjectScaffold or
+                   OperationKind.Migration) &&
                !string.IsNullOrWhiteSpace(command.Run);
     }
 
@@ -1673,7 +1918,7 @@ public Task ApproveCommandAsync(CommandExecution command)
 
     public string GetCommandApprovalSummary()
     {
-        return RuntimeSettings.AutoApproveCommands
+        return RuntimeSettings.EffectiveAutoApproveCommands
             ? "Auto-aprovacao ativa"
             : "Aprovacao manual";
     }
@@ -1692,12 +1937,47 @@ public Task ApproveCommandAsync(CommandExecution command)
 
     public static IReadOnlyList<ActionExecutionEvent> GetActionEvents(ConversationEntryViewModel turn)
     {
-        return turn.Result?.ActionEvents ?? turn.StreamingActionEvents;
+        if (turn.Result is null)
+        {
+            return turn.StreamingActionEvents;
+        }
+
+        // While background is still streaming (Result is just Started placeholder), show live streaming events.
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingActionEvents.Count > 0)
+        {
+            if (turn.Result.ActionEvents.Count == 0)
+            {
+                return turn.StreamingActionEvents;
+            }
+
+            var merged = new List<ActionExecutionEvent>(turn.Result.ActionEvents);
+            merged.AddRange(turn.StreamingActionEvents.Where(e => merged.All(m => m.Id != e.Id)));
+            return merged;
+        }
+
+        return turn.Result.ActionEvents;
     }
 
     public static IReadOnlyList<CommandExecution> GetVisibleCommands(ConversationEntryViewModel turn)
     {
-        return turn.Result?.Commands ?? turn.StreamingCommands;
+        if (turn.Result is null)
+        {
+            return turn.StreamingCommands;
+        }
+
+        if (turn.Result.ActionStatus == ActionExecutionStatus.Started && turn.StreamingCommands.Count > 0)
+        {
+            if (turn.Result.Commands.Count == 0)
+            {
+                return turn.StreamingCommands;
+            }
+
+            var merged = new List<CommandExecution>(turn.Result.Commands);
+            merged.AddRange(turn.StreamingCommands.Where(c => merged.All(m => m.Id != c.Id)));
+            return merged;
+        }
+
+        return turn.Result.Commands;
     }
 
     public static CoronaColorSemantic GetActionStatusColor(ActionExecutionStatus status)
@@ -1786,13 +2066,36 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -1804,17 +2107,12 @@ public Task ApproveCommandAsync(CommandExecution command)
                 new UserMessage(
                     normalizedPrompt,
                     turn.Mode,
-                    WorkspaceRoot: QuickSettings.WorkspaceRoot,
+                    WorkspaceRoot: ResolvedWorkspace.Root,
                     IsDryRun: isDryRun),
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Keep IsSending true while background run streams progress; terminal status will set it false.
+            // Streaming fields are managed by the progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -1911,12 +2209,34 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                }
 
                 if (!isDisposed)
                 {
@@ -1929,12 +2249,7 @@ public Task ApproveCommandAsync(CommandExecution command)
                 progress,
                 scope,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
+            // Streaming managed by progress handler; terminal status promotes to Result.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -1992,13 +2307,36 @@ public Task ApproveCommandAsync(CommandExecution command)
         {
             var progress = new InlineProgress<ConversationTurn>(partialTurn =>
             {
-                turn.StreamingClassification = partialTurn.Classification;
-                turn.StreamingResponse = partialTurn.Response;
-                turn.StreamingReasoning = partialTurn.Reasoning;
-                turn.StreamingActionStatus = partialTurn.ActionStatus;
-                turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
-                turn.StreamingCommands = partialTurn.Commands.ToList();
-                turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                var isTerminal = partialTurn.ActionStatus is
+                    ActionExecutionStatus.Completed or
+                    ActionExecutionStatus.Failed or
+                    ActionExecutionStatus.Unsafe or
+                    ActionExecutionStatus.Blocked or
+                    ActionExecutionStatus.AwaitingApproval or
+                    ActionExecutionStatus.Cancelled;
+
+                if (isTerminal)
+                {
+                    turn.Result = partialTurn;
+                    turn.StreamingClassification = null;
+                    turn.StreamingResponse = null;
+                    turn.StreamingReasoning = null;
+                    turn.StreamingActionStatus = null;
+                    turn.StreamingActionEvents.Clear();
+                    turn.StreamingCommands.Clear();
+                    turn.StreamingCurrentPlan = null;
+                    IsSending = false;
+                }
+                else
+                {
+                    turn.StreamingClassification = partialTurn.Classification;
+                    turn.StreamingResponse = partialTurn.Response;
+                    turn.StreamingReasoning = partialTurn.Reasoning;
+                    turn.StreamingActionStatus = partialTurn.ActionStatus;
+                    turn.StreamingActionEvents = partialTurn.ActionEvents.ToList();
+                    turn.StreamingCommands = partialTurn.Commands.ToList();
+                    turn.StreamingCurrentPlan = partialTurn.CurrentPlan;
+                }
 
                 if (!isDisposed)
                 {
@@ -2010,13 +2348,7 @@ public Task ApproveCommandAsync(CommandExecution command)
                 run,
                 progress,
                 turnCancellationSource.Token);
-            turn.StreamingClassification = null;
-            turn.StreamingResponse = null;
-            turn.StreamingReasoning = null;
-            turn.StreamingActionStatus = null;
-            turn.StreamingActionEvents.Clear();
-            turn.StreamingCommands.Clear();
-            turn.StreamingCurrentPlan = null;
+            // Streaming managed by progress handler.
         }
         catch (OperationCanceledException) when (turnCancellationSource.IsCancellationRequested && isDisposed)
         {
@@ -2108,7 +2440,191 @@ public Task ApproveCommandAsync(CommandExecution command)
         QuickSettings.AccelerationProfile = RuntimeSettings.AccelerationProfile;
         QuickSettings.ResponseLanguageCode = RuntimeSettings.ResponseLanguageCode;
         QuickSettings.WorkspaceRoot = RuntimeSettings.WorkspaceRoot;
-        QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommands;
+        QuickSettings.UserId = RuntimeSettings.UserId;
+        QuickSettings.AutonomyProfile = FormatAutonomyProfile(RuntimeSettings.AutonomyProfile);
+        QuickSettings.ProviderMode = RuntimeSettings.ProviderMode;
+        QuickSettings.AutoApproveCommands = RuntimeSettings.AutoApproveCommandsConfigured
+            ? RuntimeSettings.AutoApproveCommands
+            : RuntimeSettings.EffectiveAutoApproveCommands;
+        QuickSettings.AutoApproveCommandsConfigured =
+            RuntimeSettings.AutoApproveCommandsConfigured;
+        QuickSettings.SandboxMode = FormatSandboxMode(RuntimeSettings.SandboxMode);
+        QuickSettings.SandboxImage = RuntimeSettings.SandboxImage;
+        QuickSettings.SandboxMemoryLimitMb = RuntimeSettings.SandboxMemoryLimitMb;
+        QuickSettings.SandboxCpuLimit = RuntimeSettings.SandboxCpuLimit;
+        QuickSettings.CompactMode = RuntimeSettings.CompactMode;
+        QuickSettings.SmokeTestEnabled = RuntimeSettings.SmokeTestEnabled;
+        QuickSettings.SmokeTestTimeoutSeconds = RuntimeSettings.SmokeTestTimeoutSeconds;
+        QuickSettings.ScreenshotEnabled = RuntimeSettings.ScreenshotEnabled;
+        QuickSettings.ScreenshotDiffThresholdPercent = RuntimeSettings.ScreenshotDiffThresholdPercent;
+        QuickSettings.ScreenshotViewportsText = RuntimeSettings.ScreenshotViewportsText;
+        QuickSettings.ScreenshotCaptureDelayMs = RuntimeSettings.ScreenshotCaptureDelayMs;
+    }
+
+    public bool IsGitRepository { get; private set; }
+
+    public IAgentRunStore? AgentRunStore => agentRunStore;
+
+    public IAgentRunOrchestrator? Orchestrator { get; set; }
+
+    public IReadOnlyList<AutonomyProfileOption> AutonomyProfiles { get; } =
+    [
+        new("conservative", "Conservador", "Pouca autonomia, pede aprovacao frequente."),
+        new("normal", "Normal", "Equilibrado entre autonomia e controle."),
+        new("autonomous", "Autonomo", "Alta autonomia, auto-aprova acoes de baixo risco."),
+        new("yolo", "YOLO", "Autonomia maxima, executa sem perguntar (use com cuidado).")
+    ];
+
+    private static AutonomyProfile ParseAutonomyProfile(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "conservative" => AutonomyProfile.Conservative,
+            "autonomous" => AutonomyProfile.Autonomous,
+            "yolo" or "lab" or "laboratory" => AutonomyProfile.Lab,
+            _ => AutonomyProfile.Standard
+        };
+    }
+
+    private static string FormatAutonomyProfile(AutonomyProfile profile)
+    {
+        return profile switch
+        {
+            AutonomyProfile.Conservative => "conservative",
+            AutonomyProfile.Autonomous => "autonomous",
+            AutonomyProfile.Lab => "yolo",
+            _ => "normal"
+        };
+    }
+
+    private static SandboxMode ParseSandboxMode(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "docker" => SandboxMode.Docker,
+            _ => SandboxMode.Disabled
+        };
+    }
+
+    private static string FormatSandboxMode(SandboxMode mode)
+    {
+        return mode == SandboxMode.Docker ? "docker" : "disabled";
+    }
+
+    private static string NormalizeSandboxScope(string? scope, string workspace)
+    {
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            return "global";
+        }
+
+        return scope?.Trim().Equals("global", StringComparison.OrdinalIgnoreCase) == true
+            ? "global"
+            : "workspace";
+    }
+
+    private string NormalizeSandboxUserId(string? userId)
+    {
+        var normalized = userId?.Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? userMemoryService?.DefaultUserId ?? "default"
+            : normalized;
+    }
+
+    private static List<string> ParseScreenshotViewports(
+        string? value,
+        IReadOnlyList<string> fallback)
+    {
+        var viewports = (value ?? string.Empty)
+            .Split(
+                ['\r', '\n', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(viewport => !string.IsNullOrWhiteSpace(viewport))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return viewports.Count > 0
+            ? viewports
+            : fallback.ToList();
+    }
+
+    public void NormalizeSandboxForSelectedProfile()
+    {
+        var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+        if (!QuickSettings.AutoApproveCommandsConfigured)
+        {
+            QuickSettings.AutoApproveCommands =
+                NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(profile);
+        }
+
+        var requestedMode = ParseSandboxMode(QuickSettings.SandboxMode);
+        QuickSettings.SandboxMode = FormatSandboxMode(
+            NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                requestedMode));
+        NotifyChanged();
+    }
+
+    public void NormalizeSandboxScopeFromWorkspace()
+    {
+        QuickSettings.SandboxScope = NormalizeSandboxScope(
+            QuickSettings.SandboxScope,
+            QuickSettings.WorkspaceRoot?.Trim() ?? string.Empty);
+        NotifyChanged();
+    }
+
+    public void SetAutoApproveCommands(bool value)
+    {
+        QuickSettings.AutoApproveCommands = value;
+        QuickSettings.AutoApproveCommandsConfigured = true;
+        NotifyChanged();
+    }
+
+    public void ApplyAutonomyProfileDefaults()
+    {
+        var profile = ParseAutonomyProfile(QuickSettings.AutonomyProfile);
+        QuickSettings.AutoApproveCommands =
+            NebulaRuntimeSettings.GetDefaultAutoApproveForProfile(profile);
+        QuickSettings.AutoApproveCommandsConfigured = false;
+        QuickSettings.SandboxMode = FormatSandboxMode(
+            NebulaRuntimeSettings.ResolveSandboxMode(
+                profile,
+                RuntimeSettings.SandboxModeFloor,
+                NebulaRuntimeSettings.GetDefaultSandboxForProfile(profile)));
+        NotifyChanged();
+    }
+
+    public async Task RefreshGitStatusAsync()
+    {
+        try
+        {
+            var gitService = GitService;
+            if (gitService is null)
+            {
+                IsGitRepository = false;
+                return;
+            }
+
+            var status = await gitService.GetStatusAsync(ResolvedWorkspace.Root);
+            IsGitRepository = status.IsRepository;
+        }
+        catch
+        {
+            IsGitRepository = false;
+        }
+        NotifyChanged();
+    }
+
+    public T? GetService<T>() where T : class
+    {
+        return this switch
+        {
+            _ when typeof(T) == typeof(Nebula.Runner.IShellExecutor) => (T?)(object?)ShellExecutor,
+            _ when typeof(T) == typeof(IAgentRunOrchestrator) => (T?)(object?)Orchestrator,
+            _ when typeof(T) == typeof(Core.Agent.IGitService) => (T?)(object?)GitService,
+            _ => null
+        };
     }
 
     private void NotifyChanged()
@@ -2217,6 +2733,8 @@ public sealed class ConversationEntryViewModel
         StreamingActionEvents.Count > 0;
 
     public bool ShowReasoning { get; set; } = true;
+
+    public bool IsDryRun { get; set; }
 }
 
 public sealed record SuggestedModelOption(string Name, string Description);
@@ -2238,7 +2756,39 @@ public sealed class QuickSettingsDraft
 
     public string WorkspaceRoot { get; set; } = string.Empty;
 
+    public string UserId { get; set; } = string.Empty;
+
+    public ProviderMode ProviderMode { get; set; } = ProviderMode.LocalPreferred;
+
     public bool AutoApproveCommands { get; set; }
+
+    public bool AutoApproveCommandsConfigured { get; set; }
+
+    public string SandboxMode { get; set; } = "disabled";
+
+    public string SandboxImage { get; set; } = NebulaRuntimeSettings.DefaultSandboxImage;
+
+    public long SandboxMemoryLimitMb { get; set; }
+
+    public double SandboxCpuLimit { get; set; }
+
+    public string SandboxScope { get; set; } = "workspace";
+
+    public bool CompactMode { get; set; }
+
+    public string AutonomyProfile { get; set; } = "normal";
+
+    public bool SmokeTestEnabled { get; set; } = true;
+
+    public int SmokeTestTimeoutSeconds { get; set; } = 10;
+
+    public bool ScreenshotEnabled { get; set; }
+
+    public double ScreenshotDiffThresholdPercent { get; set; } = 1.0;
+
+    public string ScreenshotViewportsText { get; set; } = "1280x720,1920x1080";
+
+    public int ScreenshotCaptureDelayMs { get; set; } = 500;
 }
 
 public sealed record ResponseLanguageOption(string Code, string Name);
@@ -2255,3 +2805,8 @@ public sealed record AccelerationProfileOption(
     string Command,
     string Badge,
     CoronaColorSemantic Color);
+
+public sealed record AutonomyProfileOption(
+    string Key,
+    string Name,
+    string Description);

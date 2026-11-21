@@ -36,31 +36,71 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
         existing.IsCancelled = entity.IsCancelled;
         existing.CurrentPlan = entity.CurrentPlan;
         existing.WorkspaceRoot = entity.WorkspaceRoot;
+        existing.ParentRunId ??= entity.ParentRunId;
 
-        context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
-        context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
-        context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
-        await context.SaveChangesAsync(cancellationToken);
-
-        foreach (var step in entity.Steps)
+        var isInMemory = context.Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true;
+        if (isInMemory)
         {
-            step.RunId = run.Id;
-            context.AgentStepRecords.Add(step);
+            context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
+            context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
+            context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
+            await context.SaveChangesAsync(cancellationToken);
+
+            foreach (var step in entity.Steps)
+            {
+                step.RunId = run.Id;
+                context.AgentStepRecords.Add(step);
+            }
+
+            foreach (var artifact in entity.Artifacts)
+            {
+                artifact.RunId = run.Id;
+                context.AgentArtifacts.Add(artifact);
+            }
+
+            foreach (var approval in entity.Approvals)
+            {
+                approval.RunId = run.Id;
+                context.AgentApprovals.Add(approval);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            return;
         }
 
-        foreach (var artifact in entity.Artifacts)
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        try
         {
-            artifact.RunId = run.Id;
-            context.AgentArtifacts.Add(artifact);
-        }
+            context.AgentStepRecords.RemoveRange(existing.Steps.ToList());
+            context.AgentArtifacts.RemoveRange(existing.Artifacts.ToList());
+            context.AgentApprovals.RemoveRange(existing.Approvals.ToList());
 
-        foreach (var approval in entity.Approvals)
+            foreach (var step in entity.Steps)
+            {
+                step.RunId = run.Id;
+                context.AgentStepRecords.Add(step);
+            }
+
+            foreach (var artifact in entity.Artifacts)
+            {
+                artifact.RunId = run.Id;
+                context.AgentArtifacts.Add(artifact);
+            }
+
+            foreach (var approval in entity.Approvals)
+            {
+                approval.RunId = run.Id;
+                context.AgentApprovals.Add(approval);
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
         {
-            approval.RunId = run.Id;
-            context.AgentApprovals.Add(approval);
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
         }
-
-        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<AgentRun>> GetRunsAsync(
@@ -108,6 +148,73 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             .ToList();
     }
 
+    public async Task<IReadOnlyList<AgentRun>> GetInterruptedRunsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var entities = await context.AgentRuns
+            .Include(value => value.Steps)
+            .Include(value => value.Artifacts)
+            .Include(value => value.Approvals)
+            .Where(value => value.FinishedAt == null
+                && AgentRunStates.InterruptedCandidates.Contains(value.Status))
+            .OrderByDescending(value => value.StartedAt)
+            .ToListAsync(cancellationToken);
+        return entities
+            .Select(Map)
+            .ToList();
+    }
+
+    public async Task<Guid?> GetRunIdByStepIdAsync(
+        Guid stepId,
+        CancellationToken cancellationToken = default)
+    {
+        return await context.AgentStepRecords
+            .Where(value => value.Id == stepId)
+            .Select(value => (Guid?)value.RunId)
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<AgentArtifactRecord?> GetArtifactAsync(
+        Guid artifactId,
+        CancellationToken cancellationToken = default)
+    {
+        var entity = await context.AgentArtifacts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                artifact => artifact.Id == artifactId,
+                cancellationToken);
+        if (entity is null)
+        {
+            return null;
+        }
+
+        return new AgentArtifactRecord(
+            entity.Id,
+            entity.RunId,
+            entity.Name,
+            entity.Path,
+            entity.ContentHash,
+            entity.CreatedAt,
+            0.0);
+    }
+
+    public async Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var entities = await context.AgentRuns
+            .Include(value => value.Steps)
+            .Include(value => value.Artifacts)
+            .Include(value => value.Approvals)
+            .Where(value => value.ConversationId == conversationId)
+            .OrderByDescending(value => value.StartedAt)
+            .Take(10)
+            .ToListAsync(cancellationToken);
+        return entities
+            .Select(Map)
+            .ToList();
+    }
+
     private static AgentRunEntity Map(AgentRun run)
     {
         return new AgentRunEntity
@@ -124,6 +231,7 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             IsCancelled = run.IsCancelled,
             CurrentPlan = run.CurrentPlan,
             WorkspaceRoot = run.WorkspaceRoot,
+            ParentRunId = run.ParentRunId,
             Steps = run.Steps.Select(Map).ToList(),
             Artifacts = run.Artifacts?.Select(Map).ToList() ?? [],
             Approvals = run.Approvals?.Select(Map).ToList() ?? []
@@ -233,7 +341,8 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
                     artifact.Name,
                     artifact.Path,
                     artifact.ContentHash,
-                    artifact.CreatedAt))
+                    artifact.CreatedAt,
+                    0.0))
                 .ToList(),
             entity.Approvals
                 .Select(approval => new AgentApprovalRecord(
@@ -250,6 +359,7 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
                     approval.AutoApproved,
                     approval.CreatedAt))
                 .ToList(),
-            entity.WorkspaceRoot);
+            entity.WorkspaceRoot,
+            ParentRunId: entity.ParentRunId);
     }
 }

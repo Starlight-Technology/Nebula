@@ -79,6 +79,11 @@ public sealed class LearningSourceReader : ILearningSourceReader
                 continue;
             }
 
+            if (!IsPublicHttpUrl(uri))
+            {
+                continue;
+            }
+
             try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -233,4 +238,44 @@ public sealed class LearningSourceReader : ILearningSourceReader
         value.Length <= MaxTextLength
             ? value
             : value[..MaxTextLength];
+
+    private static bool IsPublicHttpUrl(Uri uri)
+    {
+        if (uri.IsLoopback ||
+            uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (System.Net.IPAddress.TryParse(uri.Host, out var address) && IsPrivateAddress(address))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsPrivateAddress(System.Net.IPAddress address)
+    {
+        if (System.Net.IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        var bytes = address.GetAddressBytes();
+        return address.AddressFamily switch
+        {
+            System.Net.Sockets.AddressFamily.InterNetwork =>
+                bytes[0] == 10 ||
+                bytes[0] == 127 ||
+                (bytes[0] == 169 && bytes[1] == 254) ||
+                (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) ||
+                (bytes[0] == 192 && bytes[1] == 168),
+            System.Net.Sockets.AddressFamily.InterNetworkV6 =>
+                address.IsIPv6LinkLocal ||
+                address.IsIPv6SiteLocal ||
+                address.Equals(System.Net.IPAddress.IPv6Loopback),
+            _ => true
+        };
+    }
 }

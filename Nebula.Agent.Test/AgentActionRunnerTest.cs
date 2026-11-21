@@ -15,11 +15,51 @@ using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
 using Nebula.Services.Projects;
+using Nebula.Services.Safety;
 
 namespace Nebula.Agent.Test;
 
 public sealed class AgentActionRunnerTest
 {
+    [Fact]
+    public async Task generate_next_step_async_must_use_os_specific_shell_guidance_for_linux()
+    {
+        var decision = ActionDecision(
+            "I need to list the workspace directory.",
+            "List files in workspace",
+            "ls -la");
+        string? capturedPrompt = null;
+
+        var llamaClientMock = CreateLlamaClientMock();
+        llamaClientMock
+            .Setup(client => client.GetStructuredResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, object?, CancellationToken>((prompt, _, _) => capturedPrompt = prompt)
+            .ReturnsAsync(decision);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.GenerateNextStepAsync(new AgentActionDecisionRequest
+        {
+            Objective = "List the files in the current workspace",
+            CurrentPlan = "No actions yet.",
+            StepNumber = 1,
+            RetryNumber = 0
+        });
+
+        Assert.Equal("ls -la", result.Action?.Command);
+        Assert.NotNull(capturedPrompt);
+        Assert.Contains("Linux", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ls", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Always include a plan array", capturedPrompt);
+        Assert.DoesNotContain("C:/Users/Name", capturedPrompt);
+        Assert.DoesNotContain("Get-ChildItem", capturedPrompt);
+        Assert.DoesNotContain("Do not use Unix commands", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Use Windows PowerShell commands", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task generate_next_step_async_must_include_chat_history_and_execution_context()
     {
@@ -113,7 +153,7 @@ public sealed class AgentActionRunnerTest
         Assert.Equal("Created and ran hello.py successfully.", result.Response);
         Assert.Equal(2, result.Commands.Count);
         Assert.True(File.Exists(scriptPath));
-        Assert.Equal(2, result.Evidence.Count);
+        Assert.Equal(3, result.Evidence.Count);
         Assert.Contains(
             result.Evidence,
             evidence =>
@@ -146,6 +186,92 @@ public sealed class AgentActionRunnerTest
         Assert.Contains(scriptPath, result.FinalReport);
         Assert.Matches(@"Comandos executados \(\d+\)", result.FinalReport);
         Assert.Contains("Nenhum risco identificado", result.FinalReport);
+        Assert.Contains("#1 [completed] [risk=low] Create hello.py", result.CurrentPlan);
+        Assert.Contains("#2 [completed] [risk=low] Run hello.py", result.CurrentPlan);
+    }
+
+    [Fact]
+    public async Task allowed_command_executes_even_when_llm_correctness_check_is_negative()
+    {
+        using var workspace = new TempTestWorkspace();
+        var decisions = new Queue<string>(
+        [
+            ActionDecision(
+                "Listing the workspace files.",
+                "List the files in the current directory",
+                "ls"),
+            CompleteDecision(
+                "The directory listing was produced.",
+                "Listed the files in the current directory.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        llamaClientMock
+            .Setup(client => client.GetResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("Response only", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<IProgress<LlamaStreamUpdate>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("No");
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(llamaClientMock, executorMock);
+        var result = await runner.RunAsync(
+            CreateRequest("Liste os arquivos do diretorio atual.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(result.Commands);
+        Assert.True(command.Executed);
+        Assert.Contains("ls -la", command.Run);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.Is<string>(run => run.Contains("ls -la")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_not_complete_after_only_failed_evidence()
+    {
+        using var workspace = new TempTestWorkspace();
+        var missingPath = Path.Combine(workspace.Path, "missing.txt");
+        var existingPath = Path.Combine(workspace.Path, "actual.txt");
+        File.WriteAllText(existingPath, "actual content");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will read the requested file.",
+                "Read missing file",
+                OperationKind.FileRead,
+                targetPath: missingPath),
+            CompleteDecision(
+                "I believe the file was read.",
+                "Read the requested file."),
+            StructuredActionDecision(
+                "The first path failed, so I will read the existing file.",
+                "Read actual file",
+                OperationKind.FileRead,
+                targetPath: existingPath),
+            CompleteDecision(
+                "The file contents were read successfully.",
+                "Read actual.txt successfully.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(llamaClientMock).RunAsync(
+            CreateRequest("Read actual.txt.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal("Read actual.txt successfully.", result.Response);
+        Assert.Contains(result.Evidence, evidence =>
+            evidence.FilePath == missingPath && !evidence.Success);
+        Assert.Contains(result.Evidence, evidence =>
+            evidence.FilePath == existingPath && evidence.Success);
+        Assert.Equal(2, result.Commands.Count);
     }
 
     [Fact]
@@ -204,6 +330,52 @@ public sealed class AgentActionRunnerTest
         Assert.Equal(OperationKind.ScriptContent, step.OperationKind);
         Assert.Contains("hello.py", step.Command);
         Assert.True(step.Success);
+    }
+
+    [Fact]
+    public async Task run_async_must_persist_under_run_id_when_provided()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "note.txt");
+        var runId = Guid.NewGuid();
+        var parentRunId = Guid.NewGuid();
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: targetPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runStore = new FakeAgentRunStore();
+        var runner = CreateRunner(llamaClientMock, agentRunStore: runStore);
+        var request = CreateRequest(
+            "Create note.txt",
+            workspaceRoot: workspace.Path);
+        request.RunId = runId;
+        request.ParentRunId = parentRunId;
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.NotEmpty(runStore.SavedRuns);
+        Assert.All(runStore.SavedRuns, run => Assert.Equal(runId, run.Id));
+        Assert.All(
+            runStore.SavedRuns,
+            run => Assert.Equal(request.RequestId, run.RequestId));
+        Assert.All(
+            runStore.SavedRuns,
+            run => Assert.Equal(parentRunId, run.ParentRunId));
     }
 
     [Fact]
@@ -283,6 +455,45 @@ public sealed class AgentActionRunnerTest
                 SavedRuns.Where(run => run.ConversationId == conversationId && run.FinishedAt is null)
                     .ToList());
         }
+
+        public Task<IReadOnlyList<AgentRun>> GetInterruptedRunsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AgentRun>>(
+                SavedRuns.Where(run => AgentRunStates.IsInterruptedCandidate(run.Status)
+                        && run.FinishedAt is null)
+                    .ToList());
+        }
+
+        public Task<Guid?> GetRunIdByStepIdAsync(
+            Guid stepId,
+            CancellationToken cancellationToken = default)
+        {
+            var run = SavedRuns.FirstOrDefault(
+                value => value.Steps.Any(step => step.Id == stepId));
+            return Task.FromResult(run?.Id);
+        }
+
+        public Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(
+            Guid conversationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<AgentRun>>(
+                SavedRuns.Where(run => run.ConversationId == conversationId)
+                    .OrderByDescending(run => run.StartedAt)
+                    .Take(10)
+                    .ToList());
+        }
+
+        public Task<AgentArtifactRecord?> GetArtifactAsync(
+            Guid artifactId,
+            CancellationToken cancellationToken = default)
+        {
+            var artifact = SavedRuns
+                .SelectMany(run => run.Artifacts ?? [])
+                .FirstOrDefault(value => value.Id == artifactId);
+            return Task.FromResult(artifact);
+        }
     }
 
     [Fact]
@@ -331,6 +542,9 @@ public sealed class AgentActionRunnerTest
     [Fact]
     public async Task run_async_must_invoke_existing_terminal_tool_and_log_action_and_observation()
     {
+        var listDirectoryFragment = OperatingSystem.IsWindows()
+            ? "Get-ChildItem"
+            : "ls -la";
         var decisions = new Queue<string>(
         [
             ActionDecision("I need to inspect the current directory.", "List files", "dir"),
@@ -344,7 +558,7 @@ public sealed class AgentActionRunnerTest
         var executorMock = CreateExecutorMock();
         executorMock
             .Setup(executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("Directory listing");
 
@@ -355,7 +569,7 @@ public sealed class AgentActionRunnerTest
             result.ActionEvents,
             actionEvent =>
                 actionEvent.Kind == ActionExecutionEventKind.ActionStarted &&
-                actionEvent.Command!.Contains("Get-ChildItem", StringComparison.Ordinal));
+                actionEvent.Command!.Contains(listDirectoryFragment, StringComparison.Ordinal));
         Assert.Contains(
             result.ActionEvents,
             actionEvent =>
@@ -363,7 +577,7 @@ public sealed class AgentActionRunnerTest
                 actionEvent.ToolResponse == "Directory listing");
         executorMock.Verify(
             executor => executor.RunCommandAsync(
-                It.Is<string>(command => command.Contains("Get-ChildItem", StringComparison.Ordinal)),
+                It.Is<string>(command => command.Contains(listDirectoryFragment, StringComparison.Ordinal)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -600,6 +814,19 @@ public sealed class AgentActionRunnerTest
         Assert.Contains("policyReasons=", entry);
     }
 
+    // Inline test policy engines for tests that need to bypass safety
+    private sealed class TestCommandPolicyEngine : ICommandPolicyEngine
+    {
+        public Task<CommandSafetyDecision> EvaluateAsync(string commandText, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandSafetyDecision(CommandSafetyDecisionType.Allow, CommandIntent.SafeExecuteLocal, 1, ["Test allow"]));
+    }
+
+    private sealed class TestOperationPolicyEngine : IOperationPolicyEngine
+    {
+        public Task<CommandSafetyDecision> EvaluateAsync(OperationPolicyRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandSafetyDecision(CommandSafetyDecisionType.Allow, CommandIntent.SafeExecuteLocal, 1, ["Test allow"]));
+    }
+
     [Fact]
     public async Task run_async_must_retry_failed_step_with_observation_until_success()
     {
@@ -621,6 +848,7 @@ public sealed class AgentActionRunnerTest
                 (prompt, _, _) => capturedPrompts.Add(prompt))
             .ReturnsAsync(() => decisions.Dequeue());
         SetupAffirmativeVerification(llamaClientMock);
+        var environmentValidatorMock = new Mock<IEnvironmentValidator>();
 
         var executorMock = CreateExecutorMock();
         executorMock
@@ -630,7 +858,19 @@ public sealed class AgentActionRunnerTest
             .Setup(executor => executor.RunCommandAsync("goodcmd", It.IsAny<CancellationToken>()))
             .ReturnsAsync("ok");
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        // Use inline test policy engines that always allow
+        var testCommandPolicyEngine = new TestCommandPolicyEngine();
+        var testOperationPolicyEngine = new TestOperationPolicyEngine();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            commandPolicyEngine: testCommandPolicyEngine,
+            operationPolicyEngine: testOperationPolicyEngine,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                EnableEnvironmentValidation = false
+            },
+            environmentValidator: environmentValidatorMock.Object);
         var result = await runner.RunAsync(CreateRequest("Create a script file and run it."), progress: null);
 
         Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
@@ -643,6 +883,13 @@ public sealed class AgentActionRunnerTest
         Assert.Contains(result.Commands, command => command.Attempt == 2 && command.Executed);
         Assert.Contains("bad command", capturedPrompts[1]);
         Assert.Contains("Retry 1", capturedPrompts[1]);
+        environmentValidatorMock.Verify(
+            validator => validator.ValidateAsync(
+                It.IsAny<OperationKind>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -703,7 +950,7 @@ public sealed class AgentActionRunnerTest
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult(diagnosticCommand, "not found"));
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(
             CreateRequest("Run an invalid command and diagnose the failure."),
             progress: null);
@@ -784,7 +1031,7 @@ public sealed class AgentActionRunnerTest
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult(diagnosticCommand, "desktop-user"));
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(
             CreateRequest("Read a protected file."),
             progress: null);
@@ -854,7 +1101,7 @@ public sealed class AgentActionRunnerTest
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult(diagnosticCommand, "npm was not found"));
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(
             CreateRequest("Install project packages."),
             progress: null);
@@ -916,7 +1163,7 @@ public sealed class AgentActionRunnerTest
             .ReturnsAsync((string command, string workingDirectory, CancellationToken _) =>
                 FailedResult(command, "Permission denied.", 13, workingDirectory));
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(
             CreateRequest("Create a file after checking directory permissions."),
             progress: null);
@@ -973,7 +1220,7 @@ public sealed class AgentActionRunnerTest
                     1,
                     workingDirectory));
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(
             CreateRequest("Run a missing command."),
             progress: null);
@@ -1012,7 +1259,7 @@ public sealed class AgentActionRunnerTest
         var request = CreateRequest("Create a script file and run it.");
         request.MaxRetriesPerStep = 1;
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(request, progress: null);
 
         Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
@@ -1048,7 +1295,7 @@ public sealed class AgentActionRunnerTest
         var request = CreateRequest("Create a script and run it.");
         request.MaxSteps = 1;
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var result = await runner.RunAsync(request, progress: null);
 
         Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
@@ -1129,6 +1376,109 @@ public sealed class AgentActionRunnerTest
     }
 
     [Fact]
+    public async Task run_async_must_apply_autonomous_profile_auto_approval_defaults()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests"),
+            CompleteDecision("The install command completed.", "Package installed.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        SetupAffirmativeVerification(llamaClientMock);
+
+        var executorMock = CreateExecutorMock();
+        executorMock
+            .Setup(executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("installed");
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Autonomous
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(result.Commands[0].AutoApproved);
+        Assert.False(result.Commands[0].ApprovedByUser);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                "pip install requests",
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_keep_approval_with_conservative_profile()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Conservative
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        Assert.False(result.Commands[0].AutoApproved);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_async_must_respect_explicit_auto_approval_override_for_autonomous_profile()
+    {
+        var decisions = new Queue<string>(
+        [
+            ActionDecision("I need a package.", "Install package", "pip install requests")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var executorMock = CreateExecutorMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock,
+            CreateAskApprovalPolicyEngine(),
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                AutonomyProfile = AutonomyProfile.Autonomous,
+                AutoApproveCommands = false,
+                AutoApproveCommandsConfigured = true
+            });
+
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        Assert.False(result.Commands[0].AutoApproved);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task run_async_must_execute_approval_required_command_in_sandbox_when_enabled()
     {
         var decisions = new Queue<string>(
@@ -1176,7 +1526,7 @@ public sealed class AgentActionRunnerTest
 
         var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
 
-Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
         Assert.Single(result.Commands);
         Assert.True(result.Commands[0].Executed);
         Assert.True(result.Commands[0].Sandboxed);
@@ -1562,7 +1912,7 @@ Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
             },
             commandSandbox: sandboxMock.Object);
 
-var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
+        var result = await runner.RunAsync(CreateRequest("Install requests."), progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
         sandboxMock.Verify(
@@ -1623,16 +1973,269 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_retry_file_write_with_empty_content()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "script.exe");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the page.",
+                "Create index.html",
+                OperationKind.FileWrite,
+                command: "FileWrite",
+                content: string.Empty,
+                targetPath: targetPath,
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous content was empty; I will send the complete file.",
+                "Create the complete index.html",
+                OperationKind.FileWrite,
+                content: "<!doctype html><html><body>ok</body></html>",
+                targetPath: targetPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The page was created.",
+                "Created index.html.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var sandboxMock = new Mock<ICommandSandbox>();
+        sandboxMock.SetupGet(sandbox => sandbox.Mode).Returns(SandboxMode.Docker);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            commandSandbox: sandboxMock.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create an index.html in the workspace."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var writes = result.Commands
+            .Where(command => command.OperationKind == OperationKind.FileWrite)
+            .ToList();
+        Assert.Equal(2, writes.Count);
+        Assert.False(writes[0].Executed);
+        Assert.Contains(
+            "vazio",
+            writes[0].Error,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True(writes[1].Executed);
+        Assert.Equal(
+            "<!doctype html><html><body>ok</body></html>",
+            await File.ReadAllTextAsync(targetPath));
+    }
+
+    [Fact]
+    public async Task run_async_must_retry_file_write_with_control_characters_in_target_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var invalidPath = Path.Combine(workspace.Path, "bad\tname.txt");
+        var validPath = Path.Combine(workspace.Path, "note.txt");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: invalidPath,
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous path was invalid; I will use a clean name.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: validPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create a note file in the workspace."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(validPath));
+        Assert.False(File.Exists(invalidPath));
+        Assert.DoesNotContain(
+            result.Commands,
+            command => command.TargetPath?.Contains('\t') == true);
+    }
+
+    [Fact]
+    public async Task run_async_must_normalize_windows_style_planned_patch_paths()
+    {
+        using var workspace = new TempTestWorkspace();
+        var expectedRelativePath = Path.Combine("src", "Calc.cs");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the source file.",
+                "Create src/Calc.cs",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(@"src\Calc.cs", "public class Calc { }")
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The source file was created.",
+                "Created src/Calc.cs.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the Calc source file."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var patch = Assert.Single(
+            result.Commands,
+            command => command.OperationKind == OperationKind.PlannedPatch);
+        Assert.Equal(expectedRelativePath, patch.PlannedFiles![0].RelativePath);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, expectedRelativePath)));
+    }
+
+    [Fact]
+    public async Task run_async_must_retry_planned_patch_with_control_characters_in_file_path()
+    {
+        using var workspace = new TempTestWorkspace();
+        var validRelativePath = Path.Combine("src", "Calc.cs");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the source file.",
+                "Create the source file",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("bad\tCalc.cs", "public class Bad { }")
+                ],
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous path was invalid; I will use a clean name.",
+                "Create src/Calc.cs",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("src/Calc.cs", "public class Calc { }")
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The source file was created.",
+                "Created src/Calc.cs.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the Calc source file."),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, validRelativePath)));
+        Assert.DoesNotContain(
+            result.Commands,
+            command => command.PlannedFiles is not null &&
+                       command.PlannedFiles.Any(file => file.RelativePath.Contains('\t')));
+    }
+
+    [Fact]
+    public async Task run_async_must_confirm_file_write_without_shell_verification()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "note.txt");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: "hello",
+                targetPath: targetPath,
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var executorMock = CreateExecutorMock();
+        var loggerMock = CreateLoggerMock();
+        var runner = CreateRunner(
+            llamaClientMock,
+            executorMock: executorMock,
+            loggerMock: loggerMock);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create note.txt"),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(targetPath));
+        loggerMock.Verify(
+            logger => logger.Log(It.Is<string>(message =>
+                message.Contains("Auto-verify", StringComparison.OrdinalIgnoreCase) &&
+                message.Contains("exists", StringComparison.OrdinalIgnoreCase))),
+            Times.Once);
+        loggerMock.Verify(
+            logger => logger.Log(It.Is<string>(message =>
+                message.Contains("Auto-verify", StringComparison.OrdinalIgnoreCase) &&
+                message.Contains("NOT FOUND", StringComparison.OrdinalIgnoreCase))),
+            Times.Never);
+        executorMock.Verify(
+            executor => executor.RunCommandAsync(
+                It.Is<string>(command => command.Contains("test -f")),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task run_async_must_request_approval_for_non_allowlisted_write_without_sandbox()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
 
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to create the web page.",
-                "Create index.html",
+                "Create index.xml",
                 OperationKind.FileWrite,
                 content: "<!doctype html><title>Olá</title>",
                 targetPath: targetPath,
@@ -1646,7 +2249,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
             executorMock: CreateExecutorMock());
 
         var result = await runner.RunAsync(
-            CreateRequest("Create an index.html in the workspace."),
+            CreateRequest("Create an index.xml in the workspace."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
@@ -1660,21 +2263,21 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     public async Task run_async_must_auto_approve_non_allowlisted_write_when_auto_approval_enabled()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
         const string content = "<!doctype html><title>Olá</title>";
 
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to create the web page.",
-                "Create index.html",
+                "Create index.xml",
                 OperationKind.FileWrite,
                 content: content,
                 targetPath: targetPath,
                 workingDirectory: workspace.Path),
             CompleteDecision(
                 "The web page was created.",
-                "Created index.html.")
+                "Created index.xml.")
         ]);
         var llamaClientMock = CreateLlamaClientMock();
         SetupDecisionSequence(llamaClientMock, decisions);
@@ -1682,13 +2285,15 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         var runner = CreateRunner(
             llamaClientMock,
             executorMock: CreateExecutorMock(),
+            commandPolicyEngine: CreateRealPolicyEngine(),
+            operationPolicyEngine: CreateRealOperationPolicyEngine(),
             runtimeSettings: new NebulaRuntimeSettings
             {
                 AutoApproveCommands = true
             });
 
         var result = await runner.RunAsync(
-            CreateRequest("Create an index.html in the workspace."),
+            CreateRequest("Create an index.xml in the workspace."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
@@ -1705,21 +2310,23 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     public async Task run_async_must_execute_explicitly_approved_write_replaying_original_content()
     {
         using var workspace = new TempTestWorkspace();
-        var targetPath = Path.Combine(workspace.Path, "index.html");
+        var targetPath = Path.Combine(workspace.Path, "index.xml");
         const string content = "<!doctype html><title>Aprovado</title>";
 
         var llamaClientMock = CreateLlamaClientMock();
         SetupAffirmativeVerification(llamaClientMock);
         var runner = CreateRunner(
             llamaClientMock,
-            executorMock: CreateExecutorMock());
+            executorMock: CreateExecutorMock(),
+            commandPolicyEngine: CreateRealPolicyEngine(),
+            operationPolicyEngine: CreateRealOperationPolicyEngine());
 
-        var request = CreateRequest("Aprovar e executar: gravar index.html");
+        var request = CreateRequest("Aprovar e executar: gravar index.xml");
         request.MaxSteps = 1;
         request.MaxRetriesPerStep = 0;
         request.ApprovedAction = new AgentApprovedAction
         {
-            Objective = "Create index.html",
+            Objective = "Create index.xml",
             Command = $"write-file \"{targetPath}\"",
             OperationKind = OperationKind.FileWrite,
             TargetPath = targetPath,
@@ -1797,6 +2404,84 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         Assert.DoesNotContain(
             result.ActionEvents,
             actionEvent => actionEvent.Kind == ActionExecutionEventKind.ApprovalRequired);
+    }
+
+    [Fact]
+    public async Task run_async_must_retry_planned_patch_with_truncated_content()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "index.html");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the calculator page.",
+                "Create index.html",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html><html><body><button>1</button>")
+                ],
+                workingDirectory: workspace.Path),
+            StructuredActionDecision(
+                "The previous content was truncated; I will send the complete file.",
+                "Create the complete index.html",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html><html><body><button>1</button>" +
+                        "</body></html>")
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The complete page was created.",
+                "Created index.html.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var sandboxMock = new Mock<ICommandSandbox>();
+        sandboxMock.SetupGet(sandbox => sandbox.Mode).Returns(SandboxMode.Docker);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            commandSandbox: sandboxMock.Object,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest(
+                "Create a calculator page.",
+                workspaceRoot: workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var patchCommands = result.Commands
+            .Where(command => command.OperationKind == OperationKind.PlannedPatch)
+            .ToList();
+        Assert.Equal(2, patchCommands.Count);
+        Assert.False(patchCommands[0].Executed);
+        Assert.Equal(-1, patchCommands[0].ExitCode);
+        Assert.Contains(
+            "truncado",
+            patchCommands[0].Error,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True(patchCommands[1].Executed);
+        Assert.Equal(
+            "<!doctype html><html><body><button>1</button></body></html>",
+            await File.ReadAllTextAsync(targetPath));
     }
 
     [Fact]
@@ -2004,7 +2689,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
                 return "never";
             });
 
-        var runner = CreateRunner(llamaClientMock, executorMock);
+        var runner = CreateRunner(llamaClientMock, executorMock, useTestPolicyEngines: true);
         var task = runner.RunAsync(
             CreateRequest("Create a script file and run a slow command."),
             progress: null,
@@ -2079,6 +2764,143 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_reject_completion_when_smoke_test_fails()
+    {
+        using var workspace = new TempTestWorkspace();
+        var sourcePath = Path.Combine(workspace.Path, "Program.cs");
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(
+            llamaClientMock,
+            new Queue<string>(
+            [
+                StructuredActionDecision(
+                    "I need to write the source file.",
+                    "Write Program.cs",
+                    OperationKind.FileWrite,
+                    content: "class Program {}",
+                    targetPath: sourcePath,
+                    language: "csharp"),
+                CompleteDecision(
+                    "The task is complete.",
+                    "Done.")
+            ]));
+
+        var smokeTestService = new Mock<ISmokeTestService>();
+        smokeTestService
+            .Setup(service => service.DetectWebAppUrlsAsync(
+                workspace.Path,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["http://localhost:5166"]);
+        smokeTestService
+            .Setup(service => service.RunSmokeTestsAsync(
+                It.IsAny<SmokeTestRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SmokeTestResult(
+                false,
+                [
+                    new SmokeTestCheck(
+                        "localhost:5166",
+                        "http://localhost:5166",
+                        false,
+                        500,
+                        12,
+                        "HTTP 500: error")
+                ],
+                null));
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                RequireDeterministicVerification = false,
+                SmokeTestEnabled = true,
+                SmokeTestTimeoutSeconds = 5
+            },
+            smokeTestService: smokeTestService.Object);
+
+        var request = CreateRequest(
+            "Finish the web task.",
+            workspace.Path);
+        request.MaxRetriesPerStep = 0;
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Failed, result.ActionStatus);
+        Assert.Contains(
+            result.ActionEvents,
+            actionEvent =>
+                actionEvent.Message.Contains("smoke tests", StringComparison.OrdinalIgnoreCase) ||
+                actionEvent.ToolResponse?.Contains("smoke tests", StringComparison.OrdinalIgnoreCase) == true ||
+                actionEvent.Error?.Contains("smoke tests", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public async Task run_async_must_complete_when_smoke_test_passes()
+    {
+        using var workspace = new TempTestWorkspace();
+        var sourcePath = Path.Combine(workspace.Path, "Program.cs");
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(
+            llamaClientMock,
+            new Queue<string>(
+            [
+                StructuredActionDecision(
+                    "I need to write the source file.",
+                    "Write Program.cs",
+                    OperationKind.FileWrite,
+                    content: "class Program {}",
+                    targetPath: sourcePath,
+                    language: "csharp"),
+                CompleteDecision(
+                    "The task is complete.",
+                    "Done.")
+            ]));
+
+        var smokeTestService = new Mock<ISmokeTestService>();
+        smokeTestService
+            .Setup(service => service.DetectWebAppUrlsAsync(
+                workspace.Path,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["http://localhost:5166"]);
+        smokeTestService
+            .Setup(service => service.RunSmokeTestsAsync(
+                It.IsAny<SmokeTestRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SmokeTestResult(
+                true,
+                [
+                    new SmokeTestCheck(
+                        "localhost:5166",
+                        "http://localhost:5166",
+                        true,
+                        200,
+                        5,
+                        null)
+                ],
+                null));
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                RequireDeterministicVerification = false,
+                SmokeTestEnabled = true,
+                SmokeTestTimeoutSeconds = 5
+            },
+            smokeTestService: smokeTestService.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Finish the web task.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+    }
+
+    [Fact]
     public async Task run_async_must_complete_when_deterministic_verification_passes()
     {
         using var workspace = new TempTestWorkspace();
@@ -2141,6 +2963,177 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
             ModelName = "qwen3:8b",
             WorkspaceRoot = workspaceRoot
         };
+    }
+
+    [Fact]
+    public async Task run_async_must_request_manual_approval_for_migration_create()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migration = new Mock<IMigrationService>();
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the AddUsers migration.",
+                "Create AddUsers migration",
+                OperationKind.Migration,
+                targetPath: workspace.Path,
+                migrationAction: MigrationAction.Create,
+                migrationFramework: MigrationFramework.EfCore,
+                migrationName: "AddUsers")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create the AddUsers migration.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.Equal(MigrationAction.Create, command.MigrationAction);
+        Assert.Equal("AddUsers", command.MigrationName);
+        Assert.Equal(CommandSafetyDecisionType.AskApproval, command.SafetyDecision);
+        Assert.False(command.Executed);
+        Assert.False(command.ApprovedByUser);
+        migration.Verify(
+            service => service.CreateMigrationAsync(
+                It.IsAny<MigrationRequest>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_async_must_list_migrations_without_approval()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migration = new Mock<IMigrationService>();
+        migration
+            .Setup(service => service.GetPendingMigrationsAsync(
+                It.IsAny<string>(),
+                MigrationFramework.EfCore,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new PendingMigrationInfo(
+                    "20260101000000_AddUsers",
+                    "AddUsers",
+                    string.Empty,
+                    false)
+            ]);
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to list pending migrations.",
+                "List pending migrations",
+                OperationKind.Migration,
+                targetPath: workspace.Path,
+                migrationAction: MigrationAction.List,
+                migrationFramework: MigrationFramework.EfCore),
+            CompleteDecision(
+                "The pending migrations were listed.",
+                "Migration list obtained.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("List pending migrations.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.True(command.Executed);
+        Assert.False(command.ApprovedByUser);
+        migration.Verify(
+            service => service.GetPendingMigrationsAsync(
+                workspace.Path,
+                MigrationFramework.EfCore,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task run_async_must_replay_approved_migration_without_llm_decision()
+    {
+        using var workspace = new TempTestWorkspace();
+        var migrationFile = Path.Combine(
+            workspace.Path,
+            "Migrations",
+            "20260101000000_AddUsers.cs");
+        var migration = new Mock<IMigrationService>();
+        migration
+            .Setup(service => service.CreateMigrationAsync(
+                It.IsAny<MigrationRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MigrationResult(
+                true,
+                migrationFile,
+                "AddUsers",
+                null,
+                "Migration created.",
+                null));
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(
+            llamaClientMock,
+            new Queue<string>(
+            [
+                CompleteDecision(
+                    "The migration was created.",
+                    "Migration AddUsers created and verified.")
+            ]));
+
+        var request = CreateRequest(
+            "Create the AddUsers migration.",
+            workspace.Path);
+        request.ApprovedAction = new AgentApprovedAction
+        {
+            Objective = "Create AddUsers migration",
+            Command = "migration create AddUsers",
+            OperationKind = OperationKind.Migration,
+            TargetPath = workspace.Path,
+            MigrationAction = MigrationAction.Create,
+            MigrationFramework = MigrationFramework.EfCore,
+            MigrationName = "AddUsers",
+            Scope = ApprovalScope.Once
+        };
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            migrationService: migration.Object);
+
+        var result = await runner.RunAsync(request, progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        var command = Assert.Single(
+            result.Commands,
+            item => item.OperationKind == OperationKind.Migration);
+        Assert.True(command.Executed);
+        Assert.True(command.ApprovedByUser);
+        Assert.Equal("AddUsers", command.MigrationName);
+        migration.Verify(
+            service => service.CreateMigrationAsync(
+                It.Is<MigrationRequest>(migrationRequest =>
+                    migrationRequest.Framework == MigrationFramework.EfCore &&
+                    migrationRequest.MigrationName == "AddUsers" &&
+                    migrationRequest.WorkingDirectory == workspace.Path),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -2307,6 +3300,118 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_scaffold_into_workspace_when_target_is_missing()
+    {
+        using var workspace = new TempTestWorkspace();
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to scaffold the project from the dotnet-console template.",
+                "Create a new .NET console project",
+                OperationKind.ProjectScaffold,
+                templateId: "dotnet-console"),
+            CompleteDecision(
+                "The project was scaffolded and verified.",
+                "Created the console project from the template.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            projectTemplateCatalog: new ProjectTemplateCatalog(),
+            projectScaffolder: new ProjectScaffolder(
+                new ProjectTemplateCatalog(),
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path),
+            projectStackValidator: new ProjectStackValidator(
+                new ProjectTemplateCatalog(),
+                new WorkspaceMapService(new DeterministicStackDetector())));
+
+        var result = await runner.RunAsync(
+            CreateRequest(
+                "Create a new .NET console project.",
+                workspaceRoot: workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "src/App/App.csproj")));
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "README.md")));
+        Assert.Contains(
+            result.Commands,
+            command => command.OperationKind == OperationKind.ProjectScaffold &&
+                       command.Executed &&
+                       command.TargetPath == workspace.Path);
+    }
+
+    [Fact]
+    public async Task run_async_must_reject_project_scaffold_when_request_names_frontend_files()
+    {
+        using var workspace = new TempTestWorkspace();
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to scaffold the calculator project.",
+                "Scaffold a calculator project",
+                OperationKind.ProjectScaffold,
+                templateId: "dotnet-console",
+                targetPath: Path.Combine(workspace.Path, "calculator")),
+            StructuredActionDecision(
+                "The scaffold was rejected; I will create the actual files.",
+                "Create the calculator HTML and JavaScript files",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html>\n<html><body><h1>Calculadora</h1>" +
+                        "<script src=\"script.js\"></script></body></html>"),
+                    new PlannedPatchFile(
+                        "script.js",
+                        "function add(a, b) { return a + b; }")
+                ]),
+            CompleteDecision(
+                "The calculator files were created.",
+                "Created index.html and script.js.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            projectTemplateCatalog: new ProjectTemplateCatalog(),
+            projectScaffolder: new ProjectScaffolder(
+                new ProjectTemplateCatalog(),
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path),
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path));
+
+        var result = await runner.RunAsync(
+            CreateRequest(
+                "Crie uma calculadora em HTML/JS com index.html e script.js.",
+                workspaceRoot: workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "index.html")));
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "script.js")));
+        Assert.DoesNotContain(
+            result.Commands,
+            command => command.OperationKind == OperationKind.ProjectScaffold);
+        Assert.Contains(
+            result.Commands,
+            command => command.OperationKind == OperationKind.PlannedPatch &&
+                       command.Executed);
+    }
+
+    [Fact]
     public async Task run_async_must_apply_planned_multi_file_patch()
     {
         using var workspace = new TempTestWorkspace();
@@ -2357,6 +3462,158 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
             result.Commands,
             command => command.OperationKind == OperationKind.PlannedPatch && command.Executed);
         Assert.Equal(2, result.Artifacts.Count);
+        Assert.NotNull(result.FinalReport);
+        Assert.Contains("Arquivos alterados (2)", result.FinalReport);
+        Assert.Contains(Path.Combine(workspace.Path, "src", "App.cs"), result.FinalReport);
+        Assert.Contains(Path.Combine(workspace.Path, "README.md"), result.FinalReport);
+    }
+
+    [Fact]
+    public async Task run_async_visual_verification_covers_frontend_planned_patch()
+    {
+        using var workspace = new TempTestWorkspace();
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to apply the frontend patch.",
+                "Create the calculator page",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(
+                        "index.html",
+                        "<!doctype html><html><body><h1>Calculadora</h1></body></html>")
+                ]),
+            CompleteDecision(
+                "The page was created.",
+                "Created index.html.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var smokeTestService = new Mock<ISmokeTestService>();
+        smokeTestService
+            .Setup(service => service.DetectWebAppUrlsAsync(
+                workspace.Path,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["http://localhost:5166"]);
+        smokeTestService
+            .Setup(service => service.RunSmokeTestsAsync(
+                It.IsAny<SmokeTestRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SmokeTestResult(
+                true,
+                [
+                    new SmokeTestCheck(
+                        "localhost:5166",
+                        "http://localhost:5166",
+                        true,
+                        200,
+                        5,
+                        null)
+                ],
+                null));
+
+        var screenshotService = new Mock<IScreenshotService>();
+        screenshotService
+            .Setup(service => service.GetBaselineAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ScreenshotResult?)null);
+        screenshotService
+            .Setup(service => service.CaptureAsync(
+                It.IsAny<ScreenshotCaptureRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScreenshotResult(
+                true,
+                [1, 2, 3],
+                "hash",
+                null,
+                "http://localhost:5166",
+                "1920x1080",
+                DateTimeOffset.UtcNow));
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                RequireDeterministicVerification = false,
+                SmokeTestEnabled = true,
+                SmokeTestTimeoutSeconds = 5,
+                ScreenshotEnabled = true,
+                ScreenshotViewports = ["1920x1080"]
+            },
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: workspace.Path,
+                controlledTempRoot: workspace.Path),
+            smokeTestService: smokeTestService.Object,
+            screenshotService: screenshotService.Object);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Crie uma calculadora em HTML.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Contains("Verificacao visual", result.FinalReport);
+        Assert.Contains("baseline criado", result.FinalReport);
+        screenshotService.Verify(
+            service => service.CaptureAsync(
+                It.IsAny<ScreenshotCaptureRequest>(),
+                It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task run_async_must_apply_planned_patch_using_session_workspace()
+    {
+        using var workspace = new TempTestWorkspace();
+        var unrelatedRoot = Path.Combine(
+            Path.GetTempPath(),
+            "Nebula",
+            "tests",
+            Guid.NewGuid().ToString("N"));
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to apply the planned patch.",
+                "Create the session workspace files",
+                OperationKind.PlannedPatch,
+                targetPath: workspace.Path,
+                plannedFiles:
+                [
+                    new PlannedPatchFile("src/App.cs", "public class App { }"),
+                    new PlannedPatchFile("README.md", "# My Project")
+                ]),
+            CompleteDecision(
+                "The patch was applied.",
+                "Applied the planned patch to 2 files.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            plannedPatchApplier: new PlannedPatchApplier(
+                workspaceRoot: unrelatedRoot,
+                controlledTempRoot: Path.Combine(unrelatedRoot, "temp")));
+
+        var result = await runner.RunAsync(
+            CreateRequest(
+                "Create the session workspace files",
+                workspaceRoot: workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "src", "App.cs")));
+        Assert.True(File.Exists(Path.Combine(workspace.Path, "README.md")));
     }
 
     [Fact]
@@ -2442,6 +3699,11 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         using var workspace = new TempTestWorkspace();
 
         var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(
+            llamaClientMock,
+            new Queue<string>([CompleteDecision(
+                "The approved patch was applied.",
+                "Patch applied.")]));
 
         var runner = CreateRunner(
             llamaClientMock,
@@ -2457,8 +3719,8 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
                 Prompt = "Executar patch aprovado",
                 ChatHistoryContext = "[approved_patch]",
                 ModelName = "qwen3:8b",
-                MaxSteps = 1,
-                MaxRetriesPerStep = 0,
+                MaxSteps = 10,
+                MaxRetriesPerStep = 2,
                 ApprovedAction = new AgentApprovedAction
                 {
                     Objective = "Update the app",
@@ -2477,6 +3739,23 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         Assert.Contains(
             result.Commands,
             command => command.OperationKind == OperationKind.PlannedPatch && command.Executed);
+        llamaClientMock.Verify(
+            client => client.GetStructuredResponseAsync(
+                It.Is<string>(prompt => prompt.Contains("task execution agent", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        var continuationPrompts = llamaClientMock.Invocations
+            .Where(invocation => invocation.Method.Name == nameof(ILlamaClient.GetStructuredResponseAsync))
+            .Select(invocation => (string)invocation.Arguments[0])
+            .ToList();
+        Assert.Contains(
+            continuationPrompts,
+            prompt => prompt.Contains("approved_action_executed", StringComparison.Ordinal) &&
+                      prompt.Contains("Do not repeat the approved action", StringComparison.Ordinal));
+        Assert.Contains(
+            continuationPrompts,
+            prompt => prompt.Contains("Continuar a tarefa apos a acao aprovada", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2697,6 +3976,79 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
+    public async Task run_async_must_execute_validator_correction_through_recovery_flow()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "note.txt");
+        var correctedPath = Path.Combine(workspace.Path, "corrected-note.txt");
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to write the requested note.",
+                "Write note.txt",
+                OperationKind.FileWrite,
+                content: "incorrect",
+                targetPath: targetPath),
+            CompleteDecision(
+                "The corrected note is present.",
+                "Created note.txt with the corrected content.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+        var correctedAction = new AgentToolAction
+        {
+            Objective = "Correct note.txt",
+            OperationKind = OperationKind.FileWrite,
+            TargetPath = correctedPath,
+            Content = "correct",
+            WorkingDirectory = workspace.Path
+        };
+        var resultValidatorMock = new Mock<IResultValidator>();
+        resultValidatorMock
+            .SetupSequence(validator => validator.ValidateAsync(
+                It.IsAny<string>(),
+                It.IsAny<AgentToolAction>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ValidationResult(
+                ValidationVerdict.Mismatch,
+                "The file content does not match the objective.",
+                correctedAction))
+            .ReturnsAsync(new ValidationResult(
+                ValidationVerdict.Sufficient,
+                "The corrected content is present."));
+
+        var runner = CreateRunner(
+            llamaClientMock,
+            resultValidator: resultValidatorMock.Object,
+            runtimeSettings: new NebulaRuntimeSettings
+            {
+                RequireDeterministicVerification = false
+            },
+            useTestPolicyEngines: true);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create a note with the correct content.", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.Equal("incorrect", File.ReadAllText(targetPath));
+        Assert.Equal("correct", File.ReadAllText(correctedPath));
+        Assert.Equal(4, result.Evidence.Count);
+        Assert.True(correctedAction.RequiresSafetyReview);
+        resultValidatorMock.Verify(
+            validator => validator.ValidateAsync(
+                It.IsAny<string>(),
+                It.IsAny<AgentToolAction>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
     public async Task run_async_must_append_working_tree_diff_to_final_report()
     {
         using var workspace = new TempTestWorkspace();
@@ -2790,15 +4142,18 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     [Fact]
     public async Task file_read_under_operating_system_root_must_request_approval()
     {
+        var osRootFile = OperatingSystem.IsWindows()
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "win.ini")
+            : "/etc/hostname";
         var decisions = new Queue<string>(
         [
             StructuredActionDecision(
                 "I need to read the system file.",
-                "Read win.ini",
+                "Read system configuration",
                 OperationKind.FileRead,
-                targetPath: Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                    "win.ini"))
+                targetPath: osRootFile)
         ]);
 
         var llamaClientMock = CreateLlamaClientMock();
@@ -2806,7 +4161,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
 
         var runner = CreateRunner(llamaClientMock);
         var result = await runner.RunAsync(
-            CreateRequest("Read C:/Windows/win.ini."),
+            CreateRequest("Read the operating system configuration file."),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
@@ -3005,7 +4360,7 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
     }
 
     [Fact]
-    public async Task file_write_must_request_approval_when_target_was_modified_after_run_started()
+public async Task file_write_must_request_approval_when_target_was_modified_after_run_started()
     {
         using var workspace = new TempTestWorkspace();
         var targetPath = Path.Combine(workspace.Path, "existing.txt");
@@ -3014,6 +4369,11 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
 
         var decisions = new Queue<string>(
         [
+            StructuredActionDecision(
+                "I need to read the file first.",
+                "Read existing.txt",
+                OperationKind.FileRead,
+                targetPath: targetPath),
             StructuredActionDecision(
                 "I need to update the file.",
                 "Update existing.txt",
@@ -3025,30 +4385,14 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         var llamaClientMock = CreateLlamaClientMock();
         SetupDecisionSequence(llamaClientMock, decisions);
 
-        var operationPolicyMock = new Mock<IOperationPolicyEngine>();
-        operationPolicyMock
-            .Setup(engine => engine.EvaluateAsync(
-                It.IsAny<OperationPolicyRequest>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((OperationPolicyRequest request, CancellationToken _) =>
-                request.Classification?.Source == "ConcurrentModificationGuard"
-                    ? new CommandSafetyDecision(
-                        CommandSafetyDecisionType.AskApproval,
-                        CommandIntent.NeedsApproval,
-                        0.99,
-                        ["Concurrent modification detected."])
-                    : new CommandSafetyDecision(
-                        CommandSafetyDecisionType.Allow,
-                        CommandIntent.SafeWriteLocal,
-                        1,
-                        ["Allowed by test policy."]));
-
         var runner = CreateRunner(
             llamaClientMock,
-            operationPolicyEngine: operationPolicyMock.Object);
+            loggerMock: null,
+            commandPolicyEngine: CreateRealPolicyEngine(),
+            operationPolicyEngine: CreateRealOperationPolicyEngine());
 
         var result = await runner.RunAsync(
-            CreateRequest("Update existing.txt."),
+            CreateRequest("Update existing.txt.", workspace.Path),
             progress: null);
 
         Assert.Equal(ActionExecutionStatus.AwaitingApproval, result.ActionStatus);
@@ -3085,7 +4429,8 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
             runtimeSettings: new NebulaRuntimeSettings
             {
                 CommandTimeoutSeconds = 1
-            });
+            },
+            useTestPolicyEngines: true);
 
         var request = CreateRequest("Run the slow command.");
         request.MaxRetriesPerStep = 0;
@@ -3096,6 +4441,206 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         Assert.Contains(
             result.Commands,
             command => command.StandardError.Contains("timeout", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task run_async_edit_tool_replaces_exact_text_once()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "App.cs");
+        await File.WriteAllTextAsync(
+            targetPath,
+            "public class App { public int Value = 1; }" + Environment.NewLine);
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will update the value without rewriting the file.",
+                "Update Value to 2",
+                OperationKind.FileWrite,
+                targetPath: targetPath,
+                tool: "edit",
+                oldString: "Value = 1",
+                newString: "Value = 2"),
+            CompleteDecision("Done", "Value updated.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            useTestPolicyEngines: true).RunAsync(
+            CreateRequest("Update the value in App.cs.", workspace.Path),
+            progress: null);
+
+        var content = await File.ReadAllTextAsync(targetPath);
+        Assert.Contains("Value = 2", content);
+        Assert.DoesNotContain("Value = 1", content);
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+    }
+
+    [Fact]
+    public async Task run_async_glob_tool_lists_matching_workspace_files()
+    {
+        using var workspace = new TempTestWorkspace();
+        var sourceDirectory = Path.Combine(workspace.Path, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceDirectory, "App.cs"),
+            "public class App {}");
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceDirectory, "Notes.txt"),
+            "notes");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will locate the C# files.",
+                "Find C# files",
+                OperationKind.FileRead,
+                tool: "glob",
+                pattern: "**/*.cs"),
+            CompleteDecision("Done", "C# files found.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            useTestPolicyEngines: true).RunAsync(
+            CreateRequest("Find the C# files.", workspace.Path),
+            progress: null);
+
+        var command = Assert.Single(
+            result.Commands,
+            execution => execution.Run.StartsWith("glob", StringComparison.Ordinal));
+        Assert.Contains("src/App.cs", command.StandardOutput);
+        Assert.DoesNotContain("Notes.txt", command.StandardOutput);
+    }
+
+    [Fact]
+    public async Task run_async_glob_tool_matches_dotfiles_and_hidden_directories()
+    {
+        using var workspace = new TempTestWorkspace();
+        var workflowDirectory = Path.Combine(
+            workspace.Path,
+            ".github",
+            "workflows");
+        Directory.CreateDirectory(workflowDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(workflowDirectory, "ci.yml"),
+            "name: CI");
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.Path, ".env"),
+            "TOKEN=test");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will locate the workflow files.",
+                "Find workflow files",
+                OperationKind.FileRead,
+                tool: "glob",
+                pattern: ".github/**"),
+            StructuredActionDecision(
+                "I will locate the environment file.",
+                "Find the environment file",
+                OperationKind.FileRead,
+                tool: "glob",
+                pattern: ".env"),
+            CompleteDecision("Done", "Dotfiles found.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            useTestPolicyEngines: true).RunAsync(
+            CreateRequest("Find hidden project files.", workspace.Path),
+            progress: null);
+
+        var commands = result.Commands
+            .Where(execution => execution.Run.StartsWith("glob", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(2, commands.Count);
+        Assert.Contains(".github/workflows/ci.yml", commands[0].StandardOutput);
+        Assert.Equal(".env", commands[1].StandardOutput.Trim());
+    }
+
+    [Fact]
+    public async Task run_async_grep_tool_returns_line_matches()
+    {
+        using var workspace = new TempTestWorkspace();
+        var sourceDirectory = Path.Combine(workspace.Path, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceDirectory, "App.cs"),
+            "public class App {" + Environment.NewLine +
+            "    // needle" + Environment.NewLine +
+            "}");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will search for the needle.",
+                "Find needle",
+                OperationKind.FileRead,
+                tool: "grep",
+                pattern: "needle",
+                include: "**/*.cs"),
+            CompleteDecision("Done", "Needle found.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            useTestPolicyEngines: true).RunAsync(
+            CreateRequest("Find the needle.", workspace.Path),
+            progress: null);
+
+        var command = Assert.Single(
+            result.Commands,
+            execution => execution.Run.StartsWith("grep", StringComparison.Ordinal));
+        Assert.Contains("src/App.cs:2", command.StandardOutput);
+        Assert.Contains("needle", command.StandardOutput);
+    }
+
+    [Fact]
+    public async Task run_async_read_tool_alias_uses_file_read_pipeline()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "notes.txt");
+        await File.WriteAllTextAsync(targetPath, "hello from the read tool");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I will read the notes file.",
+                "Read notes",
+                OperationKind.FileRead,
+                targetPath: targetPath,
+                tool: "read"),
+            CompleteDecision("Done", "Notes read.")
+        ]);
+
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var result = await CreateRunner(
+            llamaClientMock,
+            useTestPolicyEngines: true).RunAsync(
+            CreateRequest("Read notes.txt.", workspace.Path),
+            progress: null);
+
+        var command = Assert.Single(
+            result.Commands,
+            execution => execution.Run.StartsWith("read-file", StringComparison.Ordinal));
+        Assert.Contains("hello from the read tool", command.StandardOutput);
     }
 
     private static AgentActionRunner CreateRunner(
@@ -3116,15 +4661,22 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         IOperationPolicyEngine? operationPolicyEngine = null,
         IGitDiffService? gitDiffService = null,
         ICommandSandbox? commandSandbox = null,
+        IMigrationService? migrationService = null,
         ICommandAllowlistService? commandAllowlistService = null,
-        IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null)
+        IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
+        IResultValidator? resultValidator = null,
+        IEnvironmentValidator? environmentValidator = null,
+        IPortDetectionService? portDetectionService = null,
+        ISmokeTestService? smokeTestService = null,
+        IScreenshotService? screenshotService = null,
+        bool useTestPolicyEngines = false)
     {
         return new AgentActionRunner(
             llamaClientMock.Object,
             (executorMock ?? CreateExecutorMock()).Object,
             CreateJsonExtractorMock().Object,
-            (loggerMock ?? CreateLoggerMock()).Object,
-            commandPolicyEngine: commandPolicyEngine ?? CreateAllowPolicyEngine(),
+            loggerMock?.Object ?? new ConsoleLogger(),
+            commandPolicyEngine: commandPolicyEngine ?? (useTestPolicyEngines ? CreateTestCommandPolicyEngine() : CreateRealPolicyEngine()),
             learningEngine: learningEngine,
             knowledgeQueryService: knowledgeQueryService,
             runtimeSettings: runtimeSettings,
@@ -3135,11 +4687,17 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
             projectStackValidator: projectStackValidator,
             workspaceMapService: workspaceMapService,
             plannedPatchApplier: plannedPatchApplier,
-            operationPolicyEngine: operationPolicyEngine,
+            operationPolicyEngine: operationPolicyEngine ?? (useTestPolicyEngines ? CreateTestOperationPolicyEngine() : CreateRealOperationPolicyEngine()),
             gitDiffService: gitDiffService,
             commandSandbox: commandSandbox,
+            migrationService: migrationService,
             commandAllowlistService: commandAllowlistService,
-            workspaceCategoryPolicyService: workspaceCategoryPolicyService);
+            workspaceCategoryPolicyService: workspaceCategoryPolicyService,
+            resultValidator: resultValidator,
+            environmentValidator: environmentValidator,
+            portDetectionService: portDetectionService,
+            smokeTestService: smokeTestService,
+            screenshotService: screenshotService);
     }
 
     private static IDeterministicVerificationService CreateDeterministicVerificationService(
@@ -3202,6 +4760,57 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         return new Nebula.Services.Safety.CommandPolicyEngine(
             new Nebula.Services.Safety.CompositeCommandClassifier(deterministic, unavailableMl));
     }
+
+    private static IOperationPolicyEngine CreateRealOperationPolicyEngine()
+    {
+        var commandPolicy = CreateRealPolicyEngine();
+        return new Nebula.Services.Safety.OperationPolicyEngine(
+            commandPolicy,
+            message => { /* test log */ });
+    }
+
+    // === Test Policy Engine Helpers ===
+    // These helpers create mock policy engines that always Allow, for use in tests
+    // where we want to test agent logic without safety policy interference.
+
+    private sealed class AlwaysAllowCommandPolicyEngine : ICommandPolicyEngine
+    {
+        public Task<CommandSafetyDecision> EvaluateAsync(
+            string commandText,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new CommandSafetyDecision(
+                CommandSafetyDecisionType.Allow,
+                CommandIntent.SafeExecuteLocal,
+                1,
+                ["Allowed by test policy."]));
+        }
+    }
+
+    private sealed class AlwaysAllowOperationPolicyEngine : IOperationPolicyEngine
+    {
+        public Task<CommandSafetyDecision> EvaluateAsync(
+            OperationPolicyRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new CommandSafetyDecision(
+                CommandSafetyDecisionType.Allow,
+                CommandIntent.SafeExecuteLocal,
+                1,
+                ["Allowed by test policy."]));
+        }
+    }
+
+    private static ICommandPolicyEngine CreateTestCommandPolicyEngine()
+    {
+        return new AlwaysAllowCommandPolicyEngine();
+    }
+
+    private static IOperationPolicyEngine CreateTestOperationPolicyEngine()
+    {
+        return new AlwaysAllowOperationPolicyEngine();
+    }
+
 
     private static Mock<ILlamaClient> CreateLlamaClientMock()
     {
@@ -3302,7 +4911,17 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
         string? language = null,
         string? templateId = null,
         IReadOnlyList<PlannedPatchFile>? plannedFiles = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        MigrationAction? migrationAction = null,
+        MigrationFramework? migrationFramework = null,
+        string? migrationName = null,
+        string? migrationContext = null,
+        string? tool = null,
+        string? oldString = null,
+        string? newString = null,
+        string? pattern = null,
+        string? include = null,
+        int? maxResults = null)
     {
         return JsonSerializer.Serialize(new AgentActionDecision
         {
@@ -3317,7 +4936,17 @@ var result = await runner.RunAsync(CreateRequest("Install requests."), progress:
                 TemplateId = templateId,
                 PlannedFiles = plannedFiles,
                 Language = language,
+                MigrationAction = migrationAction,
+                MigrationFramework = migrationFramework,
+                MigrationName = migrationName,
+                MigrationContext = migrationContext,
                 WorkingDirectory = workingDirectory,
+                Tool = tool,
+                OldString = oldString,
+                NewString = newString,
+                Pattern = pattern,
+                Include = include,
+                MaxResults = maxResults,
                 RequiresSafetyReview = true
             }
         });

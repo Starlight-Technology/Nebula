@@ -195,6 +195,13 @@ public interface IKnowledgeQueryService
         string topic,
         CancellationToken cancellationToken = default)
         => AnswerAsync(topic, cancellationToken);
+
+    Task<IReadOnlyList<ErrorFix>> SearchErrorFixesAsync(
+        string errorSignature,
+        string? stack = null,
+        string? workspace = null,
+        int maxResults = 5,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record KnowledgeSearchHit(
@@ -243,3 +250,10 @@ public sealed record ProjectDocumentationIndexResult(
     int FilesScanned,
     int CreatedCount,
     int SkippedCount);
+
+public sealed record ErrorFix(
+    string Source,
+    string Description,
+    string SuggestedCommand,
+    double Confidence,
+    string? EvidenceHash);

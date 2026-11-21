@@ -19,10 +19,21 @@ public sealed record ReferenceWorkspace(
     /// is null or whitespace, a dedicated default workspace under the temp
     /// directory is used instead of the process current directory.
     /// </summary>
-    public static ReferenceWorkspace Resolve(string? requestedRoot)
+    public static ReferenceWorkspace Resolve(string? requestedRoot) =>
+        Resolve(requestedRoot, null);
+
+    /// <summary>
+    /// Resolves the effective workspace root. When <paramref name="requestedRoot"/>
+    /// is null or whitespace and <paramref name="conversationId"/> is provided,
+    /// a dedicated default workspace for that conversation is used. An explicit
+    /// requested root is always used as-is.
+    /// </summary>
+    public static ReferenceWorkspace Resolve(
+        string? requestedRoot,
+        Guid? conversationId)
     {
         var root = string.IsNullOrWhiteSpace(requestedRoot)
-            ? Path.Combine(Path.GetTempPath(), DefaultWorkspaceFolderName)
+            ? ResolveDefaultRoot(conversationId)
             : Path.GetFullPath(requestedRoot);
 
         var wasCreated = !Directory.Exists(root);
@@ -36,6 +47,16 @@ public sealed record ReferenceWorkspace(
                 Path.AltDirectorySeparatorChar)),
             wasCreated,
             isEmpty);
+    }
+
+    private static string ResolveDefaultRoot(Guid? conversationId)
+    {
+        var defaultRoot = Path.Combine(
+            Path.GetTempPath(),
+            DefaultWorkspaceFolderName);
+        return conversationId is { } id && id != Guid.Empty
+            ? Path.Combine(defaultRoot, id.ToString("N"))
+            : defaultRoot;
     }
 
     private static IEnumerable<string> SafeEnumerateFileSystemEntries(string root)

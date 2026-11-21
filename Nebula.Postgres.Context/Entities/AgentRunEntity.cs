@@ -26,6 +26,8 @@ public class AgentRunEntity
 
     public string? WorkspaceRoot { get; set; }
 
+    public Guid? ParentRunId { get; set; }
+
     public ICollection<AgentStepRecordEntity> Steps { get; set; } = [];
 
     public ICollection<AgentArtifactEntity> Artifacts { get; set; } = [];

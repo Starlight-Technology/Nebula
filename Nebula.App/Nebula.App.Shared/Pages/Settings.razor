@@ -13,7 +13,18 @@
                              Color="CoronaColorSemantic.Neutral" />
                 <CoronaBadge Content="@WorkspaceState.GetCommandApprovalSummary()"
                              Variant="CoronaBadgeVariant.Outlined"
-                             Color="@(WorkspaceState.RuntimeSettings.AutoApproveCommands ? CoronaColorSemantic.Warning : CoronaColorSemantic.Neutral)" />
+                             Color="@(WorkspaceState.RuntimeSettings.EffectiveAutoApproveCommands ? CoronaColorSemantic.Warning : CoronaColorSemantic.Neutral)" />
+                <CoronaBadge Content="@(WorkspaceState.QuickSettings.SandboxMode == "docker" ? "Sandbox: Docker" : "Sandbox: desativado")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@(WorkspaceState.QuickSettings.SandboxMode == "docker" ? CoronaColorSemantic.Success : CoronaColorSemantic.Neutral)" />
+                <button type="button"
+                        title="@(WorkspaceState.IsGitRepository ? "Repositorio Git ativo" : "Nao e um repositorio Git - funcionalidades de PR indisponiveis")"
+                        @onclick="NavigateToGit"
+                        style="padding: 0; border: 0; background: transparent; cursor: pointer;">
+                    <CoronaBadge Content="@(WorkspaceState.IsGitRepository ? "Git: ✓" : "Git: ✗")"
+                                 Variant="CoronaBadgeVariant.Soft"
+                                 Color="@(WorkspaceState.IsGitRepository ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                </button>
             </CoronaStack>
             <h2>Preferencias do Nebula</h2>
             <p>Configure modelos, pesquisa web, aprovacoes de comandos, aceleracao e o idioma usado nas respostas da LLM.</p>
@@ -25,6 +36,13 @@
                           Icon="@CoronaIcons.ArrowLeft"
                           OnClick="NavigateToChat">
                 Conversa
+            </CoronaButton>
+
+            <CoronaButton Variant="CoronaButtonVariant.Outlined"
+                          Color="CoronaColorSemantic.Neutral"
+                          Icon="@CoronaIcons.GitBranch"
+                          OnClick="NavigateToGit">
+                Git
             </CoronaButton>
 
             <CoronaButton Loading="@WorkspaceState.IsSavingSettings"
@@ -118,11 +136,207 @@
                         <input type="checkbox"
                                checked="@WorkspaceState.QuickSettings.AutoApproveCommands"
                                disabled="@WorkspaceState.IsSavingSettings"
-                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.AutoApproveCommands = args.Value is true)" />
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.SetAutoApproveCommands(args.Value is true))" />
                         <span>
                             <strong>Auto-aprovar comandos que pedem confirmacao</strong>
                             <small>Comandos classificados como bloqueados continuam impedidos pela policy.</small>
                         </span>
+                    </label>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.CompactMode ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.CompactMode"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.CompactMode = args.Value is true)" />
+                        <span>
+                            <strong>Modo compacto no terminal do agente</strong>
+                            <small>Mostra apenas as ultimas linhas de saida para execucoes longas.</small>
+                        </span>
+                    </label>
+
+<div class="nebula-settings-field">
+                        <span>Perfil de autonomia</span>
+                        <select @bind="WorkspaceState.QuickSettings.AutonomyProfile"
+                                @bind:after="WorkspaceState.NormalizeSandboxForSelectedProfile"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            @foreach (var profile in WorkspaceState.AutonomyProfiles)
+                            {
+                                <option value="@profile.Key">@profile.Name</option>
+                            }
+                        </select>
+                        <small>
+                            @(WorkspaceState.AutonomyProfiles.FirstOrDefault(p => p.Key == WorkspaceState.QuickSettings.AutonomyProfile)?.Description ?? string.Empty)
+                        </small>
+                    </div>
+
+<CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          Color="CoronaColorSemantic.Primary"
+                          OnClick="@WorkspaceState.ApplyAutonomyProfileDefaults"
+                          Disabled="@WorkspaceState.IsSavingSettings">
+                        Aplicar padroes do perfil
+                    </CoronaButton>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Sandbox de comandos</h3>
+                        <p>Isola comandos elegiveis em um container Docker sem rede, sem privilegios e com o workspace montado.</p>
+                    </div>
+
+                    <div class="nebula-settings-grid">
+                        <label class="nebula-settings-field">
+                            <span>Modo</span>
+                            <select id="sandbox-mode"
+                                    @bind="WorkspaceState.QuickSettings.SandboxMode"
+                                    disabled="@(WorkspaceState.IsSavingSettings || WorkspaceState.IsSandboxModeLockedForSelectedProfile)">
+                                <option value="disabled">Desativado</option>
+                                <option value="docker">Docker</option>
+                            </select>
+                            <small>Comandos que pedem aprovacao passam a rodar no container quando o modo Docker estiver ativo.</small>
+                        </label>
+
+                        <label class="nebula-settings-field">
+                            <span>Escopo</span>
+                            <select id="sandbox-scope"
+                                    @bind="WorkspaceState.QuickSettings.SandboxScope"
+                                    disabled="@WorkspaceState.IsSavingSettings">
+                                <option value="workspace"
+                                        disabled="@(string.IsNullOrWhiteSpace(WorkspaceState.QuickSettings.WorkspaceRoot))">
+                                    Workspace atual
+                                </option>
+                                <option value="global">Padrao global do usuario</option>
+                            </select>
+                            <small>O workspace usa o padrao global quando nao tem uma configuracao propria.</small>
+                        </label>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Imagem Docker</span>
+                        <input id="sandbox-image"
+                               type="text"
+                               placeholder="mcr.microsoft.com/powershell:lts"
+                               @bind="WorkspaceState.QuickSettings.SandboxImage"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>Imagem usada no container. A imagem padrao e baixada no primeiro uso.</small>
+                    </label>
+
+                    <div class="nebula-settings-grid">
+                        <label class="nebula-settings-field">
+                            <span>Memoria limite (MB)</span>
+                            <input id="sandbox-memory"
+                                   type="number"
+                                   min="0"
+                                   step="128"
+                                   @bind="WorkspaceState.QuickSettings.SandboxMemoryLimitMb"
+                                   disabled="@WorkspaceState.IsSavingSettings" />
+                            <small>0 significa sem limite explicito de memoria.</small>
+                        </label>
+
+                        <label class="nebula-settings-field">
+                            <span>CPU limite</span>
+                            <input id="sandbox-cpu"
+                                   type="number"
+                                   min="0"
+                                   step="0.1"
+                                   @bind="WorkspaceState.QuickSettings.SandboxCpuLimit"
+                                   disabled="@WorkspaceState.IsSavingSettings" />
+                            <small>0 significa sem limite explicito de CPU.</small>
+                        </label>
+                    </div>
+
+                    <div class="nebula-info-panel">
+                        <p class="nebula-info-panel__title">Politica de sandbox</p>
+                        <p>@WorkspaceState.SandboxPolicyHint</p>
+                        @if (WorkspaceState.IsSandboxInheritedFromGlobal)
+                        {
+                            <p>Esta configuracao esta herdada do padrao global do usuario.</p>
+                        }
+                    </div>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Smoke tests</h3>
+                        <p>Verifica se a aplicacao web local responde antes de concluir tarefas de codigo.</p>
+                    </div>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.SmokeTestEnabled ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.SmokeTestEnabled"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.SmokeTestEnabled = args.Value is true)" />
+                        <span>
+                            <strong>Executar smoke tests no Definition of Done</strong>
+                            <small>Quando a app local estiver acessivel, URLs que responderem com erro reprovam o DoD. Se nenhuma URL responder, o smoke test e ignorado.</small>
+                        </span>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Timeout por verificacao (s)</span>
+                        <input type="number"
+                               min="1"
+                               max="120"
+                               step="1"
+                               @bind="WorkspaceState.QuickSettings.SmokeTestTimeoutSeconds"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>Tempo maximo de espera por URL (default: 10s)</small>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
+                        <h3>Captura de Screenshots</h3>
+                        <p>Captura automatica de screenshots apos mudancas em arquivos frontend para comparacao visual.</p>
+                    </div>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.ScreenshotEnabled ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.ScreenshotEnabled"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.ScreenshotEnabled = args.Value is true)" />
+                        <span>
+                            <strong>Capturar screenshots automaticos</strong>
+                            <small>Captura screenshots apos mudancas em arquivos frontend (.html, .razor, .vue, .js, .ts, .css, etc.)</small>
+                        </span>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Threshold de diferenca</span>
+                        <input type="number"
+                               step="0.01"
+                               min="0"
+                               max="10"
+                               @bind="WorkspaceState.QuickSettings.ScreenshotDiffThresholdPercent"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>Porcentagem minima de pixels diferentes para detectar mudancas (default: 0.1%)</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Viewports</span>
+                        <textarea @bind="WorkspaceState.QuickSettings.ScreenshotViewportsText"
+                                  @bind:event="oninput"
+                                  rows="3"
+                                  placeholder="1920x1080&#10;1366x768&#10;375x667"
+                                  disabled="@WorkspaceState.IsSavingSettings"></textarea>
+                        <small>Um por linha (ex: 1920x1080, 1366x768, 375x667)</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Delay de captura (ms)</span>
+                        <input type="number"
+                               min="0"
+                               max="10000"
+                               step="100"
+                               @bind="WorkspaceState.QuickSettings.ScreenshotCaptureDelayMs"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>Tempo de espera apos carregar a pagina antes de capturar (default: 1000ms)</small>
                     </label>
                 </section>
             </CoronaCard>
@@ -165,6 +379,36 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Provider e usuario</h3>
+                        <p>Define o modo local-first e a identidade usada na memoria do usuario.</p>
+                    </div>
+
+                    <label class="nebula-settings-field">
+                        <span>Provider mode</span>
+                        <select @bind="WorkspaceState.QuickSettings.ProviderMode"
+                                disabled="@WorkspaceState.IsSavingSettings">
+                            <option value="@ProviderMode.LocalOnly">Local only</option>
+                            <option value="@ProviderMode.LocalPreferred">Local preferred</option>
+                            <option value="@ProviderMode.RemoteAllowed">Remote allowed</option>
+                            <option value="@ProviderMode.RemoteOnly">Remote only</option>
+                        </select>
+                        <small>Define o preferencial local-first e a permissao de fallback remoto.</small>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>User ID</span>
+                        <input id="user-id"
+                               @bind="WorkspaceState.QuickSettings.UserId"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               placeholder="user id (opcional)" />
+                        <small>Usado para user_memory e workspace_memory.</small>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>Idioma das respostas</h3>
                         <p>Esta preferencia entra no prompt de sistema e nos prompts internos de agente e aprendizado.</p>
                     </div>
@@ -191,9 +435,11 @@
 
                     <label class="nebula-settings-field">
                         <span>Pasta do projeto</span>
-                        <input type="text"
+                        <input id="workspace-root"
+                               type="text"
                                placeholder="Ex.: C:\Users\voce\source\repos\MeuProjeto"
                                @bind="WorkspaceState.QuickSettings.WorkspaceRoot"
+                               @bind:after="WorkspaceState.NormalizeSandboxScopeFromWorkspace"
                                disabled="@WorkspaceState.IsSavingSettings" />
                         <small>
                             Pasta efetiva:
@@ -447,6 +693,10 @@
                         <strong>@(WorkspaceState.QuickSettings.AutoApproveCommands ? "Auto-aprovar" : "Manual")</strong>
                     </div>
                     <div class="nebula-status-row">
+                        <span>Sandbox</span>
+                        <strong>@(WorkspaceState.QuickSettings.SandboxMode == "docker" ? "Docker" : "Desativado")</strong>
+                    </div>
+                    <div class="nebula-status-row">
                         <span>Aceleracao</span>
                         <strong>@GetAccelerationName()</strong>
                     </div>
@@ -457,6 +707,14 @@
                     <div class="nebula-status-row">
                         <span>Workspace</span>
                         <strong>@WorkspaceState.QuickSettings.WorkspaceRoot.Trim()</strong>
+                    </div>
+                    <div class="nebula-status-row">
+                        <span>Git</span>
+                        <strong>
+                            <CoronaBadge Content="@(WorkspaceState.IsGitRepository ? "Ativo" : "Inativo")"
+                                         Variant="CoronaBadgeVariant.Soft"
+                                         Color="@(WorkspaceState.IsGitRepository ? CoronaColorSemantic.Success : CoronaColorSemantic.Warning)" />
+                        </strong>
                     </div>
                 </div>
             </CoronaCard>
@@ -473,6 +731,7 @@
     protected override async Task OnInitializedAsync()
     {
         await WorkspaceState.EnsureRuntimeAsync();
+        await WorkspaceState.RefreshGitStatusAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -542,6 +801,11 @@
     private void NavigateToChat()
     {
         NavigationManager.NavigateTo("/chat");
+    }
+
+    private void NavigateToGit()
+    {
+        NavigationManager.NavigateTo("/git");
     }
 
     private void HandleWorkspaceChanged()

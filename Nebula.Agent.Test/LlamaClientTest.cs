@@ -10,22 +10,30 @@ public class LlamaClientTest
     [Fact]
     public async Task get_response_async_must_capture_thinking_and_response_from_stream_chunks()
     {
-        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        var handler = new StubHttpMessageHandler(request =>
         {
-            Content = new StringContent(
-                """
-                {"response":"","thinking":"Analisando","done":false}
-                {"response":"","thinking":" o pedido","done":false}
-                {"response":"Resposta final","done":false}
-                {"response":"","done":true}
-                """,
-                Encoding.UTF8,
-                "application/json")
+            if (IsPsRequest(request))
+            {
+                return PsResponse("mock-model");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"response":"","thinking":"Analisando","done":false}
+                    {"response":"","thinking":" o pedido","done":false}
+                    {"response":"Resposta final","done":false}
+                    {"response":"","done":true}
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            };
         });
 
         var client = new LlamaClient(new HttpClient(handler), defaultModel: "mock-model");
         LlamaStreamUpdate? partialUpdate = null;
-        var progress = new Progress<LlamaStreamUpdate>(update => partialUpdate = update);
+        var progress = new InlineProgress<LlamaStreamUpdate>(update => partialUpdate = update);
 
         var response = await client.GetResponseAsync("Explique o projeto", progress, CancellationToken.None);
 
@@ -42,6 +50,11 @@ public class LlamaClientTest
 
         var handler = new StubHttpMessageHandler(request =>
         {
+            if (IsPsRequest(request))
+            {
+                return PsResponse("mock-model");
+            }
+
             capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
 
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -69,6 +82,11 @@ public class LlamaClientTest
 
         var handler = new StubHttpMessageHandler(request =>
         {
+            if (IsPsRequest(request))
+            {
+                return PsResponse("mock-model");
+            }
+
             capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
 
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -94,6 +112,11 @@ public class LlamaClientTest
 
         var handler = new StubHttpMessageHandler(request =>
         {
+            if (IsPsRequest(request))
+            {
+                return PsResponse("llama3.2:1b");
+            }
+
             capturedPayloads.Add(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
 
             if (capturedPayloads.Count == 1)
@@ -129,6 +152,11 @@ public class LlamaClientTest
         string? capturedPayload = null;
         var handler = new StubHttpMessageHandler(request =>
         {
+            if (IsPsRequest(request))
+            {
+                return PsResponse("chat-model", "learning-model");
+            }
+
             capturedPayload = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -156,11 +184,132 @@ public class LlamaClientTest
         Assert.Equal("chat-model", client.SelectedModel);
     }
 
+    [Fact]
+    public async Task get_response_async_must_fail_fast_when_model_load_timeout_expires()
+    {
+        var client = new LlamaClient(
+            new HttpClient(new LoadTimeoutHttpMessageHandler()),
+            defaultModel: "nemotron-3.5-lightning:latest",
+            loadTimeoutSeconds: 1);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.GetResponseAsync("Explique o projeto"));
+
+        Assert.Contains("nao conseguiu carregar", error.Message);
+        Assert.Contains("nemotron-3.5-lightning:latest", error.Message);
+        Assert.Contains("memoria", error.Message);
+    }
+
+    [Fact]
+    public async Task get_response_async_must_warm_up_model_when_it_is_not_loaded()
+    {
+        var payloads = new List<string>();
+
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            if (IsPsRequest(request))
+            {
+                return PsResponse();
+            }
+
+            payloads.Add(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    payloads.Count == 1
+                        ? """{"response":"ok","done":true}"""
+                        : """{"response":"Resposta final","done":true}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        var client = new LlamaClient(new HttpClient(handler), defaultModel: "cold-model");
+
+        var response = await client.GetResponseAsync("Explique o projeto");
+
+        Assert.Equal("Resposta final", response);
+        Assert.Equal(2, payloads.Count);
+        Assert.Contains(@"""num_predict"":1", payloads[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""stream"":false", payloads[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"""prompt"":""Explique o projeto""", payloads[1], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task get_response_async_must_explain_ollama_model_load_failure()
+    {
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            if (IsPsRequest(request))
+            {
+                return PsResponse("nemotron-3.5-lightning:latest");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent(
+                    """{"error":"timed out waiting for llama-server to start - "}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        var client = new LlamaClient(
+            new HttpClient(handler),
+            defaultModel: "nemotron-3.5-lightning:latest");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.GetResponseAsync("Explique o projeto"));
+
+        Assert.Contains("nao conseguiu carregar", error.Message);
+        Assert.Contains("nemotron-3.5-lightning:latest", error.Message);
+        Assert.Contains("modelo menor", error.Message);
+    }
+
+    private static bool IsPsRequest(HttpRequestMessage request)
+    {
+        return request.Method == HttpMethod.Get
+            && request.RequestUri?.AbsolutePath.EndsWith("/api/ps", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static HttpResponseMessage PsResponse(params string[] modelNames)
+    {
+        var models = string.Join(
+            ",",
+            modelNames.Select(name => $"{{\"name\":\"{name}\"}}"));
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                $"{{\"models\":[{models}]}}",
+                Encoding.UTF8,
+                "application/json")
+        };
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
+
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromResult(responder(request));
+        }
+    }
+
+    private sealed class LoadTimeoutHttpMessageHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (IsPsRequest(request))
+            {
+                return PsResponse();
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }

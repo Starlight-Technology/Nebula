@@ -36,6 +36,32 @@ public sealed class DockerCommandSandboxTest
         Assert.Equal(SandboxMode.Docker, sandbox.Mode);
     }
 
+    [Theory]
+    [InlineData("--privileged alpine")]
+    [InlineData("alpine; touch /tmp/pwned")]
+    public async Task run_sandboxed_async_must_reject_invalid_image(string image)
+    {
+        var sandbox = CreateSandbox(new NebulaRuntimeSettings
+        {
+            SandboxMode = SandboxMode.Docker,
+            SandboxImage = image
+        });
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
+        var command = new ResolvedCommand(
+            "bash",
+            "-c \"echo oi\"",
+            "echo oi",
+            workspace,
+            []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sandbox.RunSandboxedAsync(
+                ShellKind.Bash,
+                command,
+                workspace,
+                CancellationToken.None));
+    }
+
     [Fact]
     public async Task run_sandboxed_async_must_invoke_docker_with_isolation_flags()
     {
@@ -66,17 +92,18 @@ public sealed class DockerCommandSandboxTest
                 SandboxCpuLimit = 1
             },
             executorMock.Object);
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
         var command = new ResolvedCommand(
             "powershell.exe",
             "-NoProfile -ExecutionPolicy Bypass -Command \"echo oi\"",
             "echo oi",
-            "C:\\workspace",
+            workspace,
             []);
 
         var result = await sandbox.RunSandboxedAsync(
             ShellKind.PowerShell,
             command,
-            "C:\\workspace",
+            workspace,
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
@@ -89,7 +116,7 @@ public sealed class DockerCommandSandboxTest
         Assert.Contains("--security-opt no-new-privileges", captured.Arguments);
         Assert.Contains("--memory 512m", captured.Arguments);
         Assert.Contains("--cpus 1", captured.Arguments);
-        Assert.Contains("\"C:\\workspace:/workspace:rw\"", captured.Arguments);
+        Assert.Contains($"\"{workspace}:/workspace:rw\"", captured.Arguments);
         Assert.Contains("-w /workspace", captured.Arguments);
         Assert.Contains("mcr.microsoft.com/powershell:lts", captured.Arguments);
         Assert.Contains("pwsh -NoProfile -NonInteractive -Command", captured.Arguments);
@@ -258,23 +285,34 @@ public sealed class DockerCommandSandboxTest
                 SandboxMode = SandboxMode.Docker
             },
             executorMock.Object);
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            "opencode",
+            "nebula-manual");
+        var targetFile = Path.Combine(
+            workspace,
+            "web-project",
+            "index.html");
+        var targetFileForward = targetFile.Replace('\\', '/');
         var command = new ResolvedCommand(
             "powershell.exe",
-            "-NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType File -Path 'C:/Users/rodri/AppData/Local/Temp/opencode/nebula-manual/web-project/index.html'\"",
-            "New-Item -ItemType File -Path 'C:/Users/rodri/AppData/Local/Temp/opencode/nebula-manual/web-project/index.html'",
-            "C:\\Users\\rodri\\AppData\\Local\\Temp\\opencode\\nebula-manual",
+            $"-NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType File -Path '{targetFileForward}'\"",
+            $"New-Item -ItemType File -Path '{targetFileForward}'",
+            workspace,
             []);
 
         await sandbox.RunSandboxedAsync(
             ShellKind.PowerShell,
             command,
-            "C:\\Users\\rodri\\AppData\\Local\\Temp\\opencode\\nebula-manual",
+            workspace,
             CancellationToken.None);
 
         Assert.NotNull(captured);
-        Assert.DoesNotContain("C:/Users/rodri", captured.Arguments);
-        Assert.Contains("web-project/index.html", captured.Arguments);
         Assert.Contains("/workspace/web-project/index.html", captured.Arguments);
+        Assert.DoesNotContain(
+            targetFileForward,
+            captured.Arguments,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -322,12 +360,206 @@ public sealed class DockerCommandSandboxTest
         Assert.DoesNotContain("/workspace/file.txt", captured.Arguments);
     }
 
+    [Fact]
+    public async Task run_sandboxed_async_must_use_podman_and_relabel_workspace()
+    {
+        var executorMock = new Mock<IResolvedCommandExecutor>();
+        ResolvedCommand? captured = null;
+        executorMock
+            .Setup(executor => executor.RunCommandDetailedAsync(
+                It.IsAny<ResolvedCommand>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResolvedCommand command, CancellationToken _) =>
+            {
+                captured = command;
+                return new ShellCommandResult
+                {
+                    Command = command.DisplayCommand,
+                    WorkingDirectory = command.WorkingDirectory,
+                    StandardOutput = "podman output",
+                    ExitCode = 0
+                };
+            });
+
+        var sandbox = CreateSandbox(
+            new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            executorMock.Object,
+            new SandboxRuntimeInfo("podman", "podman", true));
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
+        var command = new ResolvedCommand(
+            "bash",
+            "-c \"echo oi\"",
+            "echo oi",
+            workspace,
+            []);
+
+        var result = await sandbox.RunSandboxedAsync(
+            ShellKind.Bash,
+            command,
+            workspace,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotNull(captured);
+        Assert.Equal("podman", captured.FileName);
+        Assert.Contains($":/workspace:rw,Z", captured.Arguments);
+        Assert.Contains("(sandbox podman)", captured.DisplayCommand);
+    }
+
+    [Fact]
+    public async Task run_sandboxed_async_must_use_host_mount_when_provided()
+    {
+        var executorMock = new Mock<IResolvedCommandExecutor>();
+        ResolvedCommand? captured = null;
+        executorMock
+            .Setup(executor => executor.RunCommandDetailedAsync(
+                It.IsAny<ResolvedCommand>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResolvedCommand command, CancellationToken _) =>
+            {
+                captured = command;
+                return new ShellCommandResult
+                {
+                    Command = command.DisplayCommand,
+                    WorkingDirectory = command.WorkingDirectory,
+                    ExitCode = 0
+                };
+            });
+
+        var sandbox = CreateSandbox(
+            new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            executorMock.Object);
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
+        var hostWorkspace = Path.Combine(
+            Path.GetTempPath(),
+            "nebula-host-workspace");
+        Directory.CreateDirectory(hostWorkspace);
+        try
+        {
+            var command = new ResolvedCommand(
+                "bash",
+                "-c \"echo oi\"",
+                "echo oi",
+                workspace,
+                []);
+
+            await sandbox.RunSandboxedAsync(
+                ShellKind.Bash,
+                command,
+                workspace,
+                new SandboxWorkspaceMount(hostWorkspace, Path.GetTempPath()),
+                CancellationToken.None);
+
+            Assert.NotNull(captured);
+            Assert.Contains(
+                $"\"{hostWorkspace}:/workspace:rw\"",
+                captured.Arguments);
+        }
+        finally
+        {
+            Directory.Delete(hostWorkspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task run_sandboxed_async_must_reject_host_mount_outside_allowed_root()
+    {
+        var executorMock = new Mock<IResolvedCommandExecutor>();
+        var sandbox = CreateSandbox(
+            new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            executorMock.Object);
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
+        var command = new ResolvedCommand(
+            "bash",
+            "-c \"echo oi\"",
+            "echo oi",
+            workspace,
+            []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sandbox.RunSandboxedAsync(
+                ShellKind.Bash,
+                command,
+                workspace,
+                new SandboxWorkspaceMount(
+                    "/outside/workspace",
+                    Path.GetTempPath()),
+                CancellationToken.None));
+
+        executorMock.Verify(
+            executor => executor.RunCommandDetailedAsync(
+                It.IsAny<ResolvedCommand>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task run_sandboxed_async_must_fail_without_container_runtime()
+    {
+        var executorMock = new Mock<IResolvedCommandExecutor>();
+        var sandbox = CreateSandboxWithoutRuntime(
+            new NebulaRuntimeSettings
+            {
+                SandboxMode = SandboxMode.Docker
+            },
+            executorMock.Object);
+        var workspace = Path.GetTempPath().TrimEnd('\\', '/');
+        var command = new ResolvedCommand(
+            "bash",
+            "-c \"echo oi\"",
+            "echo oi",
+            workspace,
+            []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sandbox.RunSandboxedAsync(
+                ShellKind.Bash,
+                command,
+                workspace,
+                CancellationToken.None));
+
+        executorMock.Verify(
+            executor => executor.RunCommandDetailedAsync(
+                It.IsAny<ResolvedCommand>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     private static DockerCommandSandbox CreateSandbox(
         NebulaRuntimeSettings settings,
-        IResolvedCommandExecutor? executor = null)
+        IResolvedCommandExecutor? executor = null,
+        SandboxRuntimeInfo? runtime = null)
     {
         return new DockerCommandSandbox(
             executor ?? new Mock<IResolvedCommandExecutor>().Object,
-            settings);
+            settings,
+            new FakeSandboxRuntimeLocator(
+                runtime ?? new SandboxRuntimeInfo("docker", "docker", false)));
+    }
+
+    private static DockerCommandSandbox CreateSandboxWithoutRuntime(
+        NebulaRuntimeSettings settings,
+        IResolvedCommandExecutor executor)
+    {
+        return new DockerCommandSandbox(
+            executor,
+            settings,
+            new FakeSandboxRuntimeLocator(null));
+    }
+
+    private sealed class FakeSandboxRuntimeLocator(
+        SandboxRuntimeInfo? runtime) : ISandboxRuntimeLocator
+    {
+        public SandboxRuntimeInfo? Locate(SandboxContainerRuntime preference) =>
+            runtime;
     }
 }

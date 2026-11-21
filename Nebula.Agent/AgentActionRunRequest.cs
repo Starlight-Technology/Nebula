@@ -1,3 +1,4 @@
+using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
@@ -13,6 +14,19 @@ public sealed class AgentActionRunRequest
     public Guid ConversationId { get; set; }
 
     public Guid RequestId { get; set; }
+
+    /// <summary>
+    /// Identifier of the persisted agent run. When set, the runner persists
+    /// (upserts) the run under this id instead of creating another row keyed by
+    /// the request id.
+    /// </summary>
+    public Guid? RunId { get; set; }
+
+    /// <summary>
+    /// Identifier of the run that originated this one, when this request is a
+    /// continuation (approved action or resumed task).
+    /// </summary>
+    public Guid? ParentRunId { get; set; }
 
     public string Prompt { get; set; } = string.Empty;
 
@@ -46,6 +60,23 @@ public sealed class AgentActionRunRequest
     /// </summary>
     public IReadOnlyCollection<string>? ConversationApprovedCommands { get; set; }
 
+    /// <summary>
+    /// Provider mode selected for this invocation. The runtime should prefer
+    /// local execution unless the user explicitly allows remote behavior.
+    /// </summary>
+    public Nebula.Core.Configuration.ProviderMode ProviderMode { get; set; } =
+        Nebula.Core.Configuration.ProviderMode.LocalPreferred;
+
+    /// <summary>
+    /// Agent selected by the provider policy for the current task. This is the
+    /// effective runtime choice used to keep local-first behaviour as default.
+    /// </summary>
+    public string? SelectedAgentId { get; set; }
+
+    public string? SelectedAgentName { get; set; }
+
+    public string? SelectedAgentDescription { get; set; }
+
     [Obsolete("Use MaxRetriesPerStep instead.")]
     public int? MaxRetries { get; set; }
 }
@@ -78,6 +109,16 @@ public sealed class AgentApprovedAction
     /// Template id of the proposed scaffold (ProjectScaffold).
     /// </summary>
     public string? TemplateId { get; set; }
+
+    public MigrationAction? MigrationAction { get; set; }
+
+    public MigrationFramework? MigrationFramework { get; set; }
+
+    public string? MigrationName { get; set; }
+
+    public string? MigrationContext { get; set; }
+
+    public bool MigrationDryRun { get; set; }
 
     public string? WorkingDirectory { get; set; }
 

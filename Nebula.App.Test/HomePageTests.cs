@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using Bunit;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +11,7 @@ using Nebula.App.Shared.Setup;
 using Nebula.App.Shared.State;
 using Nebula.Core.Agent;
 using Nebula.Core.Configuration;
+using Nebula.Core.Execution;
 using Nebula.Core.Interactions;
 using Nebula.Core.Operations;
 using Nebula.Core.Safety;
@@ -418,7 +421,7 @@ public sealed class HomePageTests : HomePageTestContext
         RegisterPageServices(new FakeManager(), new FakeLlamaClient());
 
         var component = Render<Nebula.App.Shared.Pages.Settings>();
-        component.WaitForAssertion(() =>
+component.WaitForAssertion(() =>
         {
             Assert.Contains("Preferencias do Nebula", component.Markup);
             Assert.Contains("Modelo de aprendizado", component.Markup);
@@ -426,8 +429,8 @@ public sealed class HomePageTests : HomePageTestContext
 
         component.Find("input[value='BingHtml']").Change("BingHtml");
         component.Find("input[type='checkbox']").Change(true);
-        component.FindAll(".nebula-settings-field select")[2].Change("nvidia");
-        component.FindAll(".nebula-settings-field select")[3].Change("es-ES");
+        component.Find("select option[value='nvidia']").ParentElement!.Change("nvidia");
+        component.Find("select option[value='es-ES']").ParentElement!.Change("es-ES");
         component.FindAll("button")
             .Single(button => button.TextContent.Contains(
                 "Salvar configuracao",
@@ -447,6 +450,246 @@ public sealed class HomePageTests : HomePageTestContext
                 invocation => invocation.Identifier == "localStorage.setItem");
             Assert.Contains("Configuracao salva e aplicada", component.Markup);
         });
+    }
+
+    [Fact]
+    public void quick_settings_must_persist_sandbox_preferences()
+    {
+        var store = new FakeSandboxSettingsStore();
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-sandbox-{Guid.NewGuid():N}");
+        RegisterPageServices(
+            new FakeManager(),
+            new FakeLlamaClient(),
+            sandboxSettingsStore: store);
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+            Assert.Contains("Sandbox de comandos", component.Markup));
+
+        component.Find("#user-id").Change("user-a");
+        component.Find("#workspace-root").Change(workspace);
+        component.Find("#sandbox-scope").Change("workspace");
+        component.Find("#sandbox-mode").Change("docker");
+        component.Find("#sandbox-image").Change("custom/image:latest");
+        component.Find("#sandbox-memory").Change("1024");
+        component.Find("#sandbox-cpu").Change("1.5");
+        component.FindAll("button")
+            .Single(button => button.TextContent.Contains(
+                "Salvar configuracao",
+                StringComparison.OrdinalIgnoreCase))
+            .Click();
+
+        component.WaitForAssertion(() =>
+        {
+            var saved = Assert.Single(store.SavedSettings);
+            Assert.Equal("user-a", saved.UserId);
+            Assert.Equal(workspace, saved.Workspace);
+            Assert.Equal(SandboxMode.Docker, saved.Mode);
+            Assert.Equal("custom/image:latest", saved.Image);
+            Assert.Equal(1024, saved.MemoryLimitMb);
+            Assert.Equal(1.5, saved.CpuLimit);
+
+            var settings = Services.GetRequiredService<NebulaRuntimeSettings>();
+            Assert.Equal(SandboxMode.Docker, settings.SandboxMode);
+            Assert.Equal("custom/image:latest", settings.SandboxImage);
+            Assert.Equal(1024, settings.SandboxMemoryLimitMb);
+            Assert.Equal(1.5, settings.SandboxCpuLimit);
+            Assert.Contains(
+                JSInterop.Invocations,
+                invocation => invocation.Identifier == "localStorage.setItem");
+        });
+    }
+
+    [Fact]
+    public void settings_must_load_sandbox_from_global_database_row()
+    {
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-sandbox-{Guid.NewGuid():N}");
+        var store = new FakeSandboxSettingsStore();
+        store.Seed(new SandboxSettings(
+            "user-a",
+            string.Empty,
+            SandboxMode.Docker,
+            "global/image:latest",
+            2048,
+            2,
+            DateTimeOffset.UtcNow));
+        RegisterPageServices(
+            new FakeManager(),
+            new FakeLlamaClient(),
+            sandboxSettingsStore: store);
+
+        var runtimeSettings = Services.GetRequiredService<NebulaRuntimeSettings>();
+        runtimeSettings.UserId = "user-a";
+        runtimeSettings.WorkspaceRoot = workspace;
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+        {
+            var state = Services.GetRequiredService<NebulaWorkspaceState>();
+            Assert.Equal("docker", state.QuickSettings.SandboxMode);
+            Assert.Equal("global", state.QuickSettings.SandboxScope);
+            Assert.True(state.IsSandboxInheritedFromGlobal);
+            Assert.Equal(SandboxMode.Docker, runtimeSettings.SandboxMode);
+            Assert.Equal("global/image:latest", runtimeSettings.SandboxImage);
+            Assert.Equal(2048, runtimeSettings.SandboxMemoryLimitMb);
+            Assert.Equal(2, runtimeSettings.SandboxCpuLimit);
+        });
+    }
+
+    [Fact]
+    public async Task saving_global_scope_must_remove_workspace_override()
+    {
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-sandbox-{Guid.NewGuid():N}");
+        var store = new FakeSandboxSettingsStore();
+        store.Seed(new SandboxSettings(
+            "user-a",
+            workspace,
+            SandboxMode.Docker,
+            "workspace/image:latest",
+            1024,
+            1,
+            DateTimeOffset.UtcNow));
+        RegisterPageServices(
+            new FakeManager(),
+            new FakeLlamaClient(),
+            sandboxSettingsStore: store);
+
+        var runtimeSettings = Services.GetRequiredService<NebulaRuntimeSettings>();
+        runtimeSettings.UserId = "user-a";
+        runtimeSettings.WorkspaceRoot = workspace;
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+            Assert.Contains("Sandbox de comandos", component.Markup));
+
+        component.Find("#sandbox-scope").Change("global");
+        component.FindAll("button")
+            .Single(button => button.TextContent.Contains(
+                "Salvar configuracao",
+                StringComparison.OrdinalIgnoreCase))
+            .Click();
+
+        component.WaitForAssertion(() =>
+            Assert.Contains("Configuracao salva", component.Markup));
+
+        var effective = await store.GetEffectiveAsync("user-a", workspace);
+        Assert.NotNull(effective);
+        Assert.Equal(string.Empty, effective!.Workspace);
+        Assert.Equal(SandboxMode.Docker, effective.Mode);
+        Assert.Equal("workspace/image:latest", effective.Image);
+
+        var setItem = Assert.Single(
+            JSInterop.Invocations,
+            invocation => invocation.Identifier == "localStorage.setItem");
+        var cachedSnapshot = JsonSerializer.Deserialize<NebulaRuntimeSettingsSnapshot>(
+            Assert.IsType<string>(setItem.Arguments[1]));
+        Assert.NotNull(cachedSnapshot);
+        Assert.Equal("global", cachedSnapshot!.SandboxScope);
+    }
+
+    [Fact]
+    public void local_snapshot_must_keep_global_scope_without_database_row()
+    {
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            $"nebula-sandbox-{Guid.NewGuid():N}");
+        var snapshot = new NebulaRuntimeSettingsSnapshot
+        {
+            MainModel = "qwen3:8b",
+            WorkspaceRoot = workspace,
+            SandboxMode = SandboxMode.Docker,
+            SandboxConfigured = true,
+            SandboxScope = "global"
+        };
+        JSInterop
+            .Setup<string?>("localStorage.getItem", "nebula.quick-settings.v1")
+            .SetResult(JsonSerializer.Serialize(snapshot));
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+        {
+            var state = Services.GetRequiredService<NebulaWorkspaceState>();
+            Assert.Equal("global", state.QuickSettings.SandboxScope);
+            Assert.Equal("docker", state.QuickSettings.SandboxMode);
+        });
+    }
+
+    [Fact]
+    public void legacy_local_snapshot_must_not_override_server_sandbox_mode()
+    {
+        JSInterop
+            .Setup<string?>("localStorage.getItem", "nebula.quick-settings.v1")
+            .SetResult("""{"MainModel":"qwen3:8b","SandboxMode":1}""");
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+        {
+            var runtimeSettings = Services.GetRequiredService<NebulaRuntimeSettings>();
+            var state = Services.GetRequiredService<NebulaWorkspaceState>();
+            Assert.Equal(SandboxMode.Disabled, runtimeSettings.SandboxMode);
+            Assert.Equal("disabled", state.QuickSettings.SandboxMode);
+        });
+    }
+
+    [Fact]
+    public void conservative_profile_must_not_disable_server_docker_floor()
+    {
+        RegisterPageServices(
+            new FakeManager(),
+            new FakeLlamaClient(),
+            sandboxModeFloor: SandboxMode.Docker);
+
+        var runtimeSettings = Services.GetRequiredService<NebulaRuntimeSettings>();
+        runtimeSettings.AutonomyProfile = AutonomyProfile.Conservative;
+
+        var component = Render<Nebula.App.Shared.Pages.Settings>();
+        component.WaitForAssertion(() =>
+            Assert.Contains("Sandbox de comandos", component.Markup));
+
+        var state = Services.GetRequiredService<NebulaWorkspaceState>();
+        Assert.True(state.IsSandboxModeLockedForSelectedProfile);
+        Assert.True(component.Find("#sandbox-mode").HasAttribute("disabled"));
+
+        state.QuickSettings.SandboxMode = "disabled";
+        state.NormalizeSandboxForSelectedProfile();
+
+        Assert.Equal("docker", state.QuickSettings.SandboxMode);
+    }
+
+    [Fact]
+    public void profile_change_must_refresh_auto_approve_defaults_when_not_configured()
+    {
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+        var state = Services.GetRequiredService<NebulaWorkspaceState>();
+        state.QuickSettings.AutonomyProfile = "yolo";
+        state.QuickSettings.AutoApproveCommandsConfigured = false;
+
+        state.NormalizeSandboxForSelectedProfile();
+
+        Assert.True(state.QuickSettings.AutoApproveCommands);
+        Assert.False(state.QuickSettings.AutoApproveCommandsConfigured);
+    }
+
+    [Fact]
+    public void profile_change_must_preserve_explicit_auto_approve_choice()
+    {
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+        var state = Services.GetRequiredService<NebulaWorkspaceState>();
+        state.SetAutoApproveCommands(true);
+        state.QuickSettings.AutonomyProfile = "conservative";
+
+        state.NormalizeSandboxForSelectedProfile();
+
+        Assert.True(state.QuickSettings.AutoApproveCommands);
+        Assert.True(state.QuickSettings.AutoApproveCommandsConfigured);
     }
 
     private static AngleSharp.Dom.IElement FindModeButton(
@@ -550,7 +793,7 @@ private static void AssertReasoningBeforeResponse(
                 Classification = InteractionMode.Agent.ToString(),
                 Response = "Script criado.",
                 ActionStatus = ActionExecutionStatus.Completed,
-                CurrentPlan = "1. Create hello.py - completed.\n2. Verify with Get-ChildItem - completed."
+                CurrentPlan = "#1 [completed] Create hello.py\n#2 [completed] Verify with Get-ChildItem"
             })
         };
 
@@ -566,8 +809,9 @@ private static void AssertReasoningBeforeResponse(
         {
             Assert.Contains("Missao atual", component.Markup);
             Assert.Contains("Concluido", component.Markup);
-            Assert.Contains("1. Create hello.py - completed.", component.Markup);
-            Assert.Contains("2. Verify with Get-ChildItem - completed.", component.Markup);
+            Assert.Contains("Create hello.py", component.Markup);
+            Assert.Contains("Get-ChildItem", component.Markup);
+            Assert.Contains("Concluidos: 2", component.Markup);
         });
     }
 
@@ -651,6 +895,24 @@ private static void AssertReasoningBeforeResponse(
 
         public Task<CommandVerification?> GetVerificationAsync(Guid commandId, CancellationToken cancellationToken = default)
             => Task.FromResult<CommandVerification?>(null);
+    }
+
+    [Fact]
+    public void can_approve_command_must_allow_pending_migration()
+    {
+        RegisterPageServices(new FakeManager(), new FakeLlamaClient());
+        var state = Services.GetRequiredService<NebulaWorkspaceState>();
+
+        var command = new CommandExecution
+        {
+            OperationKind = OperationKind.Migration,
+            MigrationAction = MigrationAction.Create,
+            MigrationName = "AddUsers",
+            Run = "migration create AddUsers",
+            SafetyDecision = CommandSafetyDecisionType.AskApproval
+        };
+
+        Assert.True(state.CanApproveCommand(command));
     }
 
     private sealed class FakeManager : IManager
@@ -832,6 +1094,11 @@ private static void AssertReasoningBeforeResponse(
         public Task<bool> SelectModelAsync(string modelName, CancellationToken cancellationToken = default)
         {
             SelectedModel = modelName;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+        {
             return Task.FromResult(true);
         }
 

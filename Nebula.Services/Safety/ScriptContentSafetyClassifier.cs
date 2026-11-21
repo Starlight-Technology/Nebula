@@ -24,7 +24,9 @@ public sealed class ScriptContentSafetyClassifier : IScriptContentSafetyClassifi
     public CommandClassification Classify(
         string content,
         string language,
-        string? targetPath)
+        string? targetPath,
+        string? workspaceRoot = null,
+        string? controlledTempRoot = null)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -37,7 +39,7 @@ public sealed class ScriptContentSafetyClassifier : IScriptContentSafetyClassifi
 
         if (!string.IsNullOrWhiteSpace(targetPath))
         {
-            var pathClassification = fileWriteClassifier.Classify(targetPath);
+            var pathClassification = fileWriteClassifier.Classify(targetPath, workspaceRoot, controlledTempRoot);
             if (pathClassification.Intent is
                 CommandIntent.Blocked or CommandIntent.NeedsApproval)
             {

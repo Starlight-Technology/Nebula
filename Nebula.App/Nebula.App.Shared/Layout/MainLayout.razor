@@ -1,3 +1,5 @@
+@namespace Nebula.App.Shared.Layout
+
 @using Corona.Components
 @using Corona.Components.Enums
 @using Corona.Components.Iconography
@@ -8,6 +10,8 @@
 @inject ILlamaRuntimeTelemetryService RuntimeTelemetryService
 @inject CoronaThemeProvider ThemeProvider
 @inject NebulaWorkspaceState WorkspaceState
+@inject DatabaseInitializationState DatabaseInitialization
+@inject NavigationManager NavigationManager
 
 <CoronaThemeCascadingValue>
     <CoronaLayoutShell DrawerTitle="Nebula"
@@ -19,7 +23,36 @@
                        HeaderActions="@HeaderActions"
                        DrawerOpen="false"
                        DrawerItens="itemsMenu">
-        @Body
+        @if (DatabaseInitialization.Status != DatabaseInitializationStatus.Ready)
+        {
+            <div class="nebula-database-banner @(DatabaseInitialization.Status == DatabaseInitializationStatus.Failed ? "nebula-database-banner--failed" : "nebula-database-banner--pending")"
+                 role="status">
+                <div class="nebula-database-banner__content">
+                    <strong>@GetDatabaseBannerTitle()</strong>
+                    <span>@GetDatabaseBannerMessage()</span>
+                </div>
+                @if (DatabaseInitialization.Status == DatabaseInitializationStatus.Failed)
+                {
+                    <CoronaButton Size="CoronaComponentSize.Small"
+                                  Variant="CoronaButtonVariant.Outlined"
+                                  Color="CoronaColorSemantic.Warning"
+                                  OnClick="RetryDatabaseAsync">
+                        Tentar novamente
+                    </CoronaButton>
+                }
+            </div>
+        }
+        <ErrorBoundary @key="NavigationManager.Uri">
+            <ChildContent>
+                @Body
+            </ChildContent>
+            <ErrorContent Context="exception">
+                <div style="padding: 1.5rem;">
+                    <strong>Nao foi possivel renderizar esta tela.</strong>
+                    <p>@exception.Message</p>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
     </CoronaLayoutShell>
 </CoronaThemeCascadingValue>
 
@@ -27,6 +60,9 @@
     private List<CoronaNavItem> itemsMenu = [];
     private readonly CancellationTokenSource telemetryCancellation = new();
     private LlamaRuntimeTelemetrySnapshot runtimeTelemetry = new();
+
+    [CascadingParameter(Name = "WebAuthEnabled")]
+    private bool WebAuthEnabled { get; set; }
 
     private RenderFragment HeaderActions =>
         @<CoronaStack Direction="CoronaStackDirection.Row"
@@ -64,6 +100,12 @@
                              Color="@GetMetricColor(runtimeTelemetry.Gpu)" />
             </span>
 
+            <span title="@runtimeTelemetry.Disk.DetailValue" class="nebula-header-metric nebula-header-metric--disk">
+                <CoronaBadge Content="@($"DISCO {runtimeTelemetry.Disk.ShortValue}")"
+                             Variant="CoronaBadgeVariant.Outlined"
+                             Color="@GetMetricColor(runtimeTelemetry.Disk)" />
+            </span>
+
             <CoronaButton Size="CoronaComponentSize.Small"
                           Variant="CoronaButtonVariant.Outlined"
                           Color="CoronaColorSemantic.Neutral"
@@ -76,6 +118,7 @@
     protected override void OnInitialized()
     {
         ThemeProvider.OnChange += HandleThemeChanged;
+        DatabaseInitialization.Changed += HandleDatabaseInitializationChanged;
 
         itemsMenu =
         [
@@ -128,6 +171,16 @@
                 Icon = CoronaIcons.Gear
             }
         ];
+
+        if (WebAuthEnabled)
+        {
+            itemsMenu.Add(new CoronaNavItem
+            {
+                Text = "Sair",
+                Url = "/logout",
+                Icon = "right-from-bracket"
+            });
+        }
     }
 
     protected override Task OnAfterRenderAsync(bool firstRender)
@@ -176,6 +229,44 @@
     private void HandleThemeChanged()
     {
         InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleDatabaseInitializationChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private string GetDatabaseBannerTitle()
+    {
+        return DatabaseInitialization.Status == DatabaseInitializationStatus.Failed
+            ? "Postgres indisponivel"
+            : "Conectando ao Postgres";
+    }
+
+    private string GetDatabaseBannerMessage()
+    {
+        if (DatabaseInitialization.Status == DatabaseInitializationStatus.Failed)
+        {
+            var detail = string.IsNullOrWhiteSpace(DatabaseInitialization.ErrorMessage)
+                ? "Nao foi possivel inicializar o banco de dados."
+                : DatabaseInitialization.ErrorMessage.ReplaceLineEndings(" ");
+
+            if (detail.Length > 240)
+            {
+                detail = detail[..237] + "...";
+            }
+
+            return $"{detail} Historico, auditoria e configuracoes podem falhar ate a conexao ser restabelecida.";
+        }
+
+        return DatabaseInitialization.Attempts > 0
+            ? $"Tentativa {DatabaseInitialization.Attempts} em andamento."
+            : "Preparando o banco de dados.";
+    }
+
+    private Task RetryDatabaseAsync()
+    {
+        return DatabaseInitialization.RetryAsync();
     }
 
     private Task ToggleTheme()
@@ -227,5 +318,6 @@
         telemetryCancellation.Cancel();
         telemetryCancellation.Dispose();
         ThemeProvider.OnChange -= HandleThemeChanged;
+        DatabaseInitialization.Changed -= HandleDatabaseInitializationChanged;
     }
 }

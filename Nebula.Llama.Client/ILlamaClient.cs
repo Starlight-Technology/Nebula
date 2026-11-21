@@ -38,6 +38,8 @@ public interface ILlamaClient
 
     Task<bool> SelectModelAsync(string modelName, CancellationToken cancellationToken = default);
 
+    Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default);
+
     Task<LlamaPullResult> PullModelAsync(
         string modelName,
         bool activateAfterInstall = false,

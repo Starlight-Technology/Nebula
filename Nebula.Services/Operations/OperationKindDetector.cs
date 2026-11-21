@@ -30,6 +30,12 @@ public sealed class OperationKindDetector : IOperationKindDetector
             return OperationKind.Research;
         }
 
+        if (MigrationRegex.IsMatch(original) ||
+            MigrationRegex.IsMatch(command))
+        {
+            return OperationKind.Migration;
+        }
+
         if (ProjectScaffoldRegex.IsMatch(original) ||
             ProjectScaffoldRegex.IsMatch(command))
         {
@@ -65,6 +71,12 @@ public sealed class OperationKindDetector : IOperationKindDetector
             return OperationKind.FileRead;
         }
 
+        if (string.IsNullOrWhiteSpace(command) &&
+            FileWriteIntentRegex.IsMatch(original))
+        {
+            return OperationKind.FileWrite;
+        }
+
         return string.IsNullOrWhiteSpace(command)
             ? OperationKind.Unknown
             : OperationKind.TerminalCommand;
@@ -88,6 +100,10 @@ public sealed class OperationKindDetector : IOperationKindDetector
         @"\b(?:pesquise|pesquisar|investigue|research|search)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex MigrationRegex = new(
+        @"\b(?:create|add|apply|run|list|generate|drop|criar|adicionar|aplicar|executar|listar|gerar|remover)\b.{0,30}\bmigrations?\b|\bmigrations?\b.{0,30}\b(?:create|add|apply|run|list|generate|drop|criar|adicionar|aplicar|executar|listar|gerar|remover)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex ProjectScaffoldRegex = new(
         @"\bscaffold\b|\b(?:crie|criar|creat(?:e|es|ed|ing)|inicialize|init)\b.{0,40}\b(?:projeto|project)\b.{0,30}\b(?:dotnet|\.net|c#|csharp|python|node|nodejs|javascript|api|console|cli|package|pacote|react|blazor|worker|template)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -102,6 +118,10 @@ public sealed class OperationKindDetector : IOperationKindDetector
 
     private static readonly Regex FileReadRegex = new(
         @"(?:^|\s)(?:cat|type|get-content|read|ler|leia)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex FileWriteIntentRegex = new(
+        @"\b(?:escrev\w+|cri(?:e|a|ar)|grava\w+|grav\w+|salv\w+|write\w*|creat\w+|save\w*|gera\w*)\b.{0,40}\b(?:arquivo|file|script|c[oó]digo|conte[úu]do|nota|documento|texto)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex ScriptContentRegex = new(

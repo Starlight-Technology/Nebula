@@ -41,7 +41,10 @@ public sealed class TranslationService : ITranslationService
                 progress: null,
                 cancellationToken);
 
-            var translated = response?.Trim().Trim('"', '\'', '`', '\n', '\r') ?? string.Empty;
+            var translated = ModelResponse.Parse(response)
+                .Response
+                .Trim()
+                .Trim('"', '\'', '`', '\n', '\r');
 
             if (string.IsNullOrWhiteSpace(translated))
             {

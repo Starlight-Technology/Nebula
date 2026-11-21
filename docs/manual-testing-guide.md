@@ -18,20 +18,25 @@ um critério objetivo e o resultado esperado. Marque com `[x]`/`[ ]` o que passa
 
 ### Subir a stack base
 
+Defina o token da UI Web antes do primeiro `up`:
+
 ```powershell
+# Gere um valor com pelo menos 32 caracteres, por exemplo:
+openssl rand -hex 32
+$env:NEBULA_WEB_AUTH_TOKEN = "cole-o-token-gerado"
 docker compose up -d
 ```
 
 Deve subir: `ollama`, `mongodb` (nome `mongodb-nebula`), `postgres`
-(nome `postgres-nebula`) e `searxng`.
+(nome `postgres-nebula`), `searxng`, `nebula-telemetry` e `nebula-web`.
 
 Resultados esperados:
 
 - `ollama` saudável e respondendo em `http://localhost:11434/api/tags`.
 - Postgres em `localhost:5432`, Mongo em `localhost:27017`, SearXNG em
   `http://localhost:8080`.
-- O serviço `nebula-web` NÃO sobe automaticamente (está comentado no compose) —
-  isso é esperado.
+- `nebula-web` em `http://127.0.0.1:8081`, exigindo login com o token.
+- O Compose recusa subir `nebula-web` sem `NEBULA_WEB_AUTH_TOKEN`.
 
 ### Subir o app Web (fora do Docker)
 
@@ -42,8 +47,11 @@ dotnet run --project Nebula.App/Nebula.App.Web/Nebula.App.Web.csproj
 
 URLs (conforme `launchSettings.json`):
 
-- `http://localhost:8081`
+- `http://localhost:5166`
 - `https://localhost:7157`
+
+Em `Development`, sem `NEBULA_WEB_AUTH_TOKEN`, a auth fica desativada. Para testar
+login fora do Docker, defina a variável antes de `dotnet run`.
 
 ### Configuração mínima recomendada para os testes
 
@@ -57,7 +65,17 @@ URLs (conforme `launchSettings.json`):
 
 ## 1. Smoke test da UI (todas as páginas)
 
-Abra o app e valide o shell:
+### 1.0 Autenticacao e sessao
+
+| # | Passo | Resultado esperado |
+| --- | --- | --- |
+| 1.0.1 | Abrir `http://127.0.0.1:8081` sem sessão | Redireciona para `/login?returnUrl=%2F`; a página mostra o campo de token. |
+| 1.0.2 | Enviar token incorreto | Permanece em `/login` com mensagem de token inválido; nenhum cookie `nebula.auth` é criado. |
+| 1.0.3 | Enviar o token correto | Redireciona para `/`; o cookie `nebula.auth` aparece no DevTools com `HttpOnly` e `SameSite=Lax`. |
+| 1.0.4 | Em outro cliente, chamar `curl -i http://127.0.0.1:8081/api/research/search?q=teste` sem cookie | Retorna `401` com JSON de não autorizado. |
+| 1.0.5 | Clicar em "Sair" no menu | Vai para `/login`; abrir `/` novamente volta a exigir login. |
+
+Abra o app autenticado e valide o shell:
 
 | # | Passo | Resultado esperado |
 | --- | --- | --- |
@@ -134,6 +152,19 @@ Abra o app e valide o shell:
 | 1.8.3 | Simulador de policy | Digitar `pip install requests` e "Simular": mostra Decisao, Intent, Categoria, Confianca, Origem, Comando resolvido, Shell, Operacao e Razoes. Sem aprovação automática deve dar `AskApproval`. |
 | 1.8.4 | Preferencias do usuario | Alterar "Nivel de detalhe" e salvar; feedback confirma. |
 | 1.8.5 | Workspace | Definir pasta efetiva; o help line mostra "Pasta efetiva: ...". |
+
+### 1.9 Inicializacao graciosa do Postgres no MAUI
+
+> Requer um host com Java 17 e Android SDK para compilar/rodar o alvo MAUI. No
+> Web a inicializacao continua sincrona e falha cedo, portanto este cenario e
+> especifico do app nativo.
+
+| # | Passo | Resultado esperado |
+| --- | --- | --- |
+| 1.9.1 | Parar o Postgres (`docker compose stop postgres`) e abrir o app MAUI | A janela abre mesmo sem banco; o banner "Conectando ao Postgres" aparece e depois vira "Postgres indisponivel" com o botao "Tentar novamente"; o shell e a navegacao continuam utilizaveis. |
+| 1.9.2 | Com o app aberto e o Postgres parado, clicar "Tentar novamente" | O banner volta para "Conectando ao Postgres" e retorna ao estado de falha apos as tentativas configuradas; o app nao trava. |
+| 1.9.3 | Iniciar o Postgres (`docker compose start postgres`), aguardar ficar saudavel e clicar "Tentar novamente" | O banner desaparece; historico, auditoria e configuracoes passam a carregar normalmente. |
+| 1.9.4 | Reiniciar o app com o Postgres ja saudavel | O banner nao aparece; a inicializacao conclui em background e o app segue funcional. |
 
 ---
 
@@ -251,7 +282,7 @@ dotnet run --project Nebula.Cli/Nebula.Cli.csproj
 | 4.5 | Cancelar | Durante execucao longa, ESC cancela (imprime "(cancelando...)"). |
 | 4.6 | Sair | `exit`/`sair` encerra. |
 
-### Limites via CLI (ÚNICA superficie onde sao aplicados)
+### Limites de passos e retries (CLI, Web e MAUI)
 
 | # | Passo | Resultado esperado |
 | --- | --- | --- |
@@ -300,19 +331,72 @@ curl "http://localhost:8081/api/research/search?q=boas%20praticas%20powershell"
 
 ---
 
-## 7. Sandbox Docker (modo opcional)
+## 7. Sandbox de containers e configuracoes por usuario/workspace
 
-> Requer Docker ativo e a imagem default (`mcr.microsoft.com/powershell:lts`)
-> será baixada no primeiro uso (primeira execucao mais lenta).
+> Requer Docker ou Podman ativo e a imagem default
+> (`mcr.microsoft.com/powershell:lts`) será baixada no primeiro uso (primeira
+> execucao mais lenta). Aplique as migrações antes do teste para criar
+> `sandbox_settings`.
+>
+> Web/CLI usam `Nebula__Sandbox__Mode=Docker` (config `Nebula:Sandbox:Mode`);
+> MAUI usa `NEBULA_SANDBOX_MODE=Docker`. O valor do servidor tambem e o piso:
+> perfis Conservative/Standard nao podem desativar Docker; Autonomous/Lab podem.
+> Com o servidor em `Disabled`, a UI ainda pode optar por Docker.
+>
+> O runtime e escolhido por `Nebula__Sandbox__Runtime` (`Auto`, `Docker` ou
+> `Podman`; MAUI: `NEBULA_SANDBOX_RUNTIME`). `Auto` prefere Docker e depois
+> Podman; um valor explicito nao faz fallback para o outro binario. Com Podman
+> no Linux, o workspace e montado com `:rw,Z` para SELinux. Se nenhum runtime for
+> encontrado, o comando falha antes de executar e nao roda no host.
+>
+> O runtime precisa existir dentro do processo que roda o Nebula. Web/CLI/MAUI
+> nativos usam o runtime local. No compose, use o override do sidecar:
+>
+> ```powershell
+> $env:NEBULA_SANDBOX_TOKEN = "troque-por-um-token-longo"
+> systemctl --user enable --now podman.socket
+> docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d
+> ```
+>
+> O `nebula-web` delega ao `nebula-sandbox` via
+> `Nebula__Sandbox__SidecarUrl=http://nebula-sandbox:8091` e envia o token
+> compartilhado. O sidecar monta `${HOME}/nebula-tmp:/tmp:z` e o socket Podman;
+> ele mapeia `/tmp` para o workspace do host antes de chamar o runtime, entao
+> scripts criados pelo agente no workspace sao executados de verdade. O
+> `nebula-web` continua sem socket. O sidecar exige `NEBULA_SANDBOX_TOKEN` e
+> socket Podman ativo. No Podman ele roda non-root como `1000:1000`, com
+> `userns_mode=keep-id` e `label=type:container_runtime_t`; o healthcheck do
+> Compose chama `/health`, que verifica o runtime. Ajuste
+> `NEBULA_SANDBOX_SOCKET` se seu socket nao estiver em
+> `/run/user/1000/podman/podman.sock`. Para Docker, use
+> `NEBULA_SANDBOX_RUNTIME=Docker`,
+> `NEBULA_SANDBOX_SOCKET=/var/run/docker.sock`, `NEBULA_SANDBOX_USER=0:0`,
+> `NEBULA_SANDBOX_USERNS_MODE=host` e
+> `NEBULA_SANDBOX_SECURITY_OPT=label=disable`; trate o sidecar como privilegiado.
+> O caminho Docker CLI ja foi exercitado contra a API compativel do Podman, mas
+> valide com um daemon Docker real antes de producao.
+>
+> A imagem aceita apenas referencia Docker (letras/numeros, `.`, `_`, `-`, `/`,
+> `:` e `@`); flags e metacaracteres de shell sao rejeitados e valores invalidos
+> voltam para a imagem default.
 
 | # | Passo | Resultado esperado |
 | --- | --- | --- |
-| 7.1 | Rodar o app com `NEBULA_SANDBOX_MODE=Docker` | Comandos que a policy marcaria `AskApproval` (ex.: `npm install` em um workspace Node, `curl`) NÃO pedem aprovacao manual: executam no container com nota "Executado no sandbox Docker (sem rede, sem privilegios)." e `Sandboxed=True`. |
-| 7.2 | Sem rede | Um comando de rede (`curl http://...`) dentro do sandbox falha por falta de rede (achure `--network none`). Registre a evidencia. |
-| 7.3 | Docker parado + sandbox habilitado | `docker compose stop ollama` não afeta; pare o daemon do docker: comando falha com "O sandbox de comandos falhou (...). O comando nao foi executado..." exit -1; volta para retry. |
-| 7.4 | Sensível continua bloqueado | Mesmo com sandbox, ler `.env`/credenciais segue `Block` (não vira aprovação/sandbox). |
-| 7.5 | Fora do workspace | Escrita fora do workspace/temp continua exigindo aprovacao mesmo com sandbox. |
-| 7.6 | Restaurar `NEBULA_SANDBOX_MODE=` (Disabled) | AskApproval volta a pedir aprovacao manual. |
+| 7.1 | Com um workspace preenchido, abrir Settings > "Sandbox de comandos"; selecionar Docker, escopo "Workspace atual", informar imagem/limites e salvar | A UI mostra o resumo efetivo; `sandbox_settings` ganha uma linha com o `UserId`, o workspace e o modo Docker; `nebula.quick-settings.v1` e atualizado com `SandboxConfigured=true`; o runtime passa a usar Docker. |
+| 7.2 | Salvar com escopo "Padrao global do usuario" e abrir outro workspace do mesmo User ID | A linha exata do workspace atual e removida; a linha global (`workspace = ''`) e gravada. Em outro workspace sem linha exata, a global e usada; a UI indica que a configuracao foi herdada do padrao global; o runtime usa Docker. |
+| 7.3 | Perfil Conservative/Standard com servidor `Nebula__Sandbox__Mode=Docker` | O select "Modo" fica bloqueado em Docker; salvar nao grava `Disabled`; a mensagem de politica explica que o perfil exige o sandbox do servidor. |
+| 7.4 | Perfil Autonomous/Lab com servidor `Disabled`; escolher Docker e salvar | A escolha e permitida; a linha do workspace e salva e o runtime usa Docker. |
+| 7.5 | Com Docker ou Podman ativo, executar um comando que a policy marcaria `AskApproval` (ex.: `npm install` em workspace Node, `curl`) | O comando nao pede aprovacao manual: executa no container com nota "Executado no sandbox de containers (sem rede, sem privilegios)." e `Sandboxed=True`. |
+| 7.6 | Sem rede | Um comando de rede (`curl http://...`) dentro do sandbox falha por falta de rede (checar `--network none`). Registre a evidencia. |
+| 7.7 | Runtime parado/indisponivel + sandbox habilitado | O comando falha com "O sandbox de comandos falhou (...). O comando nao foi executado..." e exit -1; volta para retry. |
+| 7.8 | Sensivel continua bloqueado | Mesmo com sandbox, ler `.env`/credenciais segue `Block` (nao vira aprovacao/sandbox). |
+| 7.9 | Fora do workspace | Escrita fora do workspace/temp continua exigindo aprovacao mesmo com sandbox. |
+| 7.10 | Restaurar o modo para Disabled (perfil Autonomous/Lab, ou servidor sem piso Docker) | AskApproval volta a pedir aprovacao manual; a UI e o runtime refletem Disabled. |
+| 7.11 | Podman instalado, `Nebula__Sandbox__Runtime=Podman`, imagem `mcr.microsoft.com/dotnet/sdk:10.0-noble` e comando Bash | O comando roda via `podman run`, com `--network none`, workspace montado em `/workspace:rw,Z` e saida real; `Sandboxed=True`. |
+| 7.12 | `Nebula__Sandbox__Runtime=Docker` com apenas Podman instalado | O comando falha antes da execucao; nao ha fallback silencioso para Podman nem execucao no host. |
+| 7.13 | Subir o compose com o override do sidecar (`NEBULA_SANDBOX_TOKEN` definido e `podman.socket` ativo) | `nebula-sandbox` inicia non-root (`1000:1000`), o healthcheck fica healthy, `nebula-web` sobe com `SidecarUrl`/`SidecarToken`, e `podman inspect nebula_app_web` nao mostra o socket em `/run/podman/podman.sock`. |
+| 7.14 | Pedir ao agente para criar `sidecar-smoke/hello.sh` com `echo sidecar-ok` e executar `bash hello.sh` | O script e criado no workspace e aparece em `${HOME}/nebula-tmp/nebula-workspace/<conversationId>/sidecar-smoke/hello.sh`; a execucao retorna `sidecar-ok`, `Sandboxed=True` e runtime `podman` ou `docker`. |
+| 7.15 | Fazer o script escrever `resultado.txt` no diretorio atual e executar pelo agente | `resultado.txt` aparece no host em `${HOME}/nebula-tmp/nebula-workspace/<conversationId>/...`, comprovando que o sidecar montou o path do host, nao um diretorio interno do `nebula-web`. |
 
 ---
 

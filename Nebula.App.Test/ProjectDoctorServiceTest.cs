@@ -1,4 +1,5 @@
 using Nebula.App.Shared.Setup;
+using Nebula.Core.Configuration;
 using Nebula.Llama.Client;
 using Nebula.Runner;
 
@@ -11,7 +12,10 @@ public sealed class ProjectDoctorServiceTest
     {
         var shell = new FakeDoctorShell();
         var client = new FakeDoctorClient { Version = "0.32.5" };
-        var service = new ProjectDoctorService(shell, client);
+        var service = new ProjectDoctorService(
+            shell,
+            client,
+            new FakeRuntimeLocator());
 
         var report = await service.RunAsync();
 
@@ -19,7 +23,9 @@ public sealed class ProjectDoctorServiceTest
         Assert.Contains(report.Items, item => item.Name == "SDK .NET" && item.Available);
         Assert.Contains(report.Items, item => item.Name == "Python" && item.Available);
         Assert.Contains(report.Items, item => item.Name == "Git" && item.Available);
-        Assert.Contains(report.Items, item => item.Name == "Docker" && item.Available);
+        Assert.Contains(
+            report.Items,
+            item => item.Name == "Container runtime (docker)" && item.Available);
         Assert.Contains(
             report.Items,
             item => item.Name == "Repositorio git do workspace" && item.Available);
@@ -34,7 +40,10 @@ public sealed class ProjectDoctorServiceTest
     {
         var shell = new FakeDoctorShell { ThrowOn = "python" };
         var client = new FakeDoctorClient { Version = null };
-        var service = new ProjectDoctorService(shell, client);
+        var service = new ProjectDoctorService(
+            shell,
+            client,
+            new FakeRuntimeLocator());
 
         var report = await service.RunAsync();
 
@@ -48,6 +57,29 @@ public sealed class ProjectDoctorServiceTest
     }
 
     [Fact]
+    public async Task run_must_report_podman_runtime()
+    {
+        var shell = new FakeDoctorShell();
+        var client = new FakeDoctorClient { Version = "0.32.5" };
+        var service = new ProjectDoctorService(
+            shell,
+            client,
+            new FakeRuntimeLocator
+            {
+                Runtime = new SandboxRuntimeInfo("podman", "podman", true)
+            });
+
+        var report = await service.RunAsync();
+
+        Assert.Contains(
+            report.Items,
+            item => item.Name == "Container runtime (podman)" && item.Available);
+        Assert.Contains(
+            report.Items,
+            item => item.Name == "Container Compose (podman)" && item.Available);
+    }
+
+    [Fact]
     public async Task run_must_hide_secrets_from_tool_output()
     {
         var shell = new FakeDoctorShell
@@ -55,7 +87,10 @@ public sealed class ProjectDoctorServiceTest
             VersionOutput = "dotnet 10.0.301 (token=sk-abcdefghijklmnopqrstuvwxyz123456)"
         };
         var client = new FakeDoctorClient { Version = "0.32.5" };
-        var service = new ProjectDoctorService(shell, client);
+        var service = new ProjectDoctorService(
+            shell,
+            client,
+            new FakeRuntimeLocator());
 
         var report = await service.RunAsync();
 
@@ -102,8 +137,22 @@ public sealed class ProjectDoctorServiceTest
                 return Task.FromResult("Docker version 27.1.1, build 6312585");
             }
 
+            if (command.Contains("podman", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult("podman version 5.8.7");
+            }
+
             return Task.FromResult(VersionOutput);
         }
+    }
+
+    private sealed class FakeRuntimeLocator : ISandboxRuntimeLocator
+    {
+        public SandboxRuntimeInfo? Runtime { get; set; } =
+            new("docker", "docker", false);
+
+        public SandboxRuntimeInfo? Locate(SandboxContainerRuntime preference) =>
+            Runtime;
     }
 
     private sealed class FakeDoctorClient : ILlamaClient
@@ -152,6 +201,11 @@ public sealed class ProjectDoctorServiceTest
         public Task<bool> SelectModelAsync(string modelName, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(false);
+        }
+
+        public Task<bool> EnsureInstalledModelSelectedAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
         }
 
         public Task<LlamaPullResult> PullModelAsync(

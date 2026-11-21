@@ -9,6 +9,7 @@ using Nebula.Agent.Application;
 using Nebula.Agent.Data;
 using Nebula.Agent.Domain;
 using Nebula.Agent.Infrastructure;
+using Nebula.Agent.Tools;
 using Nebula.Core.Agent;
 using Nebula.Core.Commands;
 using Nebula.Core.Configuration;
@@ -38,6 +39,48 @@ public sealed class AgentActionRunner : IAgentActionRunner
     };
 
     private static readonly JsonObject DecisionJsonSchema = BuildDecisionJsonSchema();
+
+    private static readonly Regex ExplicitFileReferenceRegex = new(
+        @"(?:^|[\s`'""(])(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.(?:html?|css|jsx?|tsx?|cs|py|java|go|rs|rb|php|sh|ps1|bat|cmd|json|md|txt|ya?ml|toml)\b" +
+        @"|`[^`\r\n]+\.(?:html?|css|jsx?|tsx?|cs|py|java|go|rs|rb|php|sh|ps1|bat|cmd|json|md|txt|ya?ml|toml)\b`" +
+        @"|[""'][^""'\r\n]+\.(?:html?|css|jsx?|tsx?|cs|py|java|go|rs|rb|php|sh|ps1|bat|cmd|json|md|txt|ya?ml|toml)\b[""']",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex NamedFileReferenceRegex = new(
+        @"\b(?:arquivo|file)\s+[`'""]?[A-Za-z0-9_.-]+\.(?:html?|css|jsx?|tsx?|cs|py|java|go|rs|rb|php|sh|ps1|bat|cmd|json|md|txt|ya?ml|toml)\b[`'""]?",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex GenericFileTokenRegex = new(
+        @"\b[A-Za-z0-9_-]+\.(?:html?|css|jsx?|tsx?|cs|py|java|go|rs|rb|php|sh|ps1|bat|cmd|json|md|txt|ya?ml|toml)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CommonBareFileRegex = new(
+        @"\b(?:index|script|style|app|main|program|page|site|calc|calculator)\.[A-Za-z0-9]+\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex FrontendImplementationRegex = new(
+        @"\b(?:html|css|javascript|ecmascript|front-?end|web\s*page|p[aá]gina\s+web|website|web\s*site)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex DotNetStackRegex = new(
+        @"(?:^|[^\w])\.net\b|\bdotnet\b|\bc#\b|\bcsharp\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex PythonStackRegex = new(
+        @"\bpython\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex NodeStackRegex = new(
+        @"\bnode(?:\.js)?\b|\bnodejs\b|\bjavascript\b|\becmascript\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly HashSet<string> TechnologyFileNames = new(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        "node.js", "vue.js", "next.js", "nuxt.js", "react.js", "express.js",
+        "three.js", "d3.js", "chart.js", "alpine.js", "solid.js", "ember.js",
+        "backbone.js", "angular.js", "svelte.js"
+    };
 
     private static JsonObject BuildDecisionJsonSchema()
     {
@@ -100,8 +143,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
                             ["type"] = "string",
                             ["enum"] = operationKinds
                         },
+                        ["tool"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["content"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["targetPath"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["oldString"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["newString"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["pattern"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["include"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["maxResults"] = new JsonObject { ["type"] = new JsonArray("integer", "null") },
                         ["templateId"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["plannedFiles"] = new JsonObject
                         {
@@ -117,6 +166,19 @@ public sealed class AgentActionRunner : IAgentActionRunner
                                 ["required"] = new JsonArray("path", "content")
                             }
                         },
+                        ["migrationAction"] = new JsonObject
+                        {
+                            ["type"] = new JsonArray("string", "null"),
+                            ["enum"] = new JsonArray("Create", "Apply", "List")
+                        },
+                        ["migrationFramework"] = new JsonObject
+                        {
+                            ["type"] = new JsonArray("string", "null"),
+                            ["enum"] = new JsonArray("Unknown", "EfCore", "NodeJs", "Python", "Go")
+                        },
+                        ["migrationName"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["migrationContext"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+                        ["migrationDryRun"] = new JsonObject { ["type"] = "boolean" },
                         ["language"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["workingDirectory"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
                         ["retryJustification"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
@@ -171,6 +233,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly ILearningFromExecutionService? learningFromExecution;
     private readonly IPostTaskLearningService? postTaskLearning;
     private readonly IOutputVerificationService? outputVerificationService;
+    private readonly IResultValidator? resultValidator;
     private readonly ITranslationService? translationService;
     private readonly IAgentRunStore? agentRunStore;
     private readonly IDeterministicVerificationService? deterministicVerification;
@@ -181,6 +244,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IPlannedPatchApplier? plannedPatchApplier;
     private readonly IGitDiffService? gitDiffService;
     private readonly ICommandSandbox? commandSandbox;
+    private readonly IMigrationService? migrationService;
     private readonly NebulaRuntimeSettings runtimeSettings;
     private readonly ICommandApprovalService approvalService;
     private readonly WorkspaceMemoryService? workspaceMemoryService;
@@ -189,6 +253,12 @@ public sealed class AgentActionRunner : IAgentActionRunner
     private readonly IKnowledgeSearchService? knowledgeSearchService;
     private readonly IProjectDocumentationIndexer? projectDocumentationIndexer;
     private readonly IUserMemoryService? userMemoryService;
+    private readonly IErrorFixService? errorFixService;
+    private readonly IEnvironmentValidator? environmentValidator;
+    private readonly IPortDetectionService? portDetectionService;
+    private readonly ISmokeTestService? smokeTestService;
+    private readonly IScreenshotService? screenshotService;
+    private readonly IAgentToolRegistry toolRegistry;
     private readonly int defaultMaxRetriesPerStep;
     private readonly int defaultMaxSteps;
     private static readonly IWorkspaceStackDetector StackDetector =
@@ -216,6 +286,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         ILearningFromExecutionService? learningFromExecution = null,
         IPostTaskLearningService? postTaskLearning = null,
         IOutputVerificationService? outputVerificationService = null,
+        IResultValidator? resultValidator = null,
         ITranslationService? translationService = null,
         NebulaRuntimeSettings? runtimeSettings = null,
         IAgentRunStore? agentRunStore = null,
@@ -227,13 +298,20 @@ public sealed class AgentActionRunner : IAgentActionRunner
         IPlannedPatchApplier? plannedPatchApplier = null,
         IGitDiffService? gitDiffService = null,
         ICommandSandbox? commandSandbox = null,
+        IMigrationService? migrationService = null,
         ICommandApprovalService? approvalService = null,
         WorkspaceMemoryService? workspaceMemoryService = null,
         ICommandAllowlistService? commandAllowlistService = null,
         IWorkspaceCategoryPolicyService? workspaceCategoryPolicyService = null,
         IKnowledgeSearchService? knowledgeSearchService = null,
         IProjectDocumentationIndexer? projectDocumentationIndexer = null,
-        IUserMemoryService? userMemoryService = null)
+        IUserMemoryService? userMemoryService = null,
+        IErrorFixService? errorFixService = null,
+        IEnvironmentValidator? environmentValidator = null,
+        IPortDetectionService? portDetectionService = null,
+        ISmokeTestService? smokeTestService = null,
+        IScreenshotService? screenshotService = null,
+        IAgentToolRegistry? toolRegistry = null)
     {
         this.llamaClient = llamaClient;
         this.executor = executor;
@@ -278,6 +356,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.learningFromExecution = learningFromExecution;
         this.postTaskLearning = postTaskLearning;
         this.outputVerificationService = outputVerificationService;
+        this.resultValidator = resultValidator;
         this.translationService = translationService;
         this.agentRunStore = agentRunStore;
         this.deterministicVerification = deterministicVerificationService;
@@ -288,6 +367,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.plannedPatchApplier = plannedPatchApplier;
         this.gitDiffService = gitDiffService;
         this.commandSandbox = commandSandbox;
+        this.migrationService = migrationService;
         this.approvalService = approvalService ?? new CommandApprovalService();
         this.workspaceMemoryService = workspaceMemoryService;
         this.commandAllowlistService = commandAllowlistService;
@@ -295,6 +375,12 @@ public sealed class AgentActionRunner : IAgentActionRunner
         this.knowledgeSearchService = knowledgeSearchService;
         this.projectDocumentationIndexer = projectDocumentationIndexer;
         this.userMemoryService = userMemoryService;
+        this.errorFixService = errorFixService;
+        this.environmentValidator = environmentValidator;
+        this.portDetectionService = portDetectionService;
+        this.smokeTestService = smokeTestService;
+        this.screenshotService = screenshotService;
+        this.toolRegistry = toolRegistry ?? new AgentToolRegistry();
         defaultMaxRetriesPerStep = Math.Max(0, maxRetries);
         defaultMaxSteps = Math.Max(1, maxSteps);
     }
@@ -326,7 +412,9 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 SessionId = request.ConversationId,
                 OriginalText = request.Prompt,
                 Objective = request.Prompt,
-                WorkingDirectory = ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root
+                WorkingDirectory = ReferenceWorkspace.Resolve(
+                    request.WorkspaceRoot,
+                    request.ConversationId).Root
             });
             if (requestOperation is OperationKind.Learning or OperationKind.Research)
             {
@@ -399,8 +487,44 @@ public sealed class AgentActionRunner : IAgentActionRunner
         var strategyContext = await BuildStrategyContextAsync(
             workspaceRoot.Root,
             cancellationToken);
-        var userPreferencesContext = await BuildUserPreferencesAsync(
+        var userPreferencesContext = await BuildUserPreferencesAsync(cancellationToken);
+        var previousRunsContext = await BuildPreviousAgentRunsContextAsync(
+            request.ConversationId,
             cancellationToken);
+
+        // Populate ErrorContext with known fixes if there's a previous error
+        if (request.ErrorContext is not null &&
+            !string.IsNullOrWhiteSpace(request.ErrorContext.ErrorSignature) &&
+            errorFixService is not null)
+        {
+            try
+            {
+                var stack = StackDetector.Detect(workspaceRoot.Root).Kind.ToString();
+                var fixes = await errorFixService.SearchFixesAsync(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    stack,
+                    workspaceRoot.Root,
+                    cancellationToken);
+
+                var hypothesis = request.ErrorContext.Hypothesis;
+                if (string.IsNullOrWhiteSpace(hypothesis) && fixes.Count > 0)
+                {
+                    hypothesis = $"Likely cause: {fixes[0].Description}";
+                }
+
+                request.ErrorContext = new ErrorContext(
+                    request.ErrorContext.ErrorSignature,
+                    request.ErrorContext.FailedCommand,
+                    fixes,
+                    hypothesis);
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed in GenerateNextStepAsync: {ex.Message}");
+            }
+        }
+
         var decisionPrompt = CreateDecisionPrompt(
             request,
             environmentDetector.Detect(workspaceRoot.Root),
@@ -409,7 +533,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             workspaceContext,
             templateContext,
             strategyContext,
-            userPreferencesContext);
+            userPreferencesContext,
+            previousRunsContext);
         var rawResponse = await llamaClient.GetStructuredResponseAsync(
             decisionPrompt,
             DecisionJsonSchema,
@@ -431,7 +556,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
                 $"The model returned an empty ReAct decision. Raw: {TruncateForError(rawResponse)}");
         }
 
-        ValidateDecision(decision);
+        ValidateDecision(decision, request.Objective);
         return decision;
     }
 
@@ -491,6 +616,87 @@ public sealed class AgentActionRunner : IAgentActionRunner
         }
     }
 
+    private async Task<string> BuildPreviousAgentRunsContextAsync(
+        Guid conversationId,
+        CancellationToken cancellationToken)
+    {
+        if (agentRunStore is null || conversationId == Guid.Empty)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var runs = await agentRunStore.GetRunsByConversationAsync(conversationId, cancellationToken);
+            if (runs is null || runs.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            // Get the last 2 completed runs (excluding the current one if it's in progress)
+            var completedRuns = runs
+                .Where(r => r.Status == "Completed" || r.Status == "Failed")
+                .OrderByDescending(r => r.StartedAt)
+                .Take(2)
+                .ToList();
+
+            if (completedRuns.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var sections = new List<string>();
+            foreach (var run in completedRuns)
+            {
+                var runSection = new StringBuilder();
+                runSection.AppendLine($"--- Previous Agent Run ({run.StartedAt:yyyy-MM-dd HH:mm}) ---");
+                runSection.AppendLine($"Objective: {run.Prompt}");
+                runSection.AppendLine($"Status: {run.Status}");
+
+                if (!string.IsNullOrWhiteSpace(run.CurrentPlan))
+                {
+                    runSection.AppendLine($"Plan: {run.CurrentPlan}");
+                }
+
+                if (run.Artifacts is { Count: > 0 })
+                {
+                    runSection.AppendLine("Artifacts created:");
+                    foreach (var artifact in run.Artifacts)
+                    {
+                        runSection.AppendLine($"  - {artifact.Name}: {artifact.Path}");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(run.Response))
+                {
+                    var summary = run.Response.Length > 500
+                        ? run.Response[..500] + "..."
+                        : run.Response;
+                    runSection.AppendLine($"Summary: {summary}");
+                }
+
+                sections.Add(runSection.ToString());
+            }
+
+            return $$"""
+
+                Previous agent runs in this conversation:
+                {{string.Join(Environment.NewLine + Environment.NewLine, sections)}}
+
+                Use this context to understand what files were created and what was accomplished. When the user asks to modify existing files, use PlannedPatch with the exact file paths shown above.
+                """;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Previous agent runs context failed (non-fatal): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
     private async Task<ConversationTurn> RunApprovedActionAsync(
         AgentActionRunRequest request,
         IProgress<ConversationTurn>? progress,
@@ -504,6 +710,14 @@ public sealed class AgentActionRunner : IAgentActionRunner
             {
                 throw new ArgumentException(
                     "An approved planned patch requires at least one file.");
+            }
+        }
+        else if (approved.OperationKind == OperationKind.Migration)
+        {
+            if (approved.MigrationAction is null)
+            {
+                throw new ArgumentException(
+                    "An approved migration requires migrationAction.");
             }
         }
         else
@@ -533,25 +747,63 @@ public sealed class AgentActionRunner : IAgentActionRunner
             Content = approved.Content,
             Language = approved.Language,
             TemplateId = approved.TemplateId,
+            MigrationAction = approved.MigrationAction,
+            MigrationFramework = approved.MigrationFramework,
+            MigrationName = approved.MigrationName,
+            MigrationContext = approved.MigrationContext,
+            MigrationDryRun = approved.MigrationDryRun,
             WorkingDirectory = approved.WorkingDirectory,
             RequiresSafetyReview = true
         };
 
-var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
-        ConversationTurn result;
+        var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         if (actionResult.TerminalTurn is not null)
         {
-            result = actionResult.TerminalTurn;
+            var terminal = actionResult.TerminalTurn;
+            await PersistRunAsync(request, terminal, cancellationToken);
+            return terminal;
         }
-        else if (actionResult.RequiresRetry)
+
+        if (approved.OperationKind is
+            OperationKind.PlannedPatch or
+            OperationKind.ProjectScaffold or
+            OperationKind.Migration)
         {
-            result = session.FailRetryLimit(actionResult.Observation);
+            // The approved action is only one step of the task. Hand control
+            // back to the ReAct loop so the agent can create the remaining
+            // files and verify the result instead of stopping immediately.
+            // The prompt/context must state that the approved action was already
+            // executed, otherwise the model repeats it instead of continuing.
+            var approvedObjective = string.IsNullOrWhiteSpace(approved.Objective)
+                ? request.Prompt
+                : approved.Objective.Trim();
+            // The approved action was already executed above; clearing it keeps
+            // the approval from silently authorizing unrelated actions in the
+            // continuation (scope Once covers only the approved action).
+            request.ApprovedAction = null;
+            request.Prompt =
+                $"Continuar a tarefa apos a acao aprovada ({approved.OperationKind}): {approvedObjective}";
+            request.ChatHistoryContext =
+                $"{request.ChatHistoryContext}{Environment.NewLine}" +
+                "[approved_action_executed]" + Environment.NewLine +
+                $"Operation: {approved.OperationKind}{Environment.NewLine}" +
+                $"Objective: {approvedObjective}{Environment.NewLine}" +
+                "Status: executed successfully. Do not repeat the approved action; " +
+                "continue with the remaining work and verify the result.";
+            session.RecordObservation(
+                "approved action",
+                "A acao aprovada foi executada com sucesso. Nao a repita; continue a tarefa e verifique o resultado.");
+
+            var continued = await RunCoreAsync(session, cancellationToken);
+            await EnrichTurnWithGitDiffAsync(continued, session, cancellationToken);
+            await PersistRunAsync(request, continued, cancellationToken);
+            return continued;
         }
-        else
-        {
-            result = session.Complete(
+
+        var result = actionResult.RequiresRetry
+            ? session.FailRetryLimit(actionResult.Observation)
+            : session.Complete(
                 $"Comando aprovado executado. {actionResult.Observation}");
-        }
 
         await PersistRunAsync(request, result, cancellationToken);
         return result;
@@ -625,7 +877,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             var translatedReasoning = await TranslateToResponseLanguageAsync(
                 decision.ReasoningSummary, cancellationToken);
             session.EmitReasoning(translatedReasoning);
-            session.ApplyPlan(decision.Plan);
+            ApplyDecisionPlan(session, decision);
             session.ApplyArchitectureComparison(decision.ArchitectureComparison);
 
             if (decision.IsComplete)
@@ -669,6 +921,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 }
 
                 verificationFailures = 0;
+                await TryRunVisualVerificationAsync(session, cancellationToken);
                 var turn = session.Complete(decision.CompletionMessage);
                 await TryLearnFromPostTaskAsync(session, cancellationToken);
                 return await TranslateTurnResponseAsync(turn, cancellationToken);
@@ -697,6 +950,24 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
 
             if (actionResult.RequiresRetry)
             {
+                // Track consecutive failures for escalation
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    session.RecordFailure(lastEntry.ErrorSignature);
+                    var consecutiveFailures = session.GetConsecutiveFailures(lastEntry.ErrorSignature);
+
+                    // Escalate after configured max consecutive failures
+                    if (consecutiveFailures >= runtimeSettings.MaxConsecutiveErrorRetries)
+                    {
+                        var escalationMsg = $"Same error '{lastEntry.ErrorSignature}' failed {consecutiveFailures} times. " +
+                            "Known fixes exhausted. Requesting human input or alternative approach.";
+                        logger.Log($"[ESCALATION] {escalationMsg}");
+                        return await TranslateTurnResponseAsync(
+                            session.FailRetryLimit(escalationMsg), cancellationToken);
+                    }
+                }
+
                 var terminalTurn = ScheduleRetryOrFail(session, actionResult.Observation);
                 if (terminalTurn is not null)
                 {
@@ -704,7 +975,21 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                         terminalTurn, cancellationToken);
                 }
 
+                if (actionResult.RecoveryAction is not null)
+                {
+                    session.QueueRecoveryAction(
+                        actionResult.RecoveryAction,
+                        actionResult.Observation);
+                }
+
                 continue;
+            }
+
+            // Reset failure count on success
+            var successEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (successEntry is not null && !string.IsNullOrWhiteSpace(successEntry.ErrorSignature))
+            {
+                session.ResetFailureCount(successEntry.ErrorSignature);
             }
 
             session.CompleteStep(decision.Action!.Objective, actionResult.Observation);
@@ -854,7 +1139,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             var decision = await GenerateNextStepAsync(
                 session.CreateDecisionRequest(),
                 cancellationToken);
-            if (decision.IsComplete && !session.IsDryRun && session.Evidence.Count == 0)
+            if (decision.IsComplete && !session.IsDryRun &&
+                !session.Evidence.Any(evidence => evidence.Success))
             {
                 var failure = "You claimed the task is complete, but no actions were executed. " +
                               "You must execute at least one action and collect evidence before completing.";
@@ -871,6 +1157,36 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         }
     }
 
+    private static void ApplyDecisionPlan(
+        AgentActionSession session,
+        AgentActionDecision decision)
+    {
+        session.ApplyPlan(decision.Plan);
+        if (decision.IsComplete || decision.Action is null ||
+            decision.Plan is { Count: > 0 } ||
+            session.Plan.Any(step =>
+                step.Status != "completed" &&
+                string.Equals(
+                    step.Description,
+                    decision.Action.Objective,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        var nextId = session.Plan.Count == 0
+            ? 1
+            : session.Plan.Max(step => step.Id) + 1;
+        session.ApplyPlan([
+            new AgentPlanStep
+            {
+                Id = nextId,
+                Description = decision.Action.Objective,
+                Status = "pending"
+            }
+        ]);
+    }
+
     private async Task<ActionAttemptResult> ExecuteActionAsync(
         AgentActionSession session,
         AgentToolAction action,
@@ -881,6 +1197,33 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         logger.Log(
             $"[AGENT] Operation detected: sessionId={step.SessionId}; stepId={step.Id}; " +
             $"operationKind={operationKind}; objective={step.Objective}");
+
+        if (toolRegistry.Find(action.Tool) is { ExecutionKind: not AgentToolExecutionKind.Operation } tool)
+        {
+            return tool.ExecutionKind switch
+            {
+                AgentToolExecutionKind.FileEdit =>
+                    await ExecuteFileEditAsync(
+                        session,
+                        action,
+                        step,
+                        cancellationToken),
+                AgentToolExecutionKind.Glob =>
+                    ExecuteGlobTool(
+                        session,
+                        action,
+                        step,
+                        cancellationToken),
+                AgentToolExecutionKind.Grep =>
+                    ExecuteGrepTool(
+                        session,
+                        action,
+                        step,
+                        cancellationToken),
+                _ => ActionAttemptResult.Terminal(
+                    session.BlockUnsupportedOperation(operationKind))
+            };
+        }
 
         return operationKind switch
         {
@@ -912,6 +1255,12 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     cancellationToken),
             OperationKind.PlannedPatch =>
                 await ExecutePlannedPatchAsync(
+                    session,
+                    action,
+                    step,
+                    cancellationToken),
+            OperationKind.Migration =>
+                await ExecuteMigrationAsync(
                     session,
                     action,
                     step,
@@ -970,6 +1319,13 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         else
         {
             var targetPath = ResolveOperationPath(action.TargetPath, workingDirectory);
+            if (string.IsNullOrWhiteSpace(targetPath) &&
+                (string.Equals(action.Tool, "glob", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(action.Tool, "grep", StringComparison.OrdinalIgnoreCase)))
+            {
+                targetPath = session.WorkspaceRoot.Root;
+            }
+
             execution.TargetPath = targetPath;
             execution.Run = $"{operationKind.ToString().ToLowerInvariant()} \"{targetPath}\"";
 
@@ -1001,16 +1357,32 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     : scaffoldClassifier.Classify(targetPath);
                 execution.TemplateId = template?.Id;
             }
+            else if (operationKind is OperationKind.Migration)
+            {
+                targetPath = string.IsNullOrWhiteSpace(action.TargetPath)
+                    ? session.WorkspaceRoot.Root
+                    : targetPath;
+                execution.TargetPath = targetPath;
+                execution.MigrationAction = action.MigrationAction;
+                execution.MigrationFramework = action.MigrationFramework;
+                execution.MigrationName = action.MigrationName;
+                execution.MigrationContext = action.MigrationContext;
+                execution.MigrationDryRun = action.MigrationDryRun;
+                execution.Run = BuildMigrationRunLabel(action);
+                classification = ClassifyMigration(action);
+            }
             else if (operationKind is OperationKind.ScriptContent)
             {
                 classification = scriptContentClassifier.Classify(
                     action.Content ?? string.Empty,
                     action.Language ?? string.Empty,
-                    targetPath);
+                    targetPath,
+                    session.WorkspaceRoot.Root,
+                    null);
             }
             else
             {
-                classification = fileWriteSafetyClassifier.Classify(targetPath);
+                classification = fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
             }
 
             operationRequest = new OperationPolicyRequest(
@@ -1076,11 +1448,14 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             action,
             step,
             OperationKind.ProjectScaffold);
+        var scaffoldTarget = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : action.TargetPath;
         var targetDirectory = ResolveOperationPath(
-            action.TargetPath ?? execution.WorkingDirectory,
+            scaffoldTarget,
             execution.WorkingDirectory);
         execution.TargetPath = targetDirectory;
-        execution.Run = $"scaffold \"{targetDirectory}\"";
+        execution.Run = $"project scaffold: {action.TemplateId ?? action.Objective} -> {targetDirectory}";
         execution.OriginalCommand = action.Command;
 
         var template = projectTemplateCatalog.FindById(
@@ -1141,7 +1516,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 new ProjectScaffoldRequest(
                     template.Id,
                     targetDirectory,
-                    ProjectName: Path.GetFileName(targetDirectory.TrimEnd('/', '\\'))),
+                    ProjectName: Path.GetFileName(targetDirectory.TrimEnd('/', '\\')),
+                    WorkspaceRoot: session.WorkspaceRoot.Root),
                 cancellationToken);
 
             if (!result.Success)
@@ -1228,6 +1604,36 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     $"{string.Join(", ", validation.MissingEssentialFiles)}");
             }
 
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validationResult = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validationResult.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validationResult.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validationResult.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validationResult.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validationResult.Verdict}; reason={reason}");
+
+                    if (validationResult.Verdict == ValidationVerdict.Mismatch && validationResult.CorrectedAction is not null)
+                    {
+                        var correctedAction = validationResult.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validationResult.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1276,15 +1682,38 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             action,
             step,
             OperationKind.PlannedPatch);
+        var patchTarget = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : action.TargetPath;
         var targetDirectory = ResolveOperationPath(
-            action.TargetPath ?? execution.WorkingDirectory,
+            patchTarget,
             execution.WorkingDirectory);
         execution.TargetPath = targetDirectory;
         execution.PlannedFiles = files;
-        execution.Run = $"apply-patch ({files.Count} files)";
+        var fileLabel = string.Join(
+            ", ",
+            files.Take(5).Select(file => file.RelativePath));
+        if (files.Count > 5)
+        {
+            fileLabel += ", ...";
+        }
+
+        execution.Run = $"planned patch: {fileLabel}";
         execution.OriginalCommand = action.Command;
         execution.Notes = BuildPatchSummary(targetDirectory, files);
         session.Commands.Add(execution);
+
+        var incompleteContent = PlannedPatchContentValidator.Validate(files);
+        if (incompleteContent is not null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = incompleteContent;
+            execution.Notes = incompleteContent;
+            session.RecordObservation(execution.Run, incompleteContent);
+            return ActionAttemptResult.Retry(incompleteContent);
+        }
 
         var classification = ClassifyPlannedPatch(
             session,
@@ -1326,7 +1755,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
-                "Patch permitido automaticamente: o sandbox Docker isola a execucao e os arquivos estao dentro do workspace.");
+                "Patch permitido automaticamente: o sandbox de containers isola a execucao e os arquivos estao dentro do workspace.");
         }
 
         session.EmitActionStarted(execution);
@@ -1336,7 +1765,8 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 new PlannedPatchRequest(
                     action.Objective,
                     files,
-                    targetDirectory),
+                    targetDirectory,
+                    session.WorkspaceRoot.Root),
                 cancellationToken);
 
             if (!result.Success)
@@ -1404,6 +1834,37 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 observation,
                 execution.StandardOutput);
             session.RecordObservation(execution.Run, observation);
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (OperationCanceledException)
@@ -1432,6 +1893,344 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
             session.RecordObservation(execution.Run, execution.Notes);
             return ActionAttemptResult.Retry(execution.Notes);
         }
+    }
+
+    private async Task<ActionAttemptResult> ExecuteMigrationAsync(
+        AgentActionSession session,
+        AgentToolAction action,
+        AgentStep step,
+        CancellationToken cancellationToken)
+    {
+        if (migrationService is null)
+        {
+            return ActionAttemptResult.Terminal(
+                session.BlockUnsupportedOperation(OperationKind.Migration));
+        }
+
+        var execution = session.CreateExecution(
+            action,
+            step,
+            OperationKind.Migration);
+        var targetDirectory = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : ResolveOperationPath(action.TargetPath, execution.WorkingDirectory);
+        execution.TargetPath = targetDirectory;
+        execution.Run = BuildMigrationRunLabel(action);
+        execution.OriginalCommand = action.Command;
+        execution.MigrationAction = action.MigrationAction;
+        execution.MigrationFramework = action.MigrationFramework;
+        execution.MigrationName = action.MigrationName;
+        execution.MigrationContext = action.MigrationContext;
+        execution.MigrationDryRun = action.MigrationDryRun;
+        session.Commands.Add(execution);
+
+        if (action.MigrationAction is null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = "migrationAction is required (Create, Apply or List).";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        if (action.MigrationAction == MigrationAction.Create &&
+            !MigrationNaming.IsValidName(action.MigrationName) &&
+            !string.IsNullOrWhiteSpace(action.MigrationName))
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error =
+                "Migration names must start with a letter or underscore and contain only letters, digits and underscores.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        if (!MigrationNaming.IsValidContext(action.MigrationContext))
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = "Migration context contains invalid characters.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        var classification = ClassifyMigration(action);
+        var decision = await operationPolicyEngine.EvaluateAsync(
+            new OperationPolicyRequest(
+                session.Request.ConversationId,
+                execution.StepId,
+                OperationKind.Migration,
+                session.Request.Prompt,
+                ResolvedCommand: null,
+                targetDirectory,
+                classification),
+            cancellationToken);
+        ApplyOperationClassification(execution, classification, decision);
+
+        if (decision.Decision == CommandSafetyDecisionType.Block)
+        {
+            return ActionAttemptResult.Terminal(
+                session.BlockUnsafeCommand(execution));
+        }
+
+        if (decision.Decision == CommandSafetyDecisionType.AskApproval)
+        {
+            if (!IsMigrationApprovedByUser(session, action, targetDirectory))
+            {
+                execution.Notes = AppendApprovalNote(
+                    execution.Notes,
+                    "Migrations exigem aprovacao manual e unica; auto-aprovacao, allowlist e escopos por conversa/workspace/categoria nao se aplicam.");
+                return ActionAttemptResult.Terminal(
+                    session.RequestCommandApproval(execution));
+            }
+
+            execution.ApprovedByUser = true;
+            execution.Notes = AppendApprovalNote(
+                execution.Notes,
+                "Aprovado manualmente pela interface (escopo unico).");
+        }
+
+        var framework = action.MigrationFramework is null or MigrationFramework.Unknown
+            ? await migrationService.DetectFrameworkAsync(
+                targetDirectory,
+                cancellationToken)
+            : action.MigrationFramework.Value;
+        execution.MigrationFramework = framework;
+
+        if (framework == MigrationFramework.Unknown)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error =
+                "Nenhum framework de migrations reconhecido no diretorio alvo.";
+            execution.Notes = execution.Error;
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+
+        session.EmitActionStarted(execution);
+        try
+        {
+            MigrationResult result;
+            string observation;
+
+            if (action.MigrationAction == MigrationAction.List)
+            {
+                var pending = await migrationService.GetPendingMigrationsAsync(
+                    targetDirectory,
+                    framework,
+                    cancellationToken);
+                var output = pending.Count == 0
+                    ? "Nenhuma migration pendente encontrada."
+                    : string.Join(
+                        Environment.NewLine,
+                        pending.Select(item =>
+                            $"- {item.MigrationId} {item.Name} " +
+                            (item.IsApplied ? "(applied)" : "(pending)")));
+                result = new MigrationResult(
+                    true,
+                    null,
+                    null,
+                    null,
+                    output,
+                    null);
+                observation =
+                    $"Migrations ({framework}) em {targetDirectory}:{Environment.NewLine}{output}";
+            }
+            else if (action.MigrationAction == MigrationAction.Create)
+            {
+                result = await migrationService.CreateMigrationAsync(
+                    new MigrationRequest(
+                        targetDirectory,
+                        framework,
+                        action.MigrationName,
+                        action.MigrationContext,
+                        action.MigrationDryRun),
+                    cancellationToken);
+                observation = result.Success
+                    ? $"Migration criada: {result.MigrationName}." +
+                      (string.IsNullOrWhiteSpace(result.Output)
+                          ? string.Empty
+                          : $"{Environment.NewLine}{result.Output}")
+                    : $"Falha ao criar migration: {result.Error}";
+            }
+            else
+            {
+                result = await migrationService.ApplyMigrationsAsync(
+                    targetDirectory,
+                    framework,
+                    cancellationToken);
+                observation = result.Success
+                    ? $"Migrations aplicadas ({framework})." +
+                      (string.IsNullOrWhiteSpace(result.Output)
+                          ? string.Empty
+                          : $"{Environment.NewLine}{result.Output}")
+                    : $"Falha ao aplicar migrations: {result.Error}";
+            }
+
+            execution.Executed = result.Success;
+            execution.ExitCode = result.Success ? 0 : -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardOutput = result.Output ?? string.Empty;
+            execution.Output = execution.StandardOutput;
+            execution.StandardError = result.Error ?? string.Empty;
+            execution.Error = result.Error;
+            execution.Notes = result.Success
+                ? observation
+                : $"{observation} | {result.Error}";
+
+            var evidence = evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.Migration,
+                    Command: execution.Run,
+                    FilePath: result.MigrationFilePath ?? targetDirectory,
+                    Executed: true,
+                    ExitCode: execution.ExitCode,
+                    StdOut: execution.StandardOutput,
+                    StdErr: result.Error,
+                    Success: result.Success));
+            session.RecordEvidence(evidence);
+
+            if (result.Success &&
+                !string.IsNullOrWhiteSpace(result.MigrationFilePath))
+            {
+                session.RecordArtifact(
+                    result.MigrationFilePath,
+                    evidence.ContentHash ?? string.Empty,
+                    classification);
+            }
+
+            session.EmitActionCompleted(execution);
+            session.EmitToolObservation(
+                execution,
+                observation,
+                execution.StandardOutput);
+            session.RecordObservation(execution.Run, observation);
+
+            if (!result.Success)
+            {
+                return ActionAttemptResult.Retry(execution.Notes);
+            }
+
+            return ActionAttemptResult.Completed(observation);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardError = ex.Message;
+            execution.Error = ex.Message;
+            execution.Notes = $"Falha na migration: {ex.Message}";
+            session.RecordEvidence(evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.Migration,
+                    FilePath: targetDirectory,
+                    Executed: true,
+                    ExitCode: -1,
+                    StdErr: ex.Message,
+                    Success: false)));
+            session.EmitActionCompleted(execution);
+            session.RecordObservation(execution.Run, execution.Notes);
+            return ActionAttemptResult.Retry(execution.Notes);
+        }
+    }
+
+    private static bool IsMigrationApprovedByUser(
+        AgentActionSession session,
+        AgentToolAction action,
+        string targetDirectory)
+    {
+        var approved = session.Request.ApprovedAction;
+        if (approved is null ||
+            approved.OperationKind != OperationKind.Migration ||
+            approved.MigrationAction != action.MigrationAction)
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                approved.MigrationName ?? string.Empty,
+                action.MigrationName ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(approved.TargetPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(approved.TargetPath),
+                Path.GetFullPath(targetDirectory),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static CommandClassification ClassifyMigration(
+        AgentToolAction action)
+    {
+        if (action.MigrationAction is null)
+        {
+            return new CommandClassification(
+                "migration",
+                CommandIntent.Blocked,
+                0.99,
+                "MigrationSafetyClassifier",
+                ["migrationAction ausente."]);
+        }
+
+        if (action.MigrationAction == MigrationAction.List)
+        {
+            return new CommandClassification(
+                "migration list",
+                CommandIntent.SafeReadOnly,
+                0.99,
+                "MigrationSafetyClassifier",
+                ["Listar migrations e somente leitura."]);
+        }
+
+        return new CommandClassification(
+            action.MigrationAction == MigrationAction.Create
+                ? "migration create"
+                : "migration apply",
+            CommandIntent.NeedsApproval,
+            0.99,
+            "MigrationSafetyClassifier",
+            ["Criar ou aplicar migrations altera o banco e exige aprovacao manual."]);
+    }
+
+    private static string BuildMigrationRunLabel(AgentToolAction action)
+    {
+        var verb = action.MigrationAction?.ToString().ToLowerInvariant() ?? "unknown";
+        return string.IsNullOrWhiteSpace(action.MigrationName)
+            ? $"migration {verb}"
+            : $"migration {verb} {action.MigrationName}";
     }
 
     private static string BuildPatchSummary(
@@ -1474,7 +2273,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                     session,
                     path);
                 return concurrentModification ??
-                       fileWriteSafetyClassifier.Classify(path);
+                       fileWriteSafetyClassifier.Classify(path, session.WorkspaceRoot.Root, null);
             })
             .ToList();
 
@@ -1557,7 +2356,7 @@ var actionResult = await ExecuteActionAsync(session, action, cancellationToken);
                 action,
                 execution,
                 cancellationToken);
-if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
+            if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             {
                 var sandboxWillIsolate =
                     artifactDecision.Decision == CommandSafetyDecisionType.AskApproval &&
@@ -1600,6 +2399,24 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
         var validation = await commandValidationService.ValidateAsync(
             execution,
             cancellationToken);
+
+        // Advisory environment validation
+        if (environmentValidator is not null && runtimeSettings.EnableEnvironmentValidation)
+        {
+            var envValidation = await environmentValidator.ValidateAsync(
+                operationKind,
+                execution.Run,
+                execution.WorkingDirectory,
+                cancellationToken);
+            if (!envValidation.IsValid)
+            {
+                var advisoryMessage = string.Join("\n", envValidation.Issues.Select(i =>
+                    $"[Environment] {i.Severity}: {i.Message}" +
+                    (i.SuggestedAction != null ? $" — Suggestion: {i.SuggestedAction}" : "")));
+                session.RecordCommandObservation(execution.Run, advisoryMessage);
+                logger.Log($"[ENV_VALIDATE] Advisory issues for {execution.Run}: {advisoryMessage}");
+            }
+        }
 
         var operationDecision = await operationPolicyEngine.EvaluateAsync(
             new OperationPolicyRequest(
@@ -1683,10 +2500,21 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
 
         if (!validation.Correct)
         {
-            var observation = execution.Notes
-                ?? "The proposed action does not satisfy the current step.";
-            session.RecordCommandObservation(execution.Run, observation);
-            return ActionAttemptResult.Retry(observation);
+            var deterministicSafe =
+                operationDecision.Decision == CommandSafetyDecisionType.Allow &&
+                operationDecision.Confidence >= 0.9;
+            if (!deterministicSafe)
+            {
+                var observation = execution.Notes
+                    ?? "The proposed action does not satisfy the current step.";
+                session.RecordCommandObservation(execution.Run, observation);
+                return ActionAttemptResult.Retry(observation);
+            }
+
+            logger.Log(
+                "[AGENT] LLM correctness check rejected a command classified as " +
+                $"deterministically safe (intent={operationDecision.Intent}; " +
+                $"confidence={operationDecision.Confidence:F3}); proceeding with execution.");
         }
 
         if (execution.TargetPath is not null &&
@@ -1757,10 +2585,10 @@ if (artifactDecision.Decision != CommandSafetyDecisionType.Allow)
             var timeoutObservation = BuildObservationMessage(execution);
             session.EmitToolObservation(execution, timeoutObservation, timeoutMessage);
             session.RecordObservation(execution.Run, timeoutObservation);
-return ActionAttemptResult.Retry(timeoutObservation);
+            return ActionAttemptResult.Retry(timeoutObservation);
         }
 
-var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
+        var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             session,
             execution,
             toolResult,
@@ -1806,6 +2634,36 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 {
                     logger.Log(
                         $"[AGENT] Output verification failed: {ex.Message}");
+                }
+            }
+
+            // Result validation gate - runs on ALL operations
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var resultValidation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observationMessage,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (resultValidation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = resultValidation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {resultValidation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {resultValidation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={resultValidation.Verdict}; reason={reason}");
+
+                    if (resultValidation.Verdict == ValidationVerdict.Mismatch && resultValidation.CorrectedAction is not null)
+                    {
+                        var correctedAction = resultValidation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {resultValidation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
                 }
             }
 
@@ -1860,7 +2718,8 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         AgentToolAction action,
         AgentStep step,
         OperationKind operationKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool validateContent = true)
     {
         var execution = session.CreateExecution(action, step, operationKind);
         var content = action.Content ?? string.Empty;
@@ -1873,12 +2732,30 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         execution.Content = content;
         execution.Language = action.Language;
 
+        var incompleteContent = validateContent
+            ? PlannedPatchContentValidator.ValidateFile(
+                new PlannedPatchFile(targetPath, content))
+            : null;
+        if (incompleteContent is not null)
+        {
+            execution.Executed = false;
+            execution.ExitCode = -1;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.Error = incompleteContent;
+            execution.Notes = incompleteContent;
+            session.Commands.Add(execution);
+            session.RecordObservation(execution.Run, incompleteContent);
+            return ActionAttemptResult.Retry(incompleteContent);
+        }
+
         var classification = operationKind == OperationKind.ScriptContent
             ? scriptContentClassifier.Classify(
                 content,
                 action.Language ?? string.Empty,
-                targetPath)
-            : fileWriteSafetyClassifier.Classify(targetPath);
+                targetPath,
+                session.WorkspaceRoot.Root,
+                null)
+            : fileWriteSafetyClassifier.Classify(targetPath, session.WorkspaceRoot.Root, null);
         var concurrentModification = TryDetectConcurrentModification(
             session,
             targetPath);
@@ -1923,7 +2800,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         {
             execution.Notes = AppendApprovalNote(
                 execution.Notes,
-                "Criacao permitida automaticamente: o sandbox Docker isola a execucao e o alvo esta dentro do workspace.");
+                "Criacao permitida automaticamente: o sandbox de containers isola a execucao e o alvo esta dentro do workspace.");
         }
 
         session.EmitActionStarted(execution);
@@ -1994,14 +2871,43 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 }
             }
 
-            var verifyResult = await AutoVerifyFileSystemAsync(
+            var verifyResult = VerifyFileSystem(
                 targetPath,
                 execution,
-                session,
-                cancellationToken);
+                session);
             var finalObservation = string.IsNullOrWhiteSpace(verifyResult)
                 ? observation
                 : $"{observation}{Environment.NewLine}{verifyResult}";
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    finalObservation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
 
             return ActionAttemptResult.Completed(finalObservation);
         }
@@ -2109,6 +3015,38 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 $"Read {content.Length} character(s) from {targetPath}.";
             session.EmitToolObservation(execution, observation, content);
             session.RecordObservation(execution.Run, observation);
+            session.FilesReadThisSession.Add(Path.GetFullPath(targetPath));
+
+            // Result validation gate
+            if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+            {
+                var validation = await resultValidator.ValidateAsync(
+                    session.Request.Prompt,
+                    action,
+                    observation,
+                    execution.WorkingDirectory,
+                    cancellationToken);
+
+                if (validation.Verdict != ValidationVerdict.Sufficient)
+                {
+                    var reason = validation.Verdict == ValidationVerdict.Mismatch
+                        ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                        : $"Insufficient result: {validation.Reason}";
+
+                    logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                    if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                    {
+                        var correctedAction = validation.CorrectedAction;
+                        correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                        correctedAction.RequiresSafetyReview = true;
+                        return ActionAttemptResult.Retry(reason, correctedAction);
+                    }
+
+                    return ActionAttemptResult.Retry(reason);
+                }
+            }
+
             return ActionAttemptResult.Completed(observation);
         }
         catch (Exception ex) when (
@@ -2132,6 +3070,616 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             session.EmitActionCompleted(execution);
             return ActionAttemptResult.Retry(ex.Message);
         }
+    }
+
+    private async Task<ActionAttemptResult> ExecuteFileEditAsync(
+        AgentActionSession session,
+        AgentToolAction action,
+        AgentStep step,
+        CancellationToken cancellationToken)
+    {
+        var execution = session.CreateExecution(
+            action,
+            step,
+            OperationKind.FileWrite);
+        var targetPath = ResolveOperationPath(
+            action.TargetPath,
+            execution.WorkingDirectory);
+        execution.TargetPath = targetPath;
+        execution.Run = $"edit-file \"{targetPath}\"";
+        execution.OriginalCommand = action.Command;
+
+        if (!PathContainment.IsUnder(targetPath, session.WorkspaceRoot.Root))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "edit is restricted to files inside the workspace.");
+        }
+
+        var classification = fileWriteSafetyClassifier.Classify(
+            targetPath,
+            session.WorkspaceRoot.Root,
+            null);
+        if (classification.Intent is
+            CommandIntent.DataExfiltration or
+            CommandIntent.Blocked)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"edit is not allowed for this target: {string.Join(" ", classification.Reasons)}");
+        }
+
+        if (!File.Exists(targetPath))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"edit target does not exist: {targetPath}");
+        }
+
+        var fileInfo = new FileInfo(targetPath);
+        if (fileInfo.Length > 2 * 1024 * 1024)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "edit target is larger than 2 MB; use a more targeted change.");
+        }
+
+        if (string.IsNullOrEmpty(action.OldString))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "edit requires a non-empty oldString.");
+        }
+
+        string original;
+        try
+        {
+            original = await File.ReadAllTextAsync(targetPath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"edit could not read the target: {ex.Message}");
+        }
+
+        var occurrences = CountOccurrences(original, action.OldString);
+        if (occurrences == 0)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "edit oldString was not found in the target file. Read the file and copy the exact text.");
+        }
+
+        if (occurrences > 1)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"edit oldString appears {occurrences} times. Include more surrounding context so it matches exactly once.");
+        }
+
+        var updated = original.Replace(
+            action.OldString,
+            action.NewString ?? string.Empty,
+            StringComparison.Ordinal);
+        if (string.Equals(updated, original, StringComparison.Ordinal))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "edit oldString and newString produce no change.");
+        }
+
+        var writeAction = new AgentToolAction
+        {
+            Objective = action.Objective,
+            Command = execution.Run,
+            OperationKind = OperationKind.FileWrite,
+            Tool = null,
+            Content = updated,
+            TargetPath = targetPath,
+            Language = action.Language,
+            WorkingDirectory = action.WorkingDirectory,
+            RequiresSafetyReview = true
+        };
+
+        return await ExecuteFileWriteAsync(
+            session,
+            writeAction,
+            step,
+            OperationKind.FileWrite,
+            cancellationToken,
+            validateContent: false);
+    }
+
+    private ActionAttemptResult ExecuteGlobTool(
+        AgentActionSession session,
+        AgentToolAction action,
+        AgentStep step,
+        CancellationToken cancellationToken)
+    {
+        var execution = session.CreateExecution(
+            action,
+            step,
+            OperationKind.FileRead);
+        var root = ResolveToolRoot(session, action, execution.WorkingDirectory);
+        execution.TargetPath = root;
+        execution.Run = $"glob \"{action.Pattern}\"";
+        execution.OriginalCommand = action.Command;
+
+        if (!PathContainment.IsUnder(root, session.WorkspaceRoot.Root) ||
+            !Directory.Exists(root))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "glob is restricted to directories inside the workspace.");
+        }
+
+        if (string.IsNullOrWhiteSpace(action.Pattern))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "glob requires a pattern.");
+        }
+
+        var pattern = action.Pattern!;
+        session.EmitActionStarted(execution);
+        try
+        {
+            var max = ClampToolResultLimit(action.MaxResults, 200);
+            var matches = EnumerateWorkspaceFiles(root, cancellationToken)
+                .Where(file => PathContainment.IsUnder(
+                    file,
+                    session.WorkspaceRoot.Root))
+                .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
+                .Where(relativePath => MatchesGlob(relativePath, pattern))
+                .Take(max + 1)
+                .ToList();
+            var truncated = matches.Count > max;
+            var selected = matches.Take(max).ToList();
+            var output = string.Join(Environment.NewLine, selected);
+
+            execution.Executed = true;
+            execution.ExitCode = 0;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardOutput = output;
+            execution.Output = output;
+            execution.Notes = truncated
+                ? $"glob returned the first {max} match(es); narrow the pattern for more."
+                : $"glob returned {selected.Count} match(es).";
+            session.Commands.Add(execution);
+
+            var evidence = evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.FileRead,
+                    FilePath: root,
+                    Content: output,
+                    Executed: true,
+                    ExitCode: 0,
+                    StdOut: output,
+                    Success: true));
+            session.RecordEvidence(evidence);
+
+            var observation = selected.Count == 0
+                ? $"No files matched glob pattern '{action.Pattern}'."
+                : $"{selected.Count} file(s) matched glob pattern '{action.Pattern}':{Environment.NewLine}{output}";
+            session.EmitActionCompleted(execution);
+            session.EmitToolObservation(execution, observation, output);
+            session.RecordObservation(execution.Run, observation);
+            return ActionAttemptResult.Completed(observation);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"glob failed: {ex.Message}");
+        }
+    }
+
+    private ActionAttemptResult ExecuteGrepTool(
+        AgentActionSession session,
+        AgentToolAction action,
+        AgentStep step,
+        CancellationToken cancellationToken)
+    {
+        var execution = session.CreateExecution(
+            action,
+            step,
+            OperationKind.FileRead);
+        var root = ResolveToolRoot(session, action, execution.WorkingDirectory);
+        execution.TargetPath = root;
+        execution.Run = $"grep \"{action.Pattern}\"";
+        execution.OriginalCommand = action.Command;
+
+        if (!PathContainment.IsUnder(root, session.WorkspaceRoot.Root) ||
+            !Directory.Exists(root))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "grep is restricted to directories inside the workspace.");
+        }
+
+        if (string.IsNullOrWhiteSpace(action.Pattern))
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "grep requires a pattern.");
+        }
+
+        var pattern = action.Pattern!;
+        Regex regex;
+        try
+        {
+            regex = new Regex(
+                pattern,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException ex)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                $"grep pattern is not a valid regular expression: {ex.Message}");
+        }
+
+        session.EmitActionStarted(execution);
+        try
+        {
+            var max = ClampToolResultLimit(action.MaxResults, 200);
+            var lines = new List<string>();
+            var truncated = false;
+            var include = string.IsNullOrWhiteSpace(action.Include)
+                ? null
+                : action.Include!;
+
+            foreach (var file in EnumerateWorkspaceFiles(root, cancellationToken))
+            {
+                if (!PathContainment.IsUnder(file, session.WorkspaceRoot.Root))
+                {
+                    continue;
+                }
+
+                var relativePath = Path.GetRelativePath(root, file).Replace('\\', '/');
+                if (include is not null && !MatchesGlob(relativePath, include))
+                {
+                    continue;
+                }
+
+                if (IsSensitivePath(file) || IsProbablyBinary(file))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var fileInfo = new FileInfo(file);
+                    if (fileInfo.Length > 1024 * 1024)
+                    {
+                        continue;
+                    }
+
+                    var lineNumber = 0;
+                    foreach (var line in File.ReadLines(file))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        lineNumber++;
+                        if (!regex.IsMatch(line))
+                        {
+                            continue;
+                        }
+
+                        if (lines.Count >= max)
+                        {
+                            truncated = true;
+                            break;
+                        }
+
+                        var trimmed = line.TrimEnd();
+                        if (trimmed.Length > 500)
+                        {
+                            trimmed = trimmed[..500] + "...";
+                        }
+
+                        lines.Add($"{relativePath}:{lineNumber}: {trimmed}");
+                    }
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException)
+                {
+                    continue;
+                }
+
+                if (truncated)
+                {
+                    break;
+                }
+            }
+
+            var output = string.Join(Environment.NewLine, lines);
+            execution.Executed = true;
+            execution.ExitCode = 0;
+            execution.ExecutedAt = DateTimeOffset.UtcNow;
+            execution.StandardOutput = output;
+            execution.Output = output;
+            execution.Notes = truncated
+                ? $"grep returned the first {max} match(es); narrow the pattern for more."
+                : $"grep returned {lines.Count} match(es).";
+            session.Commands.Add(execution);
+
+            var evidence = evidenceCollector.Collect(
+                new ExecutionEvidenceInput(
+                    session.Request.ConversationId,
+                    execution.StepId,
+                    OperationKind.FileRead,
+                    FilePath: root,
+                    Content: output,
+                    Executed: true,
+                    ExitCode: 0,
+                    StdOut: output,
+                    Success: true));
+            session.RecordEvidence(evidence);
+
+            var observation = lines.Count == 0
+                ? $"No matches for grep pattern '{action.Pattern}'."
+                : $"{lines.Count} match(es) for grep pattern '{action.Pattern}':{Environment.NewLine}{output}";
+            session.EmitActionCompleted(execution);
+            session.EmitToolObservation(execution, observation, output);
+            session.RecordObservation(execution.Run, observation);
+            return ActionAttemptResult.Completed(observation);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return FailToolExecution(
+                session,
+                execution,
+                "grep pattern timed out; use a simpler expression.");
+        }
+    }
+
+    private static string ResolveToolRoot(
+        AgentActionSession session,
+        AgentToolAction action,
+        string workingDirectory)
+    {
+        var root = string.IsNullOrWhiteSpace(action.TargetPath)
+            ? session.WorkspaceRoot.Root
+            : ResolveOperationPath(action.TargetPath, workingDirectory);
+        return Path.GetFullPath(root);
+    }
+
+    private static ActionAttemptResult FailToolExecution(
+        AgentActionSession session,
+        CommandExecution execution,
+        string message)
+    {
+        execution.Executed = false;
+        execution.ExitCode = -1;
+        execution.ExecutedAt = DateTimeOffset.UtcNow;
+        execution.Error = message;
+        execution.Notes = message;
+        if (!session.Commands.Contains(execution))
+        {
+            session.Commands.Add(execution);
+        }
+
+        session.RecordObservation(execution.Run, message);
+        session.EmitActionCompleted(execution);
+        return ActionAttemptResult.Retry(message);
+    }
+
+    private static IEnumerable<string> EnumerateWorkspaceFiles(
+        string root,
+        CancellationToken cancellationToken)
+    {
+        const int maxFiles = 20_000;
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var yielded = 0;
+
+        while (pending.Count > 0 && yielded < maxFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var directory = pending.Pop();
+            string[] files;
+            string[] directories;
+            try
+            {
+                files = Directory.GetFiles(directory);
+                directories = Directory.GetDirectories(directory);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                if (yielded >= maxFiles)
+                {
+                    yield break;
+                }
+
+                yielded++;
+                yield return file;
+            }
+
+            foreach (var child in directories)
+            {
+                if (ShouldSkipToolDirectory(Path.GetFileName(child)))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                    {
+                        continue;
+                    }
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException)
+                {
+                    continue;
+                }
+
+                pending.Push(child);
+            }
+        }
+    }
+
+    private static bool MatchesGlob(string relativePath, string pattern)
+    {
+        var normalizedPattern = pattern.Replace('\\', '/').Trim();
+        while (normalizedPattern.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalizedPattern = normalizedPattern[2..];
+        }
+
+        normalizedPattern = normalizedPattern.TrimStart('/');
+        if (normalizedPattern.Length == 0)
+        {
+            return false;
+        }
+
+        var normalizedPath = relativePath.Replace('\\', '/');
+        while (normalizedPath.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalizedPath = normalizedPath[2..];
+        }
+
+        var target = normalizedPattern.Contains('/') ||
+                     normalizedPattern.Contains("**", StringComparison.Ordinal)
+            ? normalizedPath
+            : Path.GetFileName(normalizedPath);
+        return Regex.IsMatch(
+            target,
+            GlobToRegex(normalizedPattern),
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string GlobToRegex(string pattern)
+    {
+        var builder = new StringBuilder("^");
+        for (var index = 0; index < pattern.Length; index++)
+        {
+            var current = pattern[index];
+            if (current == '*')
+            {
+                if (index + 1 < pattern.Length && pattern[index + 1] == '*')
+                {
+                    index++;
+                    if (index + 1 < pattern.Length && pattern[index + 1] == '/')
+                    {
+                        index++;
+                        builder.Append("(?:.*/)?");
+                    }
+                    else
+                    {
+                        builder.Append(".*");
+                    }
+                }
+                else
+                {
+                    builder.Append("[^/]*");
+                }
+            }
+            else if (current == '?')
+            {
+                builder.Append("[^/]");
+            }
+            else
+            {
+                builder.Append(Regex.Escape(current.ToString()));
+            }
+        }
+
+        builder.Append('$');
+        return builder.ToString();
+    }
+
+    private static bool ShouldSkipToolDirectory(string name)
+    {
+        return name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".vs", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".idea", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".nebula", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".next", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(".nuxt", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("build", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("coverage", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("TestResults", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSensitivePath(string path)
+    {
+        string[] markers =
+        [
+            ".env", ".ssh", "id_rsa", "id_ed25519", "credentials",
+            "access_token", "auth_token", "api_key", "apikey", "password"
+        ];
+        return markers.Any(marker =>
+            path.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsProbablyBinary(string path)
+    {
+        string[] extensions =
+        [
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".pdf",
+            ".zip", ".gz", ".tar", ".7z", ".dll", ".exe", ".so",
+            ".dylib", ".class", ".jar", ".woff", ".woff2", ".ttf",
+            ".eot", ".mp3", ".mp4", ".mov", ".avi", ".webm", ".sqlite",
+            ".db"
+        ];
+        return extensions.Contains(
+            Path.GetExtension(path),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static int ClampToolResultLimit(int? requested, int defaultValue)
+    {
+        var value = requested ?? defaultValue;
+        return Math.Clamp(value, 1, 1000);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        if (value.Length == 0)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private CancellationToken CreateToolCancellationToken(
@@ -2306,7 +3854,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         execution.Sandboxed = true;
         execution.Notes = AppendApprovalNote(
             execution.Notes,
-            "Executado no sandbox Docker (sem rede, sem privilegios).");
+            "Executado no sandbox de containers (sem rede, sem privilegios).");
 
         var (observationMessage, _) = await RecordToolOutcomeAsync(
             session,
@@ -2316,6 +3864,46 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             operationKind,
             environmentSnapshot,
             cancellationToken);
+
+        // Result validation gate
+        if (resultValidator is not null && runtimeSettings.EnableResultValidation)
+        {
+            // Need to get the original action for validation - create a minimal action from execution
+            var sandboxAction = new AgentToolAction
+            {
+                Objective = execution.Objective,
+                Command = execution.Run,
+                OperationKind = operationKind,
+                TargetPath = execution.TargetPath,
+                WorkingDirectory = execution.WorkingDirectory
+            };
+
+            var validation = await resultValidator.ValidateAsync(
+                session.Request.Prompt,
+                sandboxAction,
+                observationMessage,
+                execution.WorkingDirectory,
+                cancellationToken);
+
+            if (validation.Verdict != ValidationVerdict.Sufficient)
+            {
+                var reason = validation.Verdict == ValidationVerdict.Mismatch
+                    ? $"Output mismatch: {validation.Reason}. Retry with corrected action."
+                    : $"Insufficient result: {validation.Reason}";
+
+                logger.Log($"[RESULT_VALIDATE] verdict={validation.Verdict}; reason={reason}");
+
+                if (validation.Verdict == ValidationVerdict.Mismatch && validation.CorrectedAction is not null)
+                {
+                    var correctedAction = validation.CorrectedAction;
+                    correctedAction.RetryJustification = $"Result validation: {validation.Reason}";
+                    correctedAction.RequiresSafetyReview = true;
+                    return ActionAttemptResult.Retry(reason, correctedAction);
+                }
+
+                return ActionAttemptResult.Retry(reason);
+            }
+        }
 
         if (execution.Executed)
         {
@@ -2329,7 +3917,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         AgentActionSession session,
         CancellationToken cancellationToken)
     {
-        if (workspaceMemoryService is null)
+        if (workspaceMemoryService is null && learningFromExecution is null)
         {
             return;
         }
@@ -2356,12 +3944,31 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             }
 
             var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
-            await workspaceMemoryService.RecordWorkingStrategyAsync(
-                session.WorkspaceRoot.Root,
-                stack,
-                previous.ErrorSignature,
-                current.Command,
-                cancellationToken);
+            var workspace = session.WorkspaceRoot.Root;
+
+            if (workspaceMemoryService is not null)
+            {
+                await workspaceMemoryService.RecordWorkingStrategyAsync(
+                    workspace,
+                    stack,
+                    previous.ErrorSignature,
+                    current.Command,
+                    cancellationToken);
+            }
+
+            // Also record as ErrorFix for global learning
+            if (learningFromExecution is not null)
+            {
+                await learningFromExecution.RecordErrorFixAsync(
+                    previous.ErrorSignature,
+                    previous.Command,
+                    current.Command,
+                    stack,
+                    workspace,
+                    session.Request.ConversationId,
+                    Guid.NewGuid(),
+                    cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2406,6 +4013,44 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         string command,
         string baseObservation)
     {
+        // First, try to get error-specific fixes
+        if (errorFixService is not null)
+        {
+            try
+            {
+                var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+                if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+                {
+                    var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                    var fixes = await errorFixService.SearchFixesAsync(
+                        lastEntry.ErrorSignature,
+                        command,
+                        stack,
+                        session.WorkspaceRoot.Root);
+
+                    if (fixes.Count > 0)
+                    {
+                        var fixBlock = new StringBuilder();
+                        fixBlock.AppendLine();
+                        fixBlock.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+                        foreach (var fix in fixes.Take(5))
+                        {
+                            fixBlock.AppendLine(
+                                $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+                        }
+                        var fixText = fixBlock.ToString().Trim();
+                        var suffix = fixText.Length > 2000 ? fixText[..2000] : fixText;
+                        return $"{baseObservation}\n{suffix}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log($"[AGENT] Error fix retrieval failed (non-fatal): {ex.Message}");
+            }
+        }
+
+        // Fallback to general knowledge search
         if (knowledgeSearchService is null)
         {
             return baseObservation;
@@ -2449,6 +4094,107 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
         }
     }
 
+    private async Task<string> AugmentFailureWithPortSuggestionAsync(
+        AgentActionSession session,
+        string baseObservation,
+        CancellationToken cancellationToken)
+    {
+        if (portDetectionService is null)
+        {
+            return baseObservation;
+        }
+
+        if (!TryExtractBusyPort(baseObservation, out var port))
+        {
+            return baseObservation;
+        }
+
+        try
+        {
+            var scan = await portDetectionService.ScanPortsAsync(
+                session.WorkspaceRoot.Root,
+                [port],
+                cancellationToken);
+            var info = scan.Ports
+                .FirstOrDefault(candidate =>
+                    candidate.Port == port && candidate.InUse);
+
+            var suggestion = await portDetectionService
+                .SuggestAlternativePortAsync(port, cancellationToken);
+            var alternatives = suggestion.AvailableAlternatives.Count > 0
+                ? string.Join(", ", suggestion.AvailableAlternatives)
+                : "nenhuma alternativa livre encontrada";
+
+            var owner = string.Empty;
+            if (!string.IsNullOrWhiteSpace(info?.ProcessName))
+            {
+                owner = $" por {info.ProcessName}";
+                if (info.ProcessId is not null)
+                {
+                    owner += $" (PID {info.ProcessId})";
+                }
+            }
+
+            return
+                $"{baseObservation}\n" +
+                $"Porta {port} esta em uso{owner}. " +
+                $"Alternativas livres: {alternatives}.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log(
+                $"[AGENT] Port suggestion failed (non-fatal): {ex.Message}");
+            return baseObservation;
+        }
+    }
+
+    private static bool TryExtractBusyPort(string text, out int port)
+    {
+        port = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var busy = Regex.IsMatch(
+            text,
+            @"EADDRINUSE|address already in use|errno\s*98|" +
+            @"only one usage of each socket address|failed to bind|bind failed",
+            RegexOptions.IgnoreCase);
+        if (!busy)
+        {
+            return false;
+        }
+
+        var patterns = new[]
+        {
+            @"(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{2,5})",
+            @"\bport\s+(\d{2,5})\b",
+            @"\b:(\d{2,5})\b"
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(
+                text,
+                pattern,
+                RegexOptions.IgnoreCase);
+            if (match.Success &&
+                int.TryParse(match.Groups[1].Value, out var candidate) &&
+                candidate is > 0 and <= 65535)
+            {
+                port = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private async Task<(string Observation, ExecutionHistoryEntry HistoryEntry)> RecordToolOutcomeAsync(
         AgentActionSession session,
         CommandExecution execution,
@@ -2486,6 +4232,10 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
                 session,
                 execution.Run,
                 observationMessage);
+            observationMessage = await AugmentFailureWithPortSuggestionAsync(
+                session,
+                observationMessage,
+                cancellationToken);
         }
 
         session.EmitToolObservation(execution, observationMessage, toolResult.CombinedOutput);
@@ -2553,7 +4303,7 @@ var (observationMessage, historyEntry) = await RecordToolOutcomeAsync(
             }
         }
 
-return (observationMessage, historyEntry);
+        return (observationMessage, historyEntry);
     }
 
     private static IShellOutputObserver? CreateStreamObserver(AgentActionSession session)
@@ -2736,7 +4486,7 @@ return (observationMessage, historyEntry);
     {
         if (deterministicVerification is null)
         {
-            return null;
+            return await VerifySmokeTestsAsync(session, cancellationToken);
         }
 
         if (!runtimeSettings.RequireDeterministicVerification)
@@ -2744,7 +4494,7 @@ return (observationMessage, historyEntry);
             logger.Log(
                 "[AGENT] Deterministic verification skipped because " +
                 "RequireDeterministicVerification is disabled.");
-            return null;
+            return await VerifySmokeTestsAsync(session, cancellationToken);
         }
 
         var workingDirectory = ResolveSessionWorkingDirectory(session);
@@ -2780,7 +4530,7 @@ return (observationMessage, historyEntry);
                     $"{result.Output}");
             }
 
-            return null;
+            return await VerifySmokeTestsAsync(session, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -2789,8 +4539,345 @@ return (observationMessage, historyEntry);
         catch (Exception ex)
         {
             logger.Log($"[AGENT] Deterministic verification step failed (non-fatal): {ex.Message}");
+            return await VerifySmokeTestsAsync(session, cancellationToken);
+        }
+    }
+
+    private async Task<string?> VerifySmokeTestsAsync(
+        AgentActionSession session,
+        CancellationToken cancellationToken)
+    {
+        if (smokeTestService is null ||
+            !runtimeSettings.SmokeTestEnabled ||
+            session.IsDryRun)
+        {
             return null;
         }
+
+        try
+        {
+            var workingDirectory = session.WorkspaceRoot.Root;
+            var urls = await smokeTestService.DetectWebAppUrlsAsync(
+                workingDirectory,
+                includeFrameworkDefaults: false,
+                cancellationToken);
+            if (urls.Count == 0)
+            {
+                logger.Log("[AGENT] Smoke tests skipped: no explicit web app URL detected.");
+                return null;
+            }
+
+            var request = new SmokeTestRequest(
+                workingDirectory,
+                urls.Take(5).ToList(),
+                Math.Max(1, runtimeSettings.SmokeTestTimeoutSeconds));
+            var result = await smokeTestService.RunSmokeTestsAsync(
+                request,
+                cancellationToken);
+
+            var reachable = result.Checks
+                .Where(check => check.StatusCode is not null)
+                .ToList();
+            if (reachable.Count == 0)
+            {
+                logger.Log(
+                    "[AGENT] Smoke tests skipped: no detected URL responded " +
+                    "(app does not appear to be running).");
+                return null;
+            }
+
+            var summary = BuildSmokeTestSummary(result.Checks);
+            session.SetSmokeTestSummary(summary);
+
+            var failing = reachable
+                .Where(check => !check.Healthy)
+                .ToList();
+            if (failing.Count == 0)
+            {
+                logger.Log(
+                    $"[AGENT] Smoke tests passed for {reachable.Count} reachable URL(s).");
+                return null;
+            }
+
+            var details = string.Join(
+                "; ",
+                failing.Select(check =>
+                    $"{check.Url} -> HTTP {check.StatusCode} " +
+                    $"({check.Error ?? "unhealthy"})"));
+            logger.Log($"[AGENT] Smoke tests failed: {details}");
+            return
+                "Os smoke tests das URLs detectadas falharam antes de aceitar a conclusao. " +
+                details;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log($"[AGENT] Smoke test verification failed (non-fatal): {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string BuildSmokeTestSummary(
+        IReadOnlyList<SmokeTestCheck> checks)
+    {
+        var builder = new StringBuilder();
+        foreach (var check in checks)
+        {
+            var status = check.StatusCode?.ToString() ?? "sem resposta";
+            var health = check.Healthy ? "OK" : "FALHOU";
+            builder.AppendLine(
+                $"- {check.Url} — {health} (HTTP {status}, " +
+                $"{check.ResponseTimeMs:F0} ms)");
+            if (!string.IsNullOrWhiteSpace(check.Error))
+            {
+                builder.AppendLine($"  - Erro: {check.Error}");
+            }
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private async Task TryRunVisualVerificationAsync(
+        AgentActionSession session,
+        CancellationToken cancellationToken)
+    {
+        if (screenshotService is null ||
+            smokeTestService is null ||
+            !runtimeSettings.ScreenshotEnabled ||
+            session.IsDryRun ||
+            !HasFrontendChanges(session))
+        {
+            return;
+        }
+
+        try
+        {
+            var workspaceRoot = session.WorkspaceRoot.Root;
+            var urls = await smokeTestService.DetectWebAppUrlsAsync(
+                workspaceRoot,
+                includeFrameworkDefaults: false,
+                cancellationToken);
+            if (urls.Count == 0)
+            {
+                logger.Log("[SCREENSHOT] Skipped: no explicit web app URL detected.");
+                return;
+            }
+
+            var probe = await smokeTestService.RunSmokeTestsAsync(
+                new SmokeTestRequest(
+                    workspaceRoot,
+                    urls.Take(3).ToList(),
+                    Math.Max(1, runtimeSettings.SmokeTestTimeoutSeconds)),
+                cancellationToken);
+            var healthyUrls = probe.Checks
+                .Where(check => check.Healthy)
+                .Select(check => check.Url)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToList();
+            if (healthyUrls.Count == 0)
+            {
+                logger.Log(
+                    "[SCREENSHOT] Skipped: no reachable web app URL " +
+                    "(the app does not appear to be running).");
+                return;
+            }
+
+            var viewports = runtimeSettings.ScreenshotViewports
+                .Where(viewport => !string.IsNullOrWhiteSpace(viewport))
+                .Take(3)
+                .ToList();
+            if (viewports.Count == 0)
+            {
+                viewports = ["1920x1080"];
+            }
+
+            var baselineRoot = Path.Combine(
+                workspaceRoot,
+                ".nebula",
+                "screenshots");
+            var projectKey = ComputeProjectKey(workspaceRoot);
+            var summary = new StringBuilder();
+            var classification = new CommandClassification(
+                "screenshot",
+                CommandIntent.SafeWriteLocal,
+                1.0,
+                "ScreenshotService",
+                ["Screenshot artifact generated by automatic visual verification."]);
+
+            foreach (var url in healthyUrls)
+            {
+                foreach (var viewport in viewports)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var name = BuildScreenshotName(url, viewport);
+                    var baseline = await screenshotService.GetBaselineAsync(
+                        projectKey,
+                        name,
+                        baselineRoot,
+                        cancellationToken);
+
+                    var capture = await screenshotService.CaptureAsync(
+                        new ScreenshotCaptureRequest(
+                            url,
+                            viewport,
+                            DelayMs: Math.Max(0, runtimeSettings.ScreenshotCaptureDelayMs),
+                            ProjectKey: projectKey,
+                            Name: name,
+                            BaselineRoot: baselineRoot,
+                            SaveBaseline: baseline is null),
+                        cancellationToken);
+                    if (!capture.Success || capture.ImageData is null)
+                    {
+                        logger.Log(
+                            $"[SCREENSHOT] Capture skipped for {url} ({viewport}): " +
+                            $"{capture.Error}");
+                        continue;
+                    }
+
+                    var projectDirectory = Path.Combine(baselineRoot, projectKey);
+                    var baselinePath = Path.Combine(
+                        projectDirectory,
+                        $"{name}.png");
+                    var currentPath = Path.Combine(
+                        projectDirectory,
+                        $"{name}.current.png");
+                    await WriteScreenshotFileAsync(
+                        currentPath,
+                        capture.ImageData,
+                        cancellationToken);
+
+                    if (baseline?.ImageData is null)
+                    {
+                        session.RecordArtifact(
+                            baselinePath,
+                            capture.ContentHash ?? string.Empty,
+                            classification,
+                            displayName: $"screenshot baseline {name}");
+                        summary.AppendLine(
+                            $"- {url} ({viewport}) — baseline criado");
+                        continue;
+                    }
+
+                    var diff = await screenshotService.CompareAsync(
+                        baseline.ImageData,
+                        capture.ImageData,
+                        cancellationToken);
+                    if (diff.Error is not null)
+                    {
+                        logger.Log(
+                            $"[SCREENSHOT] Diff failed for {url} ({viewport}): " +
+                            $"{diff.Error}");
+                        continue;
+                    }
+
+                    var diffPath = Path.Combine(
+                        projectDirectory,
+                        $"{name}.diff.png");
+                    var diffBytes = diff.DiffImage ?? capture.ImageData;
+                    await WriteScreenshotFileAsync(
+                        diffPath,
+                        diffBytes,
+                        cancellationToken);
+
+                    session.RecordArtifact(
+                        diffPath,
+                        ComputeBytesHash(diffBytes),
+                        classification,
+                        displayName:
+                            $"screenshot diff {name} " +
+                            $"{diff.DifferencePercent:F1}%",
+                        diffPercent: diff.DifferencePercent);
+                    summary.AppendLine(
+                        $"- {url} ({viewport}) — diff " +
+                        $"{diff.DifferencePercent:F1}%" +
+                        (diff.HasChanges ? " (mudanca detectada)" : " (sem mudanca relevante)"));
+                }
+            }
+
+            if (summary.Length > 0)
+            {
+                session.SetVisualVerificationSummary(summary.ToString().Trim());
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Log(
+                $"[SCREENSHOT] Automatic visual verification failed (non-fatal): " +
+                $"{ex.Message}");
+        }
+    }
+
+    private static bool HasFrontendChanges(AgentActionSession session)
+    {
+        var frontendExtensions = new HashSet<string>(
+            new[]
+            {
+                ".html", ".htm", ".razor", ".cshtml", ".css", ".scss", ".sass",
+                ".less", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"
+            },
+            StringComparer.OrdinalIgnoreCase);
+
+        return session.GetChangedFilePaths()
+            .Any(path => frontendExtensions.Contains(Path.GetExtension(path)));
+    }
+
+    private static async Task WriteScreenshotFileAsync(
+        string path,
+        byte[] data,
+        CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllBytesAsync(path, data, cancellationToken);
+    }
+
+    private static string ComputeProjectKey(string workspaceRoot) =>
+        Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    Encoding.UTF8.GetBytes(workspaceRoot)))
+            [..12]
+            .ToLowerInvariant();
+
+    private static string ComputeBytesHash(byte[] data) =>
+        Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(data))
+            .ToLowerInvariant();
+
+    private static string BuildScreenshotName(string url, string viewport)
+    {
+        string raw;
+        try
+        {
+            var uri = new Uri(url);
+            var path = uri.AbsolutePath.Trim('/').Replace('/', '_');
+            raw = $"{uri.Host}_{uri.Port}_{(string.IsNullOrWhiteSpace(path) ? "home" : path)}_{viewport}";
+        }
+        catch
+        {
+            raw = $"{url}_{viewport}";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(
+            raw.Select(character =>
+                    invalid.Contains(character) || char.IsWhiteSpace(character)
+                        ? '_'
+                        : character)
+                .ToArray());
+        return sanitized.Length > 180 ? sanitized[..180] : sanitized;
     }
 
     private static string ResolveSessionWorkingDirectory(AgentActionSession session)
@@ -2925,12 +5012,41 @@ return (observationMessage, historyEntry);
     {
         try
         {
+            // Get known fixes for this error
+            IReadOnlyList<ErrorFix> knownFixes = [];
+            string errorSignature = string.Empty;
+
+            var lastEntry = session.ExecutionHistory.Entries.LastOrDefault();
+            if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+            {
+                errorSignature = lastEntry.ErrorSignature;
+                if (errorFixService is not null)
+                {
+                    try
+                    {
+                        var stack = StackDetector.Detect(session.WorkspaceRoot.Root).Kind.ToString();
+                        knownFixes = await errorFixService.SearchFixesAsync(
+                            errorSignature,
+                            execution.Run,
+                            stack,
+                            session.WorkspaceRoot.Root,
+                            cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Log($"[AGENT] Error fix retrieval failed in reflection: {ex.Message}");
+                    }
+                }
+            }
+
             var decisionRequest = session.CreateDecisionRequest();
             var reflectionPrompt = CreateErrorReflectionPrompt(
                 execution,
                 decisionRequest.CurrentPlan,
                 session.ExecutionHistory.Entries,
-                runtimeSettings.BuildResponseLanguageInstruction());
+                runtimeSettings.BuildResponseLanguageInstruction(),
+                errorSignature,
+                knownFixes);
             var rawResponse = await llamaClient.GetResponseAsync(
                 reflectionPrompt,
                 progress: null,
@@ -2982,8 +5098,24 @@ return (observationMessage, historyEntry);
         CommandExecution execution,
         string currentPlan,
         IReadOnlyList<ExecutionHistoryEntry> history,
-        string responseLanguageInstruction)
+        string responseLanguageInstruction,
+        string errorSignature,
+        IReadOnlyList<ErrorFix> knownFixes)
     {
+        var fixesSection = string.Empty;
+        if (knownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("KNOWN FIXES FOR THIS ERROR (try these first):");
+            foreach (var fix in knownFixes.Take(5))
+            {
+                fixesLines.AppendLine(
+                    $"- [{fix.Source}] {fix.Description} → {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesSection = fixesLines.ToString();
+        }
+
         return $$"""
             You are Nebula's ErrorReflectionStep.
 
@@ -3016,6 +5148,10 @@ return (observationMessage, historyEntry);
             Exit code:
             {{execution.ExitCode?.ToString() ?? "unknown"}}
 
+            Error signature:
+            {{errorSignature}}
+            {{fixesSection}}
+
             Current plan:
             {{currentPlan}}
 
@@ -3024,6 +5160,7 @@ return (observationMessage, historyEntry);
 
             Mandatory question:
             Qual hipótese explica esse erro e qual comando diferente deve ser tentado agora?
+            Prefer known fixes above if applicable. The next command MUST be different from the failed command.
             """;
     }
 
@@ -3362,15 +5499,34 @@ return (observationMessage, historyEntry);
             ["The non-sensitive file is outside the workspace but read-only access is allowed."]);
     }
 
+
+    private static bool IsSourceFile(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".cs" or ".vb" or ".fs" or ".js" or ".ts" or ".jsx" or ".tsx" or ".py" or ".java" or ".go" or ".rs" or ".cpp" or ".cc" or ".c" or ".h" or ".hpp";
+    }
+
+    private static bool IsFrontendFile(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".html" or ".htm" or ".razor" or ".cshtml" or ".vue" or ".jsx" or ".tsx" or ".js" or ".ts" or ".css" or ".scss" or ".sass" or ".less";
+    }
+
     private static bool IsOperatingSystemRoot(string path)
     {
-        string[] systemRoots =
-        [
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
-        ];
+        var systemRoots = OperatingSystem.IsWindows()
+            ? new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32")
+            }
+            : new[]
+            {
+                "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+                "/boot", "/dev", "/proc", "/sys", "/root"
+            };
 
         var fullPath = Path.GetFullPath(path);
         foreach (var systemRoot in systemRoots)
@@ -3442,8 +5598,8 @@ return (observationMessage, historyEntry);
                 approvedByUser,
                 session.ApprovedCommandsForConversation.Contains(
                     CommandNormalization.Normalize(execution.Run)),
-                runtimeSettings.AutoApproveCommands,
-                runtimeSettings.AutoApproveCategories,
+                runtimeSettings.EffectiveAutoApproveCommands,
+                runtimeSettings.EffectiveAutoApproveCategories,
                 workspaceCategoryEntries
                     .Select(entry => entry.Value)
                     .ToList()));
@@ -3796,7 +5952,7 @@ return (observationMessage, historyEntry);
         {
             var status = turn.ActionStatus?.ToString() ?? "Unknown";
             var run = new AgentRun(
-                turn.RequestId,
+                request.RunId ?? turn.RequestId,
                 turn.ConversationId,
                 turn.RequestId,
                 turn.Prompt,
@@ -3812,7 +5968,10 @@ return (observationMessage, historyEntry);
                 string.IsNullOrWhiteSpace(turn.CurrentPlan) ? null : turn.CurrentPlan,
                 turn.Artifacts,
                 turn.Approvals,
-                ReferenceWorkspace.Resolve(request.WorkspaceRoot).Root);
+                ReferenceWorkspace.Resolve(
+                    request.WorkspaceRoot,
+                    request.ConversationId).Root,
+                ParentRunId: request.ParentRunId);
             await agentRunStore.SaveRunAsync(run, cancellationToken);
         }
         catch (OperationCanceledException)
@@ -3854,13 +6013,6 @@ return (observationMessage, historyEntry);
         return records;
     }
 
-    private static string NormalizePathSlashes(string? path)
-    {
-        return string.IsNullOrWhiteSpace(path)
-            ? string.Empty
-            : path.Replace('/', '\\');
-    }
-
     private static string CreateDecisionPrompt(
         AgentActionDecisionRequest request,
         RuntimeCommandEnvironment environment,
@@ -3869,8 +6021,28 @@ return (observationMessage, historyEntry);
         string workspaceContext = "",
         string templateContext = "",
         string strategyContext = "",
-        string userPreferencesContext = "")
+        string userPreferencesContext = "",
+        string previousRunsContext = "")
     {
+        var isWindows = environment.OS == OperatingSystemKind.Windows;
+        var pathExample = isWindows ? "C:/Users/Name/file.txt" : "/home/user/file.txt";
+        var projectPathExample = isWindows ? "C:/Users/Name/MyProject" : "/home/user/MyProject";
+        var listCmd = isWindows ? "Get-ChildItem" : "ls -la";
+        var readCmd = isWindows ? "Get-Content" : "cat";
+        var verifyCmd = isWindows ? "Test-Path" : "test -f";
+        var shellExample = isWindows ? "PowerShell" : "bash";
+        var pathSeparatorNote = isWindows
+            ? "Use forward slashes in all paths (C:/Users/Name/file.py not C:\\Users\\Name\\file.py)."
+            : "Use forward slashes in all paths (/home/user/file.py).";
+
+        var verifyExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Users/Name/hello.py\""
+            : "ls -la /home/user/hello.py";
+
+        var listExample = isWindows
+            ? "Get-ChildItem -LiteralPath \"C:/Dev/Backup\" -Force | Select-Object Name, Length, Extension"
+            : "ls -la /home/user/Dev/Backup";
+
         var knowledgeSection = string.IsNullOrWhiteSpace(knowledgeContext)
             ? string.Empty
             : $"""
@@ -3883,8 +6055,15 @@ return (observationMessage, historyEntry);
             ? string.Empty
             : $"""
 
-            Current workspace context:
+            Current workspace context (files in conversation folder workspace/{request.ConversationId.ToString("N")[..8]}/):
             {workspaceContext}
+            """;
+
+        var previousRunsSection = string.IsNullOrWhiteSpace(previousRunsContext)
+            ? string.Empty
+            : $"""
+
+            {previousRunsContext}
             """;
 
         var templatesSection = string.IsNullOrWhiteSpace(templateContext)
@@ -3910,6 +6089,27 @@ return (observationMessage, historyEntry);
             {userPreferencesContext}
             """;
 
+        var shellGuidance = BuildShellGuidance(environment);
+        var toolSection = BuildToolContext();
+
+        var errorContextSection = string.Empty;
+        if (request.ErrorContext is not null && request.ErrorContext.KnownFixes.Count > 0)
+        {
+            var fixesLines = new StringBuilder();
+            fixesLines.AppendLine();
+            fixesLines.AppendLine("ERROR CONTEXT FROM PREVIOUS FAILED STEP:");
+            fixesLines.AppendLine($"Error signature: {request.ErrorContext.ErrorSignature}");
+            fixesLines.AppendLine($"Failed command: {request.ErrorContext.FailedCommand}");
+            fixesLines.AppendLine($"Hypothesis: {request.ErrorContext.Hypothesis}");
+            fixesLines.AppendLine("KNOWN FIXES (try these first):");
+            foreach (var fix in request.ErrorContext.KnownFixes.Take(5))
+            {
+                fixesLines.AppendLine($"[{fix.Source}] {fix.Description} -> {fix.SuggestedCommand} (confidence: {fix.Confidence:F2})");
+            }
+            fixesLines.AppendLine("Your next action MUST be different from the failed command. Prefer one of the known fixes above if applicable.");
+            errorContextSection = fixesLines.ToString();
+        }
+
         var dryRunSection = request.DryRun
             ? $"""
 
@@ -3922,30 +6122,50 @@ return (observationMessage, historyEntry);
             """
             : string.Empty;
 
+        var exampleFilePath = NormalizePathSeparators(
+            Path.Combine(environment.WorkingDirectory, "hello.py"));
+        var exampleProjectPath = NormalizePathSeparators(
+            Path.Combine(environment.WorkingDirectory, "MyProject"));
+
         return $$"""
             You are a task execution agent on {{environment.OS}} ({{environment.Shell}}).
             Respond ONLY with valid JSON and no markdown.
             Output reasoningSummary and completionMessage in English only.
             - You MUST execute actions to complete the objective. Thinking alone does nothing.
             - Execute ONE action per response using the action field below.
-            - After FileWrite/ScriptContent, run Test-Path or Get-ChildItem to verify.
+            - Always include a plan array before the first action; include every known step and at least one step even for a one-action task. Never omit the plan.
+            - After PlannedPatch/FileWrite/ScriptContent, verify using a command valid for this runtime.
             - After TerminalCommand, verify the output matches the objective.
-            - Set isComplete=true ONLY after at least one action was executed and verified with real output.
+            - Use PlannedPatch for new code or for changing multiple code files. Use FileWrite for a single text/data file (README, notes, JSON, config). Use ScriptContent only for a runnable script.
+            - Use ProjectScaffold ONLY when the user explicitly asks for a new project from a listed template and does not ask for specific file content. Never use ProjectScaffold for HTML/CSS/JavaScript/frontend requests or when the request names files (for example index.html or script.js); write those files with PlannedPatch.
+            - To create or change file content, write the COMPLETE REAL content with PlannedPatch, FileWrite or ScriptContent. Never use TerminalCommand with echo/cat/redirection to create code files.
+            - Placeholder text such as "HTML and JS code for calculator" or "complete calculator code" is INVALID and will be rejected. When the user asks for a calculator, write the actual working HTML/JS.
+            - To inspect existing file content, use FileRead instead of running cat/type.
+            - Set isComplete=true ONLY after at least one action succeeded and its result was verified with real output.
             - Never set isComplete=true on the first response - you must execute steps first.
             - Never repeat the exact same failed command.
+            {{toolSection}}
+            {{shellGuidance}}
             {{knowledgeSection}}
+            {{previousRunsSection}}
             {{workspaceSection}}
             {{templatesSection}}
             {{strategiesSection}}
             {{userPreferencesSection}}
+            {{errorContextSection}}
             {{dryRunSection}}
-            Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch.
-            For ScriptContent (scripts): provide content, targetPath with actual .py/.cs path, and language.
-            For FileWrite (text/markdown/json): provide content, targetPath with actual .txt/.md/.json path.
-            For FileRead: provide targetPath with the absolute file path (command is optional).
+            Valid operationKinds: TerminalCommand, FileWrite, FileRead, ScriptContent, ScriptExecution, ProjectScaffold, PlannedPatch, Migration.
+            PREFERRED TOOL ALIAS: set "tool" to read, write, edit, patch, shell, scaffold, migration, glob or grep. When tool is present the system derives operationKind from it; keep operationKind populated for compatibility.
+            - edit: provide targetPath, oldString and newString. oldString must match exactly once; use it for small changes to existing files instead of rewriting the whole file.
+            - glob: provide pattern (e.g. "src/**/*.cs"); optional targetPath and maxResults. It only searches inside the workspace.
+            - grep: provide pattern (regular expression); optional include glob, targetPath and maxResults. It only searches inside the workspace.
+            For PlannedPatch (DEFAULT for new code and multi-file code changes): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Every plannedFiles[].content must be the COMPLETE file, including closing tags and braces. Never emit partial or truncated content. If a file is too large for one response, split it into multiple PlannedPatch steps instead of shortening it. Before returning, check that every HTML file has </html> and every CSS/JS file has balanced braces.
+            For ScriptContent (runnable scripts): provide content, targetPath with actual .py/.cs path, and language.
+            For FileWrite (a single text/data file, such as README, notes, JSON or config): provide content and targetPath with the actual path.
+            For FileRead: provide targetPath with the exact absolute path of the requested file, based on the workspace context or working directory (command is optional). Never invent a path or use a placeholder.
             For TerminalCommand/ScriptExecution: provide the command.
-            For ProjectScaffold (creating a new project): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Use the Available project templates list above when present.
-            For PlannedPatch (changing or creating multiple files at once): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Prefer PlannedPatch over many separate FileWrite steps.
+            For ProjectScaffold (ONLY explicit new-project-from-template requests): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Do not use it when the user asks for specific files or frontend HTML/CSS/JS content; use PlannedPatch instead. Use the Available project templates list above when present.
+            For Migration (database schema changes): provide migrationAction (Create, Apply or List), migrationFramework when known (EfCore or NodeJs), migrationName for Create (letters, digits and underscores only) and migrationContext for EF Core when the project has multiple contexts. Creating or applying a migration ALWAYS requires explicit manual approval; the user may not auto-approve it. Listing migrations is read-only and can run without approval. Use targetPath as the project directory and never put shell metacharacters in migrationName or migrationContext.
             For large projects, first create a PROJECT_SPEC.md file (FileWrite) with requirements and architecture BEFORE writing code files.
             For large tasks, decompose them into subtasks in the plan and mark milestone steps as checkpoints (isCheckpoint: true), for example right after scaffolding, after tests build, and after verification succeeds. Each checkpoint must have a deterministic way to confirm it (build, test or file listing).
             Before implementing a large change (new module, architecture decision, major refactor), provide an architectureComparison: an array of at least 2 options (name, pros, cons, recommendation, risk) comparing the viable approaches. Emit it in the same decision that starts the change, before the first implementation action, so the user can review the trade-offs. For small or localized changes, omit it.
@@ -3953,25 +6173,20 @@ return (observationMessage, historyEntry);
             targetPath must be a real absolute path.
             Do NOT use variables like $CurrentDirectory or relative paths.
             Your working directory is: {{environment.WorkingDirectory}}
-            Use forward slashes in all paths (C:/Users/Name/file.py not C:\Users\Name\file.py).
-            Use Windows PowerShell commands (Get-ChildItem, Test-Path, New-Item, etc.).
-            Do not use Unix commands (ls, rm, grep, cat, chmod) on Windows.
-
+            Use forward slashes in all paths. Paths must match this operating system and be based on the actual workspace; never use example paths as real targets.
             INSPECTING EXISTING CODE OR BACKUPS (read-only analysis):
-            - There is NO special "analyze"/"inspect" tool. Use real commands only.
-            - To list a directory (including outside the workspace, e.g. D:/Dev/Backup): use a TerminalCommand like:
-              Get-ChildItem -LiteralPath "D:/Dev/Backup" -Force | Select-Object Name, Length, Extension
-              or Get-ChildItem -LiteralPath "D:/Dev/Backup" -Recurse -Force -File | Select-Object FullName
-            - To read a file: prefer operationKind FileRead with targetPath set to the absolute file path (works inside and outside the workspace; sensitive files like .env, keys and credentials remain blocked).
+            - There is NO special "analyze"/"inspect" tool. Use read, glob, grep or a shell command.
+                        - Only use commands that are valid for this runtime.
+            - To read a file: prefer tool read (or operationKind FileRead) with targetPath set to the absolute file path (works inside and outside the workspace; sensitive files like .env, keys and credentials remain blocked).
             - Read-only inspection never requires approval unless the target is a sensitive file or an operating system root (Windows, Program Files).
-            - Never invent tool names: if the previous attempt used a command that does not exist, retry with Get-ChildItem/Get-Content or FileRead instead.
+            - Never invent tool names. If a command fails, use read, glob, grep or a shell command listed in the runtime guidance above.
 
             IMPORTANT: In JSON, escape every backslash as double backslash.
-            For example, path C:\Users\Name is written as "C:\\Users\\Name" in JSON.
+            Prefer forward slashes in paths so JSON does not need escaped backslashes.
 
             EXAMPLES - follow these patterns exactly:
 
-            Example 1 (create a file, then verify):
+            Example 1 (create a new file, then verify):
             {
               "reasoningSummary": "Creating hello.py and verifying it exists.",
               "isComplete": false,
@@ -3981,7 +6196,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "FileWrite",
                 "command": "",
                 "content": "print('hello world')",
-                "targetPath": "C:/Users/Name/hello.py",
+                "targetPath": "{{exampleFilePath}}",
                 "language": "python",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -3999,7 +6214,7 @@ return (observationMessage, historyEntry);
                 "operationKind": "ProjectScaffold",
                 "command": "",
                 "templateId": "dotnet-console",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{exampleProjectPath}}",
                 "language": "",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4011,11 +6226,11 @@ return (observationMessage, historyEntry);
             {
               "reasoningSummary": "hello.py exists and prints hello world.",
               "isComplete": true,
-              "completionMessage": "Created hello.py and verified it with Get-ChildItem.",
+              "completionMessage": "Created hello.py and verified it with the current shell.",
               "action": null
             }
 
-            Example 4 (planned multi-file patch):
+            Example 4 (planned multi-file patch for modifications):
             {
               "reasoningSummary": "Applying a planned patch that updates the app and its docs.",
               "isComplete": false,
@@ -4024,7 +6239,7 @@ return (observationMessage, historyEntry);
                 "objective": "Update the app and its docs",
                 "operationKind": "PlannedPatch",
                 "command": "",
-                "targetPath": "C:/Users/Name/MyProject",
+                "targetPath": "{{exampleProjectPath}}",
                 "plannedFiles": [
                   {
                     "path": "src/App.cs",
@@ -4042,6 +6257,111 @@ return (observationMessage, historyEntry);
               }
             }
 
+            Example 5 (modify an existing file - read first, then patch):
+            {
+              "reasoningSummary": "Reading existing hello.py to modify it with a new feature.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Read hello.py before modifying",
+                "operationKind": "FileRead",
+                "command": "",
+                "targetPath": "{{pathExample}}",
+                "language": "",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+            {
+              "reasoningSummary": "Modifying hello.py to add a greeting function using PlannedPatch.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Add greeting function to hello.py",
+                "operationKind": "PlannedPatch",
+                "command": "",
+                "targetPath": "{{projectPathExample}}",
+                "plannedFiles": [
+                  {
+                    "path": "hello.py",
+                    "content": "def greet(name):\n    print(f'Hello, {name}!')\n\ngreet('world')"
+                  }
+                ],
+                "language": "python",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": true
+              }
+            }
+            {
+              "reasoningSummary": "Verifying the modified hello.py works correctly.",
+              "isComplete": true,
+              "completionMessage": "Modified hello.py and verified it runs with the new greeting function.",
+              "action": null
+            }
+
+            Example 6 (edit tool alias, replace exact text):
+            {
+              "reasoningSummary": "Updating the page title with the edit tool.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Replace the exact title text in index.html",
+                "tool": "edit",
+                "operationKind": "FileWrite",
+                "command": "",
+                "targetPath": "{{exampleFilePath}}",
+                "oldString": "<title>Old title</title>",
+                "newString": "<title>New title</title>",
+                "language": "text",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+
+            Example 7 (glob tool alias, find files):
+            {
+              "reasoningSummary": "Listing the workspace files with the glob tool.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Find all HTML files in the workspace",
+                "tool": "glob",
+                "operationKind": "FileRead",
+                "command": "",
+                "pattern": "**/*.html",
+                "targetPath": "",
+                "maxResults": 50,
+                "language": "",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+
+            Example 8 (grep tool alias, search text):
+            {
+              "reasoningSummary": "Searching index.html for the script reference with grep.",
+              "isComplete": false,
+              "completionMessage": "",
+              "action": {
+                "objective": "Verify that index.html references script.js",
+                "tool": "grep",
+                "operationKind": "FileRead",
+                "command": "",
+                "pattern": "script.js",
+                "include": "index.html",
+                "targetPath": "",
+                "maxResults": 20,
+                "language": "",
+                "workingDirectory": "",
+                "retryJustification": "",
+                "requiresSafetyReview": false
+              }
+            }
+
             Use this format:
             {
               "reasoningSummary": "what you are doing (1 sentence)",
@@ -4049,12 +6369,23 @@ return (observationMessage, historyEntry);
               "completionMessage": "",
               "action": {
                 "objective": "what this step does",
-                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch",
+                "tool": "read|write|edit|patch|shell|scaffold|migration|glob|grep",
+                "operationKind": "TerminalCommand|FileWrite|FileRead|ScriptContent|ScriptExecution|ProjectScaffold|PlannedPatch|Migration",
                 "command": "the shell command",
                 "content": "file content for FileWrite/ScriptContent",
                 "targetPath": "path for file operations (use \\\\)",
+                "oldString": "exact text to replace for edit",
+                "newString": "replacement text for edit",
+                "pattern": "glob pattern or grep regular expression",
+                "include": "optional grep file glob filter",
+                "maxResults": 50,
                 "templateId": "template id for ProjectScaffold",
                 "plannedFiles": "[{path, content}] for PlannedPatch (paths relative to targetPath)",
+                "migrationAction": "Create|Apply|List for Migration",
+                "migrationFramework": "EfCore|NodeJs for Migration",
+                "migrationName": "migration name for Create (letters, digits, underscores)",
+                "migrationContext": "EF Core context name when needed",
+                "migrationDryRun": false,
                 "language": "python|csharp|text",
                 "workingDirectory": "",
                 "retryJustification": "",
@@ -4064,18 +6395,45 @@ return (observationMessage, historyEntry);
             Set action to null when isComplete: true.
 
             Objective: {{request.Objective}}
+            {{previousRunsSection}}
+            {{workspaceSection}}
             Chat history:
             {{request.ChatHistoryContext}}
             Plan and progress:
             {{request.CurrentPlan}}
             Previous result:
             {{request.PreviousActionResult ?? "none"}}
+            Failed actions are recorded in the observations and history below; do not repeat them.
             Observations:
             {{AgentActionSession.BuildObservationContext(request.Observations)}}
             History:
             {{ExecutionHistory.BuildContext(request.ExecutionHistory)}}
             Step {{request.StepNumber}} Retry {{request.RetryNumber}}
             """;
+    }
+
+    private static string BuildShellGuidance(RuntimeCommandEnvironment environment)
+    {
+        if (environment.OS == OperatingSystemKind.Windows ||
+            environment.Shell == ShellKind.PowerShell ||
+            environment.Shell == ShellKind.Cmd)
+        {
+            return """
+            Use Windows PowerShell commands for this runtime (Get-ChildItem, Test-Path, New-Item, etc.).
+            Do not invent Linux-specific commands on Windows.
+            Example directory listing: Get-ChildItem -LiteralPath \"D:/Dev/Backup\" -Force | Select-Object Name, Length, Extension
+            Example file read: Get-Content -LiteralPath \"D:/Dev/Backup/config.json\"
+            Example creation: New-Item -ItemType Directory -Force -Path \"D:/Dev/Backup/NewFolder\"
+            """;
+        }
+
+        return """
+        Use Linux shell commands for this runtime (ls, pwd, test, mkdir, find, grep, cat, python, bash, etc.).
+        Do not use Windows-specific command names on Linux.
+        Example directory listing: ls -la
+        Example path check: test -f \"/tmp/example.txt\" || test -d \"/tmp/example.txt\"
+        Example creation: mkdir -p \"/tmp/example-dir\"
+        """;
     }
 
     private async Task<string> BuildWorkspaceContextAsync(
@@ -4138,6 +6496,29 @@ return (observationMessage, historyEntry);
             sections);
     }
 
+    private static string BuildToolContext()
+    {
+        var lines = new AgentToolRegistry().Definitions.Select(tool =>
+        {
+            var required = tool.Parameters
+                .Where(parameter => parameter.Required)
+                .Select(parameter => parameter.Name);
+            var optional = tool.Parameters
+                .Where(parameter => !parameter.Required)
+                .Select(parameter => parameter.Name);
+            var fields = string.Join(", ", required);
+            var extra = optional.Any()
+                ? $" (optional: {string.Join(", ", optional)})"
+                : string.Empty;
+            return $"- {tool.Name}: {tool.Description} Required: {fields}{extra}.";
+        });
+
+        return """
+            AGENT TOOLS (preferred over the raw operation fields when applicable):
+            Always set action.tool to the tool name when using one of these tools.
+            """ + Environment.NewLine + string.Join(Environment.NewLine, lines);
+    }
+
     private string BuildTemplateContext()
     {
         if (projectTemplateCatalog is null)
@@ -4167,7 +6548,9 @@ return (observationMessage, historyEntry);
         }
     }
 
-    private static void ValidateDecision(AgentActionDecision decision)
+    private void ValidateDecision(
+        AgentActionDecision decision,
+        string requestObjective)
     {
         if (string.IsNullOrWhiteSpace(decision.ReasoningSummary))
         {
@@ -4192,8 +6575,226 @@ return (observationMessage, historyEntry);
         decision.Action!.Objective = decision.Action.Objective.Trim();
         decision.Action.Command = decision.Action.Command.Trim();
         decision.Action.Content = decision.Action.Content?.Trim();
-        decision.Action.TargetPath = NormalizePathSlashes(decision.Action.TargetPath);
+        decision.Action.TargetPath = NormalizePathSeparators(
+            decision.Action.TargetPath ?? string.Empty);
+        decision.Action.WorkingDirectory = NormalizePathSeparators(
+            decision.Action.WorkingDirectory ?? string.Empty);
         decision.Action.Language = decision.Action.Language?.Trim();
+        decision.Action.MigrationName = decision.Action.MigrationName?.Trim();
+        decision.Action.MigrationContext = decision.Action.MigrationContext?.Trim();
+        decision.Action.Tool = string.IsNullOrWhiteSpace(decision.Action.Tool)
+            ? null
+            : decision.Action.Tool.Trim();
+        decision.Action.Pattern = decision.Action.Pattern?.Trim();
+        decision.Action.Include = string.IsNullOrWhiteSpace(decision.Action.Include)
+            ? null
+            : decision.Action.Include.Trim();
+        ValidatePathArgument(decision.Action.TargetPath, "targetPath");
+        ValidatePathArgument(decision.Action.WorkingDirectory, "workingDirectory");
+
+        if (decision.Action.Tool is not null)
+        {
+            var tool = toolRegistry.Find(decision.Action.Tool)
+                ?? throw new ArgumentException(
+                    $"The ReAct decision used an unknown tool '{decision.Action.Tool}'.");
+            decision.Action.Tool = tool.Name;
+            decision.Action.OperationKind = tool.OperationKind;
+            ValidateToolArguments(decision.Action, tool);
+        }
+
+        if (decision.Action.OperationKind == OperationKind.ProjectScaffold)
+        {
+            ValidateProjectScaffoldIntent(decision.Action, requestObjective);
+        }
+
+        if (decision.Action.OperationKind == OperationKind.Migration)
+        {
+            if (decision.Action.MigrationAction is null)
+            {
+                throw new ArgumentException(
+                    "The ReAct decision requires migrationAction for Migration.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(decision.Action.MigrationName) &&
+                !MigrationNaming.IsValidName(decision.Action.MigrationName))
+            {
+                throw new ArgumentException(
+                    "The ReAct decision contains an invalid migrationName.");
+            }
+
+            if (!MigrationNaming.IsValidContext(decision.Action.MigrationContext))
+            {
+                throw new ArgumentException(
+                    "The ReAct decision contains an invalid migrationContext.");
+            }
+        }
+
+        if (decision.Action.PlannedFiles is { Count: > 0 } plannedFiles)
+        {
+            var normalizedFiles = new List<PlannedPatchFile>(plannedFiles.Count);
+            foreach (var file in plannedFiles)
+            {
+                var relativePath = NormalizePathSeparators(
+                    file.RelativePath?.Trim() ?? string.Empty);
+                ValidatePathArgument(relativePath, "plannedFiles.path");
+                if (string.IsNullOrWhiteSpace(relativePath) ||
+                    Path.IsPathRooted(relativePath) ||
+                    IsWindowsRooted(relativePath))
+                {
+                    throw new ArgumentException(
+                        $"The ReAct decision contains an invalid relative patch path: " +
+                        $"'{file.RelativePath}'.");
+                }
+
+                normalizedFiles.Add(file with { RelativePath = relativePath });
+            }
+
+            decision.Action.PlannedFiles = normalizedFiles;
+        }
+    }
+
+    private void ValidateProjectScaffoldIntent(
+        AgentToolAction action,
+        string requestObjective)
+    {
+        var requestText = string.Join(
+            Environment.NewLine,
+            new[] { requestObjective, action.Objective }
+                .Where(text => !string.IsNullOrWhiteSpace(text)));
+
+        var explicitFiles = ExtractExplicitFileMentions(requestText);
+        if (explicitFiles.Count > 0)
+        {
+            throw new ArgumentException(
+                "ProjectScaffold is not valid when the request names files " +
+                $"({string.Join(", ", explicitFiles)}). " +
+                "Use PlannedPatch with one entry per file.");
+        }
+
+        if (FrontendImplementationRegex.IsMatch(requestText))
+        {
+            throw new ArgumentException(
+                "ProjectScaffold is not valid for HTML/CSS/JavaScript/frontend requests. " +
+                "Write the actual files with PlannedPatch.");
+        }
+
+        if (projectTemplateCatalog is null)
+        {
+            return;
+        }
+
+        var template = projectTemplateCatalog.FindById(
+            action.TemplateId ?? string.Empty);
+        if (template is null && !string.IsNullOrWhiteSpace(action.TemplateId))
+        {
+            throw new ArgumentException(
+                $"The ReAct decision uses an unknown project template " +
+                $"'{action.TemplateId}'.");
+        }
+
+        if (template is not null)
+        {
+            var requestedStacks = DetectRequestedStacks(requestObjective);
+            if (requestedStacks.Count > 0 &&
+                !requestedStacks.Contains(template.Stack))
+            {
+                throw new ArgumentException(
+                    $"ProjectScaffold template '{template.Id}' does not match the stack " +
+                    "requested by the user. Choose a template for that stack or write the " +
+                    "files with PlannedPatch.");
+            }
+        }
+
+        var suggested = projectTemplateCatalog.Suggest(requestObjective);
+        if (template is null && suggested is null)
+        {
+            throw new ArgumentException(
+                "ProjectScaffold requires a known templateId or an objective that matches " +
+                "a listed template.");
+        }
+    }
+
+    private static HashSet<WorkspaceStackKind> DetectRequestedStacks(string text)
+    {
+        var stacks = new HashSet<WorkspaceStackKind>();
+        if (DotNetStackRegex.IsMatch(text))
+        {
+            stacks.Add(WorkspaceStackKind.DotNet);
+        }
+
+        if (PythonStackRegex.IsMatch(text))
+        {
+            stacks.Add(WorkspaceStackKind.Python);
+        }
+
+        if (NodeStackRegex.IsMatch(text))
+        {
+            stacks.Add(WorkspaceStackKind.Node);
+        }
+
+        return stacks;
+    }
+
+    private static IReadOnlyList<string> ExtractExplicitFileMentions(string text)
+    {
+        var mentions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        AddMatches(ExplicitFileReferenceRegex, text, mentions);
+        AddMatches(NamedFileReferenceRegex, text, mentions);
+        AddMatches(CommonBareFileRegex, text, mentions);
+
+        var genericFiles = GenericFileTokenRegex
+            .Matches(text)
+            .Select(match => match.Value)
+            .Where(file => !TechnologyFileNames.Contains(file))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (genericFiles.Count >= 2)
+        {
+            foreach (var file in genericFiles)
+            {
+                mentions.Add(NormalizeFileMention(file));
+            }
+        }
+
+        return mentions
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static void AddMatches(
+        Regex regex,
+        string text,
+        HashSet<string> mentions)
+    {
+        foreach (Match match in regex.Matches(text))
+        {
+            var mention = NormalizeFileMention(match.Value);
+            if (!string.IsNullOrWhiteSpace(mention) &&
+                !TechnologyFileNames.Contains(mention))
+            {
+                mentions.Add(mention);
+            }
+        }
+    }
+
+    private static string NormalizeFileMention(string value) =>
+        value.Trim(' ', '\t', '\r', '\n', '`', '\'', '"');
+
+    private static void ValidatePathArgument(string? path, string argumentName)
+    {
+        if (!string.IsNullOrEmpty(path) && path.Any(char.IsControl))
+        {
+            throw new ArgumentException(
+                $"The ReAct decision contains control characters in {argumentName}.");
+        }
+    }
+
+    private static bool IsWindowsRooted(string path)
+    {
+        return path.Length >= 2 &&
+               char.IsLetter(path[0]) &&
+               path[1] == ':';
     }
 
     private static string TruncateForError(string text, int maxLen = 500)
@@ -4211,11 +6812,44 @@ return (observationMessage, historyEntry);
             : text[..maxLen] + "...";
     }
 
+    private static void ValidateToolArguments(
+        AgentToolAction action,
+        AgentToolDefinition tool)
+    {
+        foreach (var parameter in tool.Parameters.Where(parameter => parameter.Required))
+        {
+            var valid = parameter.Name switch
+            {
+                "targetPath" => !string.IsNullOrWhiteSpace(action.TargetPath),
+                "content" => action.Content is not null,
+                "oldString" => !string.IsNullOrEmpty(action.OldString),
+                "newString" => action.NewString is not null,
+                "plannedFiles" => action.PlannedFiles is { Count: > 0 },
+                "command" => !string.IsNullOrWhiteSpace(action.Command),
+                "templateId" => !string.IsNullOrWhiteSpace(action.TemplateId),
+                "migrationAction" => action.MigrationAction is not null,
+                "pattern" => !string.IsNullOrWhiteSpace(action.Pattern),
+                _ => true
+            };
+
+            if (!valid)
+            {
+                throw new ArgumentException(
+                    $"The ReAct decision tool '{tool.Name}' requires '{parameter.Name}'.");
+            }
+        }
+    }
+
     private static bool HasValidAction(AgentToolAction? action)
     {
         if (action is null || string.IsNullOrWhiteSpace(action.Objective))
         {
             return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(action.Tool))
+        {
+            return true;
         }
 
         if (action.OperationKind == OperationKind.ProjectScaffold)
@@ -4233,6 +6867,11 @@ return (observationMessage, historyEntry);
         {
             return !string.IsNullOrWhiteSpace(action.TargetPath) ||
                    !string.IsNullOrWhiteSpace(action.Command);
+        }
+
+        if (action.OperationKind == OperationKind.Migration)
+        {
+            return action.MigrationAction is not null;
         }
 
         return !string.IsNullOrWhiteSpace(action.Command) ||
@@ -4294,26 +6933,14 @@ return (observationMessage, historyEntry);
         return true;
     }
 
-    private async Task<string> AutoVerifyFileSystemAsync(
+    private string VerifyFileSystem(
         string targetPath,
         CommandExecution execution,
-        AgentActionSession session,
-        CancellationToken cancellationToken)
+        AgentActionSession session)
     {
         try
         {
-            var verifyCommand = OperatingSystem.IsWindows()
-                ? $"powershell.exe -Command \"Test-Path -LiteralPath '{targetPath.Replace("'", "''")}'\""
-                : $"test -f '{targetPath.Replace("'", "'\\''")}' || test -d '{targetPath.Replace("'", "'\\''")}'";
-
-            var verifyOutput = await executor.RunCommandAsync(
-                verifyCommand, cancellationToken);
-
-            var exists = OperatingSystem.IsWindows()
-                ? verifyOutput.Trim().Equals("True", StringComparison.OrdinalIgnoreCase)
-                : verifyOutput.Trim() == "0" ||
-                  (verifyOutput.Contains("exists", StringComparison.OrdinalIgnoreCase) &&
-                   !verifyOutput.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+            var exists = File.Exists(targetPath) || Directory.Exists(targetPath);
 
             if (exists)
             {
@@ -4378,16 +7005,23 @@ return (observationMessage, historyEntry);
     private sealed record ActionAttemptResult(
         string Observation,
         bool RequiresRetry,
-        ConversationTurn? TerminalTurn)
+        ConversationTurn? TerminalTurn,
+        AgentToolAction? RecoveryAction = null)
     {
         public static ActionAttemptResult Completed(string observation)
         {
             return new ActionAttemptResult(observation, RequiresRetry: false, TerminalTurn: null);
         }
 
-        public static ActionAttemptResult Retry(string observation)
+        public static ActionAttemptResult Retry(
+            string observation,
+            AgentToolAction? recoveryAction = null)
         {
-            return new ActionAttemptResult(observation, RequiresRetry: true, TerminalTurn: null);
+            return new ActionAttemptResult(
+                observation,
+                RequiresRetry: true,
+                TerminalTurn: null,
+                recoveryAction);
         }
 
         public static ActionAttemptResult Terminal(ConversationTurn turn)

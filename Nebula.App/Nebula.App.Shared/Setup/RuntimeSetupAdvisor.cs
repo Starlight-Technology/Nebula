@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
+using Nebula.Core.Telemetry;
+using Nebula.Llama.Client.Telemetry;
+
 namespace Nebula.App.Shared.Setup;
 
 public interface IRuntimeSetupAdvisor
@@ -8,7 +11,9 @@ public interface IRuntimeSetupAdvisor
     RuntimeSetupRecommendation BuildRecommendation(ClientEnvironmentProbe? probe, string runtimeUrl);
 }
 
-public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
+public sealed class RuntimeSetupAdvisor(
+    string shellKind,
+    IHostHardwareProbe? hardwareProbe = null) : IRuntimeSetupAdvisor
 {
     public RuntimeSetupRecommendation BuildRecommendation(ClientEnvironmentProbe? probe, string runtimeUrl)
     {
@@ -20,11 +25,11 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         ClientEnvironmentProbe? probe,
         string runtimeUrl)
     {
-        var host = CaptureHostSnapshot(shellKind);
+        var host = CaptureHostSnapshot(shellKind, hardwareProbe?.Probe());
         var client = CreateClientSnapshot(probe);
         var runtime = CreateRuntimeTarget(runtimeUrl);
         var sameMachine = host.ShellKind == "Native app" || ClientMatchesHost(client, host);
-        var gpuKind = sameMachine ? DetectGpuKind(probe) : GpuKind.Unknown;
+        var gpuKind = sameMachine ? DetectGpuKind(probe, host.Hardware) : GpuKind.Unknown;
 
         var reasons = new List<string>();
         var nextSteps = new List<string>();
@@ -96,13 +101,17 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
     private static bool ShouldRecommendAmd(RecommendationContext context)
     {
         return context.Host.IsLinux &&
-               (context.GpuKind == GpuKind.Amd || context.Host.HasKfdDevice);
+               (context.GpuKind == GpuKind.Amd ||
+                context.Host.HasKfdDevice ||
+                HasHardwareVendor(context.Host.Hardware, "amd"));
     }
 
     private static bool ShouldRecommendIntel(RecommendationContext context)
     {
         return context.Host.IsLinux &&
-               (context.GpuKind == GpuKind.Intel || context.Host.HasDriDevice);
+               (context.GpuKind == GpuKind.Intel ||
+                context.Host.HasDriDevice ||
+                HasHardwareVendor(context.Host.Hardware, "intel"));
     }
 
     private static bool HasMissingGpuDetails(RecommendationContext context)
@@ -136,7 +145,9 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
     private static RuntimeSetupRecommendation BuildNvidiaRecommendation(
         RecommendationContext context)
     {
-        context.Reasons.Add("Encontrei pistas de GPU NVIDIA no shell da interface.");
+        context.Reasons.Add(HasHardwareVendor(context.Host.Hardware, "nvidia")
+            ? "A telemetria do host encontrou uma GPU NVIDIA."
+            : "Encontrei pistas de GPU NVIDIA no shell da interface.");
         context.Reasons.Add(context.Host.IsWindows
             ? "Em Windows, o caminho mais previsivel deste stack e usar Docker Desktop com WSL2 e passthrough NVIDIA."
             : "Em Linux, o perfil NVIDIA e o backend mais maduro desta central.");
@@ -160,7 +171,9 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
     {
         context.Reasons.Add(context.Host.HasKfdDevice
             ? "O host Linux expoe /dev/kfd, o que combina com o fluxo ROCm."
-            : "Encontrei pistas de GPU AMD no shell da interface.");
+            : HasHardwareVendor(context.Host.Hardware, "amd")
+                ? "A telemetria do host encontrou uma GPU AMD."
+                : "Encontrei pistas de GPU AMD no shell da interface.");
         context.Reasons.Add("Para AMD, este projeto usa a imagem ollama/ollama:rocm com acesso aos dispositivos /dev/kfd e /dev/dri.");
 
         if (!context.Host.HasKfdDevice)
@@ -188,7 +201,9 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
     {
         context.Reasons.Add(context.Host.HasDriDevice
             ? "O host Linux expoe /dev/dri, o que permite testar o backend Vulkan."
-            : "Encontrei pistas de GPU Intel no shell da interface.");
+            : HasHardwareVendor(context.Host.Hardware, "intel")
+                ? "A telemetria do host encontrou uma GPU Intel."
+                : "Encontrei pistas de GPU Intel no shell da interface.");
         context.Reasons.Add("Neste projeto, Intel entra pelo caminho Vulkan, que ainda e experimental no Ollama.");
         context.NextSteps.Add("Suba o perfil Intel Vulkan e valide um modelo menor primeiro.");
         context.NextSteps.Add("Se o runtime ficar instavel, volte para CPU e mantenha a troca de modelos pela central.");
@@ -220,7 +235,9 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
             isExperimental: false);
     }
 
-    private static RuntimeHostSnapshot CaptureHostSnapshot(string shellKind)
+    private static RuntimeHostSnapshot CaptureHostSnapshot(
+        string shellKind,
+        HostTelemetrySnapshot? hardware)
     {
         var platform = OperatingSystem.IsWindows()
             ? "windows"
@@ -255,7 +272,8 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
             OperatingSystem.IsLinux(),
             OperatingSystem.IsMacOS(),
             OperatingSystem.IsLinux() && Directory.Exists("/dev/dri"),
-            OperatingSystem.IsLinux() && File.Exists("/dev/kfd"));
+            OperatingSystem.IsLinux() && File.Exists("/dev/kfd"),
+            hardware);
     }
 
     private static RuntimeEndpointSnapshot CreateRuntimeTarget(string runtimeUrl)
@@ -357,8 +375,16 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         return "unknown";
     }
 
-    private static GpuKind DetectGpuKind(ClientEnvironmentProbe? probe)
+    private static GpuKind DetectGpuKind(
+        ClientEnvironmentProbe? probe,
+        HostTelemetrySnapshot? hardware)
     {
+        var hardwareKind = DetectHardwareGpuKind(hardware);
+        if (hardwareKind != GpuKind.Unknown)
+        {
+            return hardwareKind;
+        }
+
         if (probe is null)
         {
             return GpuKind.Unknown;
@@ -394,13 +420,69 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
         return GpuKind.Unknown;
     }
 
+    private static GpuKind DetectHardwareGpuKind(HostTelemetrySnapshot? hardware)
+    {
+        if (hardware is null)
+        {
+            return GpuKind.Unknown;
+        }
+
+        foreach (var gpu in hardware.Gpus)
+        {
+            var text = $"{gpu.Vendor} {gpu.Name}".ToLowerInvariant();
+            if (ContainsAny(text, "nvidia", "geforce", "quadro", "tesla"))
+            {
+                return GpuKind.Nvidia;
+            }
+
+            if (ContainsAny(text, "amd", "radeon", "ati"))
+            {
+                return GpuKind.Amd;
+            }
+
+            if (ContainsAny(text, "intel", "iris", "arc", "xe", "uhd"))
+            {
+                return GpuKind.Intel;
+            }
+
+            if (text.Contains("apple"))
+            {
+                return GpuKind.Apple;
+            }
+        }
+
+        return GpuKind.Unknown;
+    }
+
+    private static bool HasHardwareVendor(HostTelemetrySnapshot? hardware, string vendor)
+    {
+        return hardware?.Gpus.Any(gpu =>
+            gpu.Vendor.Contains(vendor, StringComparison.OrdinalIgnoreCase) ||
+            gpu.Name.Contains(vendor, StringComparison.OrdinalIgnoreCase)) == true;
+    }
+
     private static bool ContainsAny(string value, params string[] candidates)
     {
         return candidates.Any(value.Contains);
     }
 
-    private static string BuildGpuLabel(ClientEnvironmentProbe? probe, bool sameMachine, GpuKind gpuKind)
+    private static string BuildGpuLabel(
+        ClientEnvironmentProbe? probe,
+        bool sameMachine,
+        GpuKind gpuKind,
+        HostTelemetrySnapshot? hardware)
     {
+        if (hardware is { } hostHardware)
+        {
+            var hardwareGpu = hostHardware.Gpus.FirstOrDefault(gpu => gpu.IsAvailable);
+            if (hardwareGpu is not null)
+            {
+                return hostHardware.Gpus.Count == 1
+                    ? hardwareGpu.Name
+                    : $"{hardwareGpu.Name} (+{hostHardware.Gpus.Count - 1})";
+            }
+        }
+
         if (!sameMachine && probe is not null)
         {
             return "Ignorada porque a UI parece estar em outro dispositivo";
@@ -554,7 +636,7 @@ public sealed class RuntimeSetupAdvisor(string shellKind) : IRuntimeSetupAdvisor
                 summary,
                 confidence,
                 modeLabel,
-                BuildGpuLabel(Probe, SameMachine, GpuKind),
+                BuildGpuLabel(Probe, SameMachine, GpuKind, Host.Hardware),
                 modelHint,
                 usesGpu,
                 isExperimental,
@@ -574,7 +656,8 @@ public sealed record RuntimeHostSnapshot(
     bool IsLinux,
     bool IsMacOS,
     bool HasDriDevice,
-    bool HasKfdDevice);
+    bool HasKfdDevice,
+    HostTelemetrySnapshot? Hardware = null);
 
 public sealed record ClientShellSnapshot(
     string Platform,

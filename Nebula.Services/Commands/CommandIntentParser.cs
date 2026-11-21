@@ -11,21 +11,47 @@ public sealed partial class CommandIntentParser : ICommandIntentParser
         string? rawCommand,
         string workingDirectory)
     {
+        var effectiveCommand = UnwrapShellWrapper(rawCommand);
         var source = string.Join(
             ' ',
-            new[] { userText, rawCommand }
+            new[] { userText, effectiveCommand }
                 .Where(value => !string.IsNullOrWhiteSpace(value)));
 
         var drive = TryParseWindowsDrive(source);
         var path = drive is null
-            ? TryParsePath(source, userText, rawCommand)
+            ? TryParsePath(source, userText, effectiveCommand)
             : $"{drive}:\\";
 
         return new CommandRequest(
             userText,
             path,
             drive,
-            rawCommand);
+            effectiveCommand);
+    }
+
+    private static string? UnwrapShellWrapper(string? rawCommand)
+    {
+        if (string.IsNullOrWhiteSpace(rawCommand))
+        {
+            return rawCommand;
+        }
+
+        var trimmed = rawCommand.Trim();
+        var match = ShellWrapperRegex().Match(trimmed);
+        if (!match.Success)
+        {
+            return trimmed;
+        }
+
+        var payload = match.Groups["payload"].Value.Trim();
+        if (payload.Length >= 2 &&
+            ((payload[0] == '"' && payload[^1] == '"') ||
+             (payload[0] == '\'' && payload[^1] == '\'')))
+        {
+            payload = payload[1..^1].Trim();
+        }
+
+        return payload.Length == 0 ? trimmed : payload;
     }
 
     private static string? TryParseWindowsDrive(string source)
@@ -126,12 +152,17 @@ public sealed partial class CommandIntentParser : ICommandIntentParser
     private static partial Regex QuotedPathRegex();
 
     [GeneratedRegex(
-        @"^\s*(?:ls|dir|mkdir|md)\s+(?:-[a-z]+\s+)*(?<path>[^;&|]+?)\s*$",
+        @"^\s*(?:ls|dir|mkdir|md)\s+(?:-[a-z]+\s+)*(?<path>(?!-)[^;&|]+?)\s*$",
         RegexOptions.IgnoreCase)]
     private static partial Regex CommandPathRegex();
 
     [GeneratedRegex(
-        @"\b(?:pasta|diret[oó]rio|folder|directory)\s+(?:chamad[ao]\s+)?(?<path>[\w.\-\\/]+)\s*$",
+        @"\b(?:pasta|diret[oó]rio|folder|directory)\s+(?:chamad[ao]\s+)?(?!atual\b|corrente\b|current\b)(?<path>[\w.\-\\/]+)\s*$",
         RegexOptions.IgnoreCase)]
     private static partial Regex NaturalPathRegex();
+
+    [GeneratedRegex(
+        @"^\s*(?:[a-z]:)?[\\/]?(?:[\w.\-]+[\\/])*(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-c|/c|-Command)\s+(?<payload>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex ShellWrapperRegex();
 }

@@ -1,0 +1,106 @@
+@using Nebula.Agent.Application.Events
+@using Nebula.Agent.Domain
+@using Nebula.Core.Agent
+@using Nebula.Core.Safety
+
+<div class="nebula-timeline">
+    <div class="nebula-timeline__header">
+        <CoronaBadge Content="@($"Eventos ({FilteredEvents.Count}/{AllEvents.Count})")"
+                     Variant="CoronaBadgeVariant.Soft"
+                     Color="CoronaColorSemantic.Primary" />
+    </div>
+
+    <div class="nebula-timeline__filters">
+        <div class="nebula-timeline-filters__row">
+            <input class="nebula-timeline-filters__search"
+                   placeholder="Filtrar por texto..."
+                   value="@FilterText"
+                   @oninput="@(e => FilterText = e.Value?.ToString() ?? string.Empty)" />
+            <select class="nebula-timeline-filters__select"
+                    value="@(FilterKind?.ToString() ?? "all")"
+                    @onchange="@(e => FilterKind = ParseEnum<ActionExecutionEventKind>(e.Value?.ToString()))">
+                <option value="all">Todos os tipos</option>
+                @foreach (var k in Enum.GetNames<ActionExecutionEventKind>())
+                {
+                    <option value="@k">@k</option>
+                }
+            </select>
+            <select class="nebula-timeline-filters__select"
+                    value="@(FilterStatus?.ToString() ?? "all")"
+                    @onchange="@(e => FilterStatus = ParseEnum<ActionExecutionStatus>(e.Value?.ToString()))">
+                <option value="all">Todos os status</option>
+                @foreach (var s in Enum.GetNames<ActionExecutionStatus>())
+                {
+                    <option value="@s">@s</option>
+                }
+            </select>
+        </div>
+        <div class="nebula-timeline-filters__row">
+            <label class="nebula-timeline-filters__check">
+                <input type="checkbox" checked="@ShowOnlyErrors" @onchange="@(e => ShowOnlyErrors = (bool)(e.Value ?? false))" />
+                Apenas erros
+            </label>
+            <CoronaButton Variant="CoronaButtonVariant.Text"
+                          Size="CoronaComponentSize.Small"
+                          OnClick="ClearFilters">
+                Limpar filtros
+            </CoronaButton>
+        </div>
+    </div>
+
+    <div class="nebula-timeline__events">
+        @if (FilteredEvents.Count == 0)
+        {
+            <p class="nebula-timeline__empty">@GetEmptyMessage()</p>
+        }
+        else
+        {
+            @foreach (var evt in FilteredEvents)
+            {
+                <TimelineEventItem Event="evt" />
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<ActionExecutionEvent> AllEvents { get; set; } = [];
+    [Parameter] public bool ShowDryRunBadge { get; set; } = false;
+
+    private string FilterText { get; set; } = string.Empty;
+    private ActionExecutionEventKind? FilterKind { get; set; }
+    private ActionExecutionStatus? FilterStatus { get; set; }
+    private bool ShowOnlyErrors { get; set; }
+
+    private IReadOnlyList<ActionExecutionEvent> FilteredEvents => AllEvents
+        .Where(e => string.IsNullOrWhiteSpace(FilterText) ||
+                    (e.Message?.Contains(FilterText, StringComparison.OrdinalIgnoreCase) == true) ||
+                    (e.Command?.Contains(FilterText, StringComparison.OrdinalIgnoreCase) == true) ||
+                    (e.Error?.Contains(FilterText, StringComparison.OrdinalIgnoreCase) == true))
+        .Where(e => FilterKind == null || e.Kind == FilterKind)
+        .Where(e => FilterStatus == null || e.Status == FilterStatus)
+        .Where(e => !ShowOnlyErrors || e.IsError)
+        .ToList();
+
+    private void ClearFilters()
+    {
+        FilterText = string.Empty;
+        FilterKind = null;
+        FilterStatus = null;
+        ShowOnlyErrors = false;
+    }
+
+    private string GetEmptyMessage()
+    {
+        if (AllEvents.Count == 0)
+            return "Nenhum evento de execucao registrado.";
+        return "Nenhum evento corresponde aos filtros aplicados.";
+    }
+
+    private T? ParseEnum<T>(string? value) where T : struct
+    {
+        if (string.IsNullOrWhiteSpace(value) || value == "all")
+            return null;
+        return Enum.TryParse<T>(value, out var result) ? result : null;
+    }
+}

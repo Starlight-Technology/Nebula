@@ -1,5 +1,7 @@
 using System.Text;
 
+using Nebula.Core.Learning; // for ErrorFix
+
 using Nebula.Agent.Application;
 using Nebula.Core.Agent;
 using Nebula.Core.Interactions;
@@ -31,7 +33,9 @@ internal sealed class AgentActionSession
         this.progress = progress;
         this.logger = logger;
         this.selectedModel = selectedModel;
-        WorkspaceRoot = ReferenceWorkspace.Resolve(request.WorkspaceRoot);
+        WorkspaceRoot = ReferenceWorkspace.Resolve(
+            request.WorkspaceRoot,
+            request.ConversationId);
         MaxSteps = Math.Max(1, request.MaxSteps ?? defaultMaxSteps);
         MaxRetriesPerStep = ResolveMaxRetries(request, defaultMaxRetriesPerStep);
         if (request.ConversationApprovedCommands is { Count: > 0 })
@@ -65,6 +69,9 @@ internal sealed class AgentActionSession
     /// </summary>
     public ReferenceWorkspace WorkspaceRoot { get; }
 
+
+    public string WorkingDirectory => WorkspaceRoot.Root;
+
     public DateTimeOffset RunStartedUtc { get; } = DateTimeOffset.UtcNow;
 
     public string? TranslatedObjective { get; set; }
@@ -74,6 +81,17 @@ internal sealed class AgentActionSession
     public List<CommandExecution> Commands { get; } = [];
 
     public List<string> Observations { get; } = [];
+
+    public string? SmokeTestSummary { get; private set; }
+
+    public string? VisualVerificationSummary { get; private set; }
+
+    public void SetSmokeTestSummary(string? summary)
+        => SmokeTestSummary = string.IsNullOrWhiteSpace(summary) ? null : summary.Trim();
+
+    public void SetVisualVerificationSummary(string? summary)
+        => VisualVerificationSummary =
+            string.IsNullOrWhiteSpace(summary) ? null : summary.Trim();
 
     public List<string> CompletedPlanSteps { get; } = [];
 
@@ -87,6 +105,45 @@ internal sealed class AgentActionSession
 
     public Dictionary<string, CreatedArtifact> CreatedArtifacts { get; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> GetChangedFilePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evidence in Evidence)
+        {
+            if (evidence.Success &&
+                (evidence.OperationKind is
+                    OperationKind.FileWrite or
+                    OperationKind.ScriptContent) &&
+                !string.IsNullOrWhiteSpace(evidence.FilePath))
+            {
+                paths.Add(evidence.FilePath);
+            }
+        }
+
+        foreach (var artifact in CreatedArtifacts.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(artifact.Path) &&
+                !IsScreenshotArtifactPath(artifact.Path))
+            {
+                paths.Add(artifact.Path);
+            }
+        }
+
+        return paths.ToList();
+    }
+
+    private static bool IsScreenshotArtifactPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return normalized.Contains(
+                   "/.nebula/screenshots/",
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith(
+                   ".nebula/screenshots/",
+                   StringComparison.OrdinalIgnoreCase);
+    }
 
     public int StepNumber { get; private set; } = 1;
 
@@ -109,6 +166,21 @@ internal sealed class AgentActionSession
     public HashSet<string> ApprovedCommandsForConversation { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    public HashSet<string> FilesReadThisSession { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, int> _consecutiveFailuresBySignature = new();
+
+    public int GetConsecutiveFailures(string errorSignature)
+        => _consecutiveFailuresBySignature.GetValueOrDefault(errorSignature, 0);
+
+    public void RecordFailure(string errorSignature)
+        => _consecutiveFailuresBySignature[errorSignature] =
+            _consecutiveFailuresBySignature.GetValueOrDefault(errorSignature, 0) + 1;
+
+    public void ResetFailureCount(string errorSignature)
+        => _consecutiveFailuresBySignature.Remove(errorSignature);
+
     public void RecordApproval(CommandExecution execution, bool autoApproved)
     {
         Approvals.Add(new ApprovalRecord(
@@ -123,6 +195,19 @@ internal sealed class AgentActionSession
 
     public AgentActionDecisionRequest CreateDecisionRequest()
     {
+        ErrorContext? errorContext = null;
+        var lastEntry = ExecutionHistory.Entries.LastOrDefault();
+        if (lastEntry is not null && !string.IsNullOrWhiteSpace(lastEntry.ErrorSignature))
+        {
+            // The actual fixes will be injected by the runner when building the prompt
+            // We just pass the error signature here for context
+            errorContext = new ErrorContext(
+                lastEntry.ErrorSignature,
+                lastEntry.Command,
+                [], // Will be populated by runner
+                string.Empty); // Will be populated by runner
+        }
+
         return new AgentActionDecisionRequest
         {
             Objective = TranslatedObjective ?? Request.Prompt,
@@ -134,7 +219,9 @@ internal sealed class AgentActionSession
             StepNumber = StepNumber,
             RetryNumber = RetryNumber,
             WorkspaceRoot = WorkspaceRoot.Root,
-            DryRun = IsDryRun
+            ConversationId = Request.ConversationId,
+            DryRun = IsDryRun,
+            ErrorContext = errorContext
         };
     }
 
@@ -155,6 +242,17 @@ internal sealed class AgentActionSession
         pendingRecoveryAction = null;
         pendingRecoveryReasoning = null;
         return true;
+    }
+
+    public void QueueRecoveryAction(AgentToolAction action, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        action.RequiresSafetyReview = true;
+        pendingRecoveryAction = action;
+        pendingRecoveryReasoning = $"Result validation correction: {reason}";
+        RecordObservation(
+            "result validation",
+            $"A validator-proposed correction will be retried through the normal safety checks: {reason}");
     }
 
     public AgentStep CreateStep(AgentToolAction action)
@@ -191,6 +289,11 @@ internal sealed class AgentActionSession
             OriginalCommand = action.Command,
             WorkingDirectory = step.WorkingDirectory,
             TargetPath = action.TargetPath,
+            MigrationAction = action.MigrationAction,
+            MigrationFramework = action.MigrationFramework,
+            MigrationName = action.MigrationName,
+            MigrationContext = action.MigrationContext,
+            MigrationDryRun = action.MigrationDryRun,
             Required = true
         };
     }
@@ -208,10 +311,16 @@ internal sealed class AgentActionSession
     public void RecordArtifact(
         string path,
         string contentHash,
-        CommandClassification classification)
+        CommandClassification classification,
+        string? displayName = null,
+        double diffPercent = 0.0)
     {
-        CreatedArtifacts[Path.GetFullPath(path)] =
-            new CreatedArtifact(path, contentHash, classification);
+        CreatedArtifacts[Path.GetFullPath(path)] = new CreatedArtifact(
+            path,
+            contentHash,
+            classification,
+            string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim(),
+            diffPercent);
     }
 
     public bool TryGetArtifact(
@@ -247,7 +356,7 @@ internal sealed class AgentActionSession
             command: execution.Run);
     }
 
-public void EmitApprovalGranted(CommandExecution execution)
+    public void EmitApprovalGranted(CommandExecution execution)
     {
         var mode = execution.AutoApproved
             ? "automaticamente pelas preferencias do runtime"
@@ -820,10 +929,13 @@ public void EmitApprovalGranted(CommandExecution execution)
             .Select(artifact => new AgentArtifactRecord(
                 Guid.NewGuid(),
                 runId,
-                Path.GetFileName(artifact.Path) ?? artifact.Path,
+                artifact.DisplayName
+                    ?? Path.GetFileName(artifact.Path)
+                    ?? artifact.Path,
                 artifact.Path,
                 artifact.ContentHash,
-                DateTimeOffset.UtcNow))
+                DateTimeOffset.UtcNow,
+                artifact.DiffPercent))
             .ToList();
     }
 
@@ -873,13 +985,21 @@ public void EmitApprovalGranted(CommandExecution execution)
             report.AppendLine();
         }
 
-        var changedFiles = Evidence
-            .Where(value => value.Success &&
-                value.OperationKind is OperationKind.FileWrite or OperationKind.ScriptContent)
-            .Select(value => value.FilePath)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        if (!string.IsNullOrWhiteSpace(SmokeTestSummary))
+        {
+            report.AppendLine("## Smoke tests");
+            report.AppendLine(SmokeTestSummary);
+            report.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(VisualVerificationSummary))
+        {
+            report.AppendLine("## Verificacao visual");
+            report.AppendLine(VisualVerificationSummary);
+            report.AppendLine();
+        }
+
+        var changedFiles = GetChangedFilePaths();
         report.AppendLine($"## Arquivos alterados ({changedFiles.Count})");
         report.AppendLine(changedFiles.Count == 0
             ? "Nenhum arquivo foi alterado."
@@ -973,6 +1093,11 @@ public void EmitApprovalGranted(CommandExecution execution)
             Content = execution.Content,
             Language = execution.Language,
             TemplateId = execution.TemplateId,
+            MigrationAction = execution.MigrationAction,
+            MigrationFramework = execution.MigrationFramework,
+            MigrationName = execution.MigrationName,
+            MigrationContext = execution.MigrationContext,
+            MigrationDryRun = execution.MigrationDryRun,
             ContentHash = execution.ContentHash,
             ClassificationSource = execution.ClassificationSource,
             ClassificationConfidence = execution.ClassificationConfidence,
@@ -1164,7 +1289,9 @@ public void EmitApprovalGranted(CommandExecution execution)
 internal sealed record CreatedArtifact(
     string Path,
     string ContentHash,
-    CommandClassification Classification);
+    CommandClassification Classification,
+    string? DisplayName = null,
+    double DiffPercent = 0.0);
 
 internal sealed record ApprovalRecord(
     Guid StepId,

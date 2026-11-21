@@ -1,4 +1,6 @@
 using Nebula.Agent.Domain;
+using Nebula.Core.Agent;
+using Nebula.Core.Learning; // for ErrorFix
 using Nebula.Core.Operations;
 using Nebula.Core.Projects;
 
@@ -29,10 +31,27 @@ public sealed class AgentActionDecisionRequest
     public string? WorkspaceRoot { get; set; }
 
     /// <summary>
+    /// Conversation id for per-chat folder (workspace/&lt;id8&gt;/). Used to inject existing files for modify tasks.
+    /// </summary>
+    public Guid ConversationId { get; set; }
+
+    /// <summary>
     /// True when this decision is a dry-run preview: nothing may be executed or written.
     /// </summary>
     public bool DryRun { get; set; }
+
+    /// <summary>
+    /// Error context from the previous failed step, including known fixes.
+    /// Used to guide the agent toward proven solutions.
+    /// </summary>
+    public ErrorContext? ErrorContext { get; set; }
 }
+
+public sealed record ErrorContext(
+    string ErrorSignature,
+    string FailedCommand,
+    IReadOnlyList<ErrorFix> KnownFixes,
+    string Hypothesis);
 
 public sealed class AgentActionDecision
 {
@@ -95,13 +114,40 @@ public sealed class AgentToolAction
 
     public OperationKind OperationKind { get; set; } = OperationKind.Unknown;
 
+    /// <summary>
+    /// Optional tool name (read, write, edit, patch, shell, scaffold, migration,
+    /// glob, grep). When present the runner maps it to the compatible
+    /// OperationKind and the existing execution pipeline.
+    /// </summary>
+    public string? Tool { get; set; }
+
     public string? Content { get; set; }
 
     public string? TargetPath { get; set; }
 
+    public string? OldString { get; set; }
+
+    public string? NewString { get; set; }
+
+    public string? Pattern { get; set; }
+
+    public string? Include { get; set; }
+
+    public int? MaxResults { get; set; }
+
     public string? TemplateId { get; set; }
 
     public IReadOnlyList<PlannedPatchFile>? PlannedFiles { get; set; }
+
+    public MigrationAction? MigrationAction { get; set; }
+
+    public MigrationFramework? MigrationFramework { get; set; }
+
+    public string? MigrationName { get; set; }
+
+    public string? MigrationContext { get; set; }
+
+    public bool MigrationDryRun { get; set; }
 
     public string? Language { get; set; }
 

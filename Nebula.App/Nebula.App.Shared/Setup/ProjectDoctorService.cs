@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 
+using Nebula.Core.Configuration;
 using Nebula.Core.Safety;
 using Nebula.Llama.Client;
 using Nebula.Runner;
@@ -37,8 +38,12 @@ public sealed class ProjectDiagnosticReport
 
 public sealed class ProjectDoctorService(
     IShellExecutor shellExecutor,
-    ILlamaClient llamaClient) : IProjectDoctorService
+    ILlamaClient llamaClient,
+    ISandboxRuntimeLocator? sandboxRuntimeLocator = null) : IProjectDoctorService
 {
+    private readonly ISandboxRuntimeLocator runtimeLocator =
+        sandboxRuntimeLocator ?? new SandboxRuntimeLocator();
+
     public async Task<ProjectDiagnosticReport> RunAsync(
         CancellationToken cancellationToken = default)
     {
@@ -64,32 +69,38 @@ public sealed class ProjectDoctorService(
 
         items.Add(await ProbeGitRepositoryAsync(cancellationToken));
 
-        items.Add(await ProbeAsync(
-            "Docker",
-            "docker --version",
-            "Inicie o Docker Desktop ou o daemon do Docker antes dos containers.",
+        var containerRuntime = runtimeLocator.Locate(
+            SandboxContainerRuntime.Auto);
+
+        items.Add(await ProbeContainerRuntimeAsync(
+            containerRuntime,
             cancellationToken));
 
-        items.Add(await ProbeDockerComposeAsync(cancellationToken));
+        items.Add(await ProbeContainerComposeAsync(
+            containerRuntime,
+            cancellationToken));
 
-        items.Add(await ProbeOllamaAsync(cancellationToken));
+        var composeExecutable = containerRuntime?.Executable ?? "docker";
+        items.Add(await ProbeOllamaAsync(
+            composeExecutable,
+            cancellationToken));
 
         items.Add(await ProbePortAsync(
             "PostgreSQL (porta 5432)",
             5432,
-            "Rode `docker compose up -d postgres` e confira POSTGRES_CONNECTION.",
+            $"Rode `{composeExecutable} compose up -d postgres` e confira POSTGRES_CONNECTION.",
             cancellationToken));
 
         items.Add(await ProbePortAsync(
             "MongoDB (porta 27017)",
             27017,
-            "Rode `docker compose up -d mongodb` e confira MONGO_CONNECTION.",
+            $"Rode `{composeExecutable} compose up -d mongodb` e confira MONGO_CONNECTION.",
             cancellationToken));
 
         items.Add(await ProbePortAsync(
             "SearXNG (porta 8080)",
             8080,
-            "Rode `docker compose up -d searxng` para habilitar pesquisa web local.",
+            $"Rode `{composeExecutable} compose up -d searxng` para habilitar pesquisa web local.",
             cancellationToken));
 
         return new ProjectDiagnosticReport
@@ -134,34 +145,90 @@ public sealed class ProjectDoctorService(
         }
     }
 
-    private async Task<ProjectDiagnosticItem> ProbeDockerComposeAsync(
+    private async Task<ProjectDiagnosticItem> ProbeContainerRuntimeAsync(
+        SandboxRuntimeInfo? runtime,
         CancellationToken cancellationToken)
     {
+        if (OperatingSystem.IsBrowser())
+        {
+            return new ProjectDiagnosticItem
+            {
+                Name = "Container runtime",
+                Available = false,
+                Detail = "indisponivel no navegador",
+                Suggestion = "Rode o diagnostico a partir do app web servido ou do shell nativo."
+            };
+        }
+
+        if (runtime is null)
+        {
+            return new ProjectDiagnosticItem
+            {
+                Name = "Container runtime",
+                Available = false,
+                Detail = "Nenhum runtime Docker/Podman encontrado.",
+                Suggestion = "Instale Docker ou Podman, ou configure Nebula:Sandbox:Runtime."
+            };
+        }
+
+        return await ProbeAsync(
+            $"Container runtime ({runtime.Name})",
+            $"{runtime.Executable} --version",
+            $"Instale {runtime.Name} e garanta o binario no PATH.",
+            cancellationToken);
+    }
+
+    private async Task<ProjectDiagnosticItem> ProbeContainerComposeAsync(
+        SandboxRuntimeInfo? runtime,
+        CancellationToken cancellationToken)
+    {
+        var name = runtime is null
+            ? "Container Compose"
+            : $"Container Compose ({runtime.Name})";
+
+        if (runtime is null)
+        {
+            return new ProjectDiagnosticItem
+            {
+                Name = name,
+                Available = false,
+                Detail = "runtime indisponivel",
+                Suggestion = "Instale Docker ou Podman antes de validar o compose."
+            };
+        }
+
+        var composeSuggestion = runtime.Name == "podman"
+            ? "Instale um provider Compose para Podman (`podman-compose` ou provider Docker Compose) e revise docker-compose.yml."
+            : "Revise docker-compose.yml na raiz do projeto.";
+
         try
         {
             var output = SecretRedaction.Apply(
                 (await shellExecutor.RunCommandAsync(
-                    "docker compose config --quiet",
+                    $"{runtime.Executable} compose config --quiet",
                     cancellationToken))
                 .Trim());
             return new ProjectDiagnosticItem
             {
-                Name = "Docker Compose (arquivo do projeto)",
-                Available = string.IsNullOrWhiteSpace(output) || output.Contains("error", StringComparison.OrdinalIgnoreCase) is false,
+                Name = name,
+                Available = string.IsNullOrWhiteSpace(output) ||
+                    !output.Contains("error", StringComparison.OrdinalIgnoreCase),
                 Detail = string.IsNullOrWhiteSpace(output)
                     ? "compose config valido"
                     : FirstLine(output),
-                Suggestion = string.IsNullOrWhiteSpace(output) ? null : "Revise docker-compose.yml na raiz do projeto."
+                Suggestion = string.IsNullOrWhiteSpace(output)
+                    ? null
+                    : composeSuggestion
             };
         }
         catch (Exception ex)
         {
             return new ProjectDiagnosticItem
             {
-                Name = "Docker Compose (arquivo do projeto)",
+                Name = name,
                 Available = false,
                 Detail = ex.Message,
-                Suggestion = "Revise docker-compose.yml na raiz do projeto."
+                Suggestion = composeSuggestion
             };
         }
     }
@@ -202,8 +269,11 @@ public sealed class ProjectDoctorService(
     }
 
     private async Task<ProjectDiagnosticItem> ProbeOllamaAsync(
+        string composeExecutable,
         CancellationToken cancellationToken)
     {
+        var suggestion =
+            $"Inicie o Ollama ou rode `{composeExecutable} compose up -d ollama`.";
         try
         {
             var version = await llamaClient.GetServerVersionAsync(cancellationToken);
@@ -214,9 +284,7 @@ public sealed class ProjectDoctorService(
                 Detail = version is null
                     ? "Sem resposta no endpoint configurado."
                     : $"v{version} em {llamaClient.LlamaUrl}",
-                Suggestion = version is null
-                    ? "Inicie o Ollama ou rode `docker compose up -d ollama`."
-                    : null
+                Suggestion = version is null ? suggestion : null
             };
         }
         catch (OperationCanceledException)
@@ -230,7 +298,7 @@ public sealed class ProjectDoctorService(
                 Name = "Ollama runtime",
                 Available = false,
                 Detail = ex.Message,
-                Suggestion = "Inicie o Ollama ou rode `docker compose up -d ollama`."
+                Suggestion = suggestion
             };
         }
     }
