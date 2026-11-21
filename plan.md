@@ -8,8 +8,8 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - `[~]` Parcial: existe codigo/servico/UI, mas falta wiring, teste, enforcement ou prova E2E.
 - `[ ]` Planejado ou nao encontrado no codigo atual.
 
-Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
-2026-11-03. Baseado em inspecao do codigo e nos builds/testes registrados em
+Ultima reconciliacao: 2026-11-14; ultima validacao de redaction/build/testes:
+2026-11-14. Baseado em inspecao do codigo e nos builds/testes registrados em
 `AGENTS.md`; nao e prova de runtime.
 
 ## Principios
@@ -40,6 +40,7 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 - [x] Adicionar modo "criar projeto completo" com etapas padrao: requisitos, arquitetura, scaffold, implementacao, testes, build, smoke test e resumo (`OperationKind.ProjectScaffold` + `IProjectScaffolder` + validacao pos-scaffold).
 - [x] Fazer o agente criar e atualizar README, scripts de setup, exemplos de uso e notas de execucao (templates incluem README e `.gitignore`).
 - [x] Adicionar suporte a multi-file patches planejados, com revisao antes de aplicar quando o risco for alto (`OperationKind.PlannedPatch` + `plannedFiles` no JSON de decisao + `IPlannedPatchApplier`; arquivos com extensao de script ou fora das raizes permitidas pedem aprovacao antes de aplicar).
+- [x] Criar catálogo/registry de ferramentas (`IAgentToolRegistry`: read/write/edit/patch/shell/scaffold/migration/glob/grep; `action.tool` mapeia para `OperationKind` existente; `edit` faz substituicao exata e unica; `glob`/`grep` sao buscas read-only limitadas ao workspace).
 - [x] Criar validadores por stack para garantir que arquivos essenciais existem e comandos basicos funcionam (`IProjectStackValidator`).
 
 ## Fase 3 - Execucao robusta de scripts e ferramentas
@@ -104,9 +105,9 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 - [x] Adicionar fluxo de PR: `PullRequestService` cobre GitHub/GitLab, usa tokens server-side (`Nebula:PullRequest:*`), valida branches, faz push opcional e tem card na tela `/git`; coberto por `PullRequestServiceTest` e `GitPageTests`.
 - [x] Adicionar geracao de mensagens de commit baseadas em diff (`GitService.GenerateCommitMessageAsync` + botao em `Git.razor`); sem teste direto.
 - [x] Criar suporte a testes direcionados por arquivo alterado (`TestRunnerService.RunTargetedTestsAsync`, usado em `TestRunnerCard`/`AgentRunLive`); sem teste unitario direto do servico.
-- [~] Adicionar execucao de smoke tests de apps web locais: `SmokeTestService` registrado, sem chamadores/testes.
-- [~] Integrar screenshots automaticos para UI depois de mudancas frontend: `ScreenshotService` tem captura/viewports/baselines/diff, mas nao e acionado automaticamente.
-- [~] Detectar portas ocupadas e escolher alternativas automaticamente: `PortDetectionService` existe, sem chamadores/testes.
+- [x] Adicionar execucao de smoke tests de apps web locais: `ISmokeTestService` roda no fechamento do DoD (`AgentActionRunner.VerifySmokeTestsAsync`), usa somente URLs explicitas do projeto (launchSettings/compose/package.json/env), reprova a conclusao quando uma URL alcancavel responde erro e e ignorado quando nenhuma responde; `SmokeTestEnabled`/`SmokeTestTimeoutSeconds` configuraveis e secao `## Smoke tests` no relatorio final; coberto por `SmokeTestServiceTest` e testes do runner.
+- [~] Integrar screenshots automaticos para UI depois de mudancas frontend: `ScreenshotService` captura/viewports/baselines/diff e o runner aciona `TryRunVisualVerificationAsync` antes de concluir quando detecta mudancas frontend, registrando artefatos baseline/current/diff em `.nebula/screenshots` (ignorado no git); a UI Web expoe `/api/screenshots/{baseline|current|diff}/{artifactId}` e o `ArtifactPanel` mostra a comparacao; MAUI nao tem host HTTP para os endpoints e ainda nao ha assertion automatica de regressao visual.
+- [x] Detectar portas ocupadas e escolher alternativas automaticamente: falhas de comando com `EADDRINUSE`/`address already in use` sao enriquecidas por `AgentActionRunner.AugmentFailureWithPortSuggestionAsync` com nome/PID do processo e alternativas livres de `PortDetectionService`; coberto por `PortDetectionServiceTest`.
 - [x] Adicionar geracao de migrations com aprovacao explicita: `OperationKind.Migration` + `migrationAction`/`migrationFramework`/`migrationName`/`migrationContext` no planner; `AgentActionRunner.ExecuteMigrationAsync` lista sem aprovacao, mas `Create`/`Apply` exigem `AgentApprovedAction` manual com escopo `Once` (auto-aprovacao, allowlist, conversa e categoria sao ignorados); `MigrationService` valida nomes/contextos, suporta EF/Node e `DryRun` retorna o comando planejado sem executar.
 - [x] Criar "project doctor" para diagnosticar ambiente, SDKs, Docker, banco, Ollama e dependencias.
 
@@ -115,7 +116,7 @@ Ultima reconciliacao: 2026-11-02; ultima validacao de redaction/build/testes:
 - [ ] Permitir que o agente leia screenshots e associe problemas visuais a arquivos de frontend.
 - [ ] Gerar imagens, icones e assets quando o projeto precisar.
 - [ ] Criar documentos, planilhas, PDFs e slides como artefatos versionados quando aplicavel.
-- [~] Adicionar verificacao visual de layouts responsivos: ha captura/viewports/diff de screenshots (`ScreenshotService`), mas falta assertion/automacao no fluxo de UI.
+- [~] Adicionar verificacao visual de layouts responsivos: `TryRunVisualVerificationAsync` captura multiplos viewports e grava baseline/current/diff apos mudancas frontend, e a UI Web compara as imagens; ainda falta assertion automatica de regressao e preview no MAUI.
 - [ ] Suportar extracao de requisitos a partir de documentos enviados.
 - [~] Criar relatórios finais exportaveis para Markdown e PDF: o `FinalReport` e exibido em Markdown no Chat, mas nao ha exportacao para arquivo/PDF.
 

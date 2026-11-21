@@ -15,8 +15,24 @@ public static class PlannedPatchContentValidator
 
     private static readonly string[] JsonExtensions = [".json"];
 
+    private static readonly string[] CssExtensions = [".css"];
+
     private static readonly string[] BraceExtensions =
         [".css", ".js", ".mjs", ".cjs", ".ts"];
+
+    private static readonly string[] ScriptExtensions =
+    [
+        ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+        ".py", ".cs", ".java", ".go", ".rb", ".php", ".sh", ".ps1"
+    ];
+
+    private static readonly string[] PlaceholderPhrases =
+    [
+        "placeholder", "lorem ipsum", "code for", "code to", "script for",
+        "content for", "conteudo da", "conteúdo da", "conteudo do",
+        "conteúdo do", "codigo da", "código da", "codigo do", "código do",
+        "implement the", "implemente", "complete calculator code"
+    ];
 
     public static string? Validate(IReadOnlyList<PlannedPatchFile> files)
     {
@@ -59,6 +75,12 @@ public static class PlannedPatchContentValidator
             }
         }
 
+        if (CssExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase) &&
+            !LooksLikeCssContent(file.Content))
+        {
+            return BuildPlaceholderReason(file.RelativePath);
+        }
+
         if (BraceExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase) &&
             !HasBalancedBraces(file.Content))
         {
@@ -66,7 +88,48 @@ public static class PlannedPatchContentValidator
                    "(chaves desbalanceadas); reenvie o arquivo completo.";
         }
 
+        if (ScriptExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase) &&
+            IsPlaceholderDescription(file.Content) &&
+            !HasCodeStructure(file.Content))
+        {
+            return BuildPlaceholderReason(file.RelativePath);
+        }
+
         return null;
+    }
+
+    private static bool IsPlaceholderDescription(string content)
+    {
+        var trimmed = content.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > 200)
+        {
+            return false;
+        }
+
+        return PlaceholderPhrases.Any(phrase =>
+            trimmed.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasCodeStructure(string content)
+    {
+        return content.IndexOfAny(['{', '}', '(', ')', '[', ']', ';', '=']) >= 0;
+    }
+
+    private static bool LooksLikeCssContent(string content)
+    {
+        return content.Contains('{') ||
+               content.Contains('}') ||
+               (content.Contains(':') && content.Contains(';')) ||
+               content
+                   .Split('\n')
+                   .Any(line => line.TrimStart().StartsWith("@", StringComparison.Ordinal));
+    }
+
+    private static string BuildPlaceholderReason(string path)
+    {
+        return $"O conteudo de '{path}' parece um placeholder ou descricao, nao " +
+               "codigo real (por exemplo, 'HTML and JS code for calculator'). " +
+               "Envie o codigo completo e funcional do arquivo.";
     }
 
     private static string? ValidateHtml(PlannedPatchFile file)
@@ -86,6 +149,16 @@ public static class PlannedPatchContentValidator
         {
             return $"O HTML de '{file.RelativePath}' parece truncado " +
                    "(falta </body>); reenvie o arquivo completo.";
+        }
+
+        var hasTag = content.Contains('<') &&
+                     content.Contains('>') &&
+                     (content.Contains("</") ||
+                      content.Contains("/>") ||
+                      content.Contains("<!"));
+        if (!hasTag)
+        {
+            return BuildPlaceholderReason(file.RelativePath);
         }
 
         return null;

@@ -203,6 +203,42 @@ public sealed class PostgresAgentRunStoreTest
     }
 
     [Fact]
+    public async Task get_interrupted_runs_must_return_only_unfinished_active_runs()
+    {
+        var context = CreateContext();
+        var store = new PostgresAgentRunStore(context);
+        var running = CreateRun(status: "Running", minutesAgo: 10) with
+        {
+            FinishedAt = null
+        };
+        var observing = CreateRun(status: "Observing", minutesAgo: 8) with
+        {
+            FinishedAt = null
+        };
+        var completed = CreateRun(status: "Completed", minutesAgo: 5);
+        var awaitingApproval = CreateRun(status: "AwaitingApproval", minutesAgo: 4) with
+        {
+            FinishedAt = null
+        };
+        var failed = CreateRun(status: "Failed", minutesAgo: 3) with
+        {
+            FinishedAt = null
+        };
+
+        await store.SaveRunAsync(running);
+        await store.SaveRunAsync(observing);
+        await store.SaveRunAsync(completed);
+        await store.SaveRunAsync(awaitingApproval);
+        await store.SaveRunAsync(failed);
+
+        var runs = await store.GetInterruptedRunsAsync();
+
+        Assert.Equal(2, runs.Count);
+        Assert.Contains(runs, run => run.Id == running.Id);
+        Assert.Contains(runs, run => run.Id == observing.Id);
+    }
+
+    [Fact]
     public async Task save_and_get_run_must_round_trip_step_safety_fields()
     {
         var context = CreateContext();

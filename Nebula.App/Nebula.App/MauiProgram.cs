@@ -67,7 +67,12 @@ public static class MauiProgram
                 Environment.GetEnvironmentVariable("NEBULA_LLM_TIMEOUT_SECONDS"),
                 out var llmTimeout) && llmTimeout > 0
                 ? llmTimeout
-                : 300));
+                : 300,
+            loadTimeoutSeconds: int.TryParse(
+                Environment.GetEnvironmentVariable("NEBULA_LLM_LOAD_TIMEOUT_SECONDS"),
+                out var llmLoadTimeout) && llmLoadTimeout > 0
+                ? llmLoadTimeout
+                : LlamaClient.DefaultLoadTimeoutSeconds));
         builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
             commandRunner: new ProcessRuntimeCommandRunner()));
 
@@ -194,7 +199,35 @@ public static class MauiProgram
                     Environment.GetEnvironmentVariable("NEBULA_SANDBOX_CPU_LIMIT"),
                     out var sandboxCpuLimit) && sandboxCpuLimit > 0
                     ? sandboxCpuLimit
-                    : 0
+                    : 0,
+            SmokeTestEnabled =
+                !bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SMOKE_TEST_ENABLED"),
+                    out var smokeTestEnabled) ||
+                smokeTestEnabled,
+            SmokeTestTimeoutSeconds =
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SMOKE_TEST_TIMEOUT_SECONDS"),
+                    out var smokeTestTimeout) && smokeTestTimeout > 0
+                    ? smokeTestTimeout
+                    : NebulaRuntimeSettings.DefaultSmokeTestTimeoutSeconds,
+            ScreenshotEnabled =
+                !bool.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_ENABLED"),
+                    out var screenshotEnabled) ||
+                screenshotEnabled,
+            ScreenshotDiffThresholdPercent =
+                double.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_DIFF_THRESHOLD"),
+                    out var screenshotDiffThreshold) && screenshotDiffThreshold >= 0
+                    ? screenshotDiffThreshold
+                    : 0.1,
+            ScreenshotCaptureDelayMs =
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("NEBULA_SCREENSHOT_CAPTURE_DELAY_MS"),
+                    out var screenshotCaptureDelay) && screenshotCaptureDelay >= 0
+                    ? screenshotCaptureDelay
+                    : 1000
         });
         builder.Services.AddScoped<NebulaWorkspaceState>();
         builder.Services.AddSingleton<DatabaseInitializationState>();
@@ -334,6 +367,8 @@ builder.Services.AddScoped<IGitDiffService, GitDiffService>();
         builder.Services.AddScoped<IPortDetectionService, PortDetectionService>();
         builder.Services.Configure<PullRequestOptions>(
             builder.Configuration.GetSection("Nebula:PullRequest"));
+        builder.Services.Configure<ScreenshotOptions>(
+            builder.Configuration.GetSection("Nebula:Screenshot"));
         builder.Services.AddScoped<IPullRequestService, PullRequestService>();
         builder.Services.AddScoped<IMigrationService, MigrationService>();
         builder.Services.AddScoped<IScreenshotService, ScreenshotService>();
@@ -414,6 +449,9 @@ builder.Services.AddScoped<IWorkspaceMemoryStore, PostgresWorkspaceMemoryStore>(
     userMemoryService: provider.GetRequiredService<IUserMemoryService>(),
     errorFixService: provider.GetService<IErrorFixService>(),
     environmentValidator: provider.GetService<IEnvironmentValidator>(),
+    portDetectionService: provider.GetService<IPortDetectionService>(),
+    smokeTestService: provider.GetService<ISmokeTestService>(),
+    screenshotService: provider.GetService<IScreenshotService>(),
     resultValidator: provider.GetService<IResultValidator>()));
         builder.Services.AddScoped<IManager>(provider => new Manager(
             provider.GetRequiredService<ILlamaClient>(),

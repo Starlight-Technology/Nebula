@@ -13,9 +13,7 @@ public sealed class MigrationServiceTest
     {
         using var workspace = new TempTestWorkspace();
         var executor = new Mock<IShellExecutor>();
-        var service = new MigrationService(
-            executor.Object,
-            new Mock<ILogger>().Object);
+        var service = new MigrationService(executor.Object);
 
         var result = await service.CreateMigrationAsync(
             new MigrationRequest(
@@ -41,9 +39,7 @@ public sealed class MigrationServiceTest
             Path.Combine(workspace.Path, "package.json"),
             """{"dependencies":{"knex":"latest"}}""");
         var executor = new Mock<IShellExecutor>();
-        var service = new MigrationService(
-            executor.Object,
-            new Mock<ILogger>().Object);
+        var service = new MigrationService(executor.Object);
 
         var result = await service.CreateMigrationAsync(
             new MigrationRequest(
@@ -64,9 +60,7 @@ public sealed class MigrationServiceTest
     public async Task create_migration_rejects_unsafe_names(string migrationName)
     {
         using var workspace = new TempTestWorkspace();
-        var service = new MigrationService(
-            new Mock<IShellExecutor>().Object,
-            new Mock<ILogger>().Object);
+        var service = new MigrationService(new Mock<IShellExecutor>().Object);
 
         var result = await service.CreateMigrationAsync(
             new MigrationRequest(
@@ -91,9 +85,7 @@ public sealed class MigrationServiceTest
               </ItemGroup>
             </Project>
             """);
-        var service = new MigrationService(
-            new Mock<IShellExecutor>().Object,
-            new Mock<ILogger>().Object);
+        var service = new MigrationService(new Mock<IShellExecutor>().Object);
 
         var framework = await service.DetectFrameworkAsync(workspace.Path);
 

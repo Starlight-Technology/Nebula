@@ -373,3 +373,6 @@ models/*.zip
 %USERPROFILE%/
 hello.py
 New\ Text\ Document.txt
+
+# Nebula generated workspaces and screenshot artifacts
+.nebula/

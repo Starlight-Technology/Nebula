@@ -24,6 +24,27 @@ public sealed record AgentRun(
     IReadOnlyList<ArchitectureComparisonOption> ArchitectureOptions = null!,
     Guid? ParentRunId = null);
 
+public static class AgentRunStates
+{
+    public const string Running = "Running";
+
+    public static readonly string[] InterruptedCandidates =
+    [
+        Running,
+        "Planning",
+        "Executing",
+        "Retrying",
+        "Observing",
+        "Correcting"
+    ];
+
+    public static bool IsInterruptedCandidate(string? status)
+    {
+        return status is not null
+            && InterruptedCandidates.Contains(status, StringComparer.Ordinal);
+    }
+}
+
 public sealed record ArchitectureComparisonOption(
     string Name,
     string[] Pros,
@@ -89,8 +110,15 @@ public interface IAgentRunStore
         Guid conversationId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<AgentRun>> GetInterruptedRunsAsync(
+        CancellationToken cancellationToken = default);
+
     Task<Guid?> GetRunIdByStepIdAsync(
         Guid stepId,
+        CancellationToken cancellationToken = default);
+
+    Task<AgentArtifactRecord?> GetArtifactAsync(
+        Guid artifactId,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(

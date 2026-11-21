@@ -82,6 +82,17 @@ internal sealed class AgentActionSession
 
     public List<string> Observations { get; } = [];
 
+    public string? SmokeTestSummary { get; private set; }
+
+    public string? VisualVerificationSummary { get; private set; }
+
+    public void SetSmokeTestSummary(string? summary)
+        => SmokeTestSummary = string.IsNullOrWhiteSpace(summary) ? null : summary.Trim();
+
+    public void SetVisualVerificationSummary(string? summary)
+        => VisualVerificationSummary =
+            string.IsNullOrWhiteSpace(summary) ? null : summary.Trim();
+
     public List<string> CompletedPlanSteps { get; } = [];
 
     public List<string> PlanRevisions { get; } = [];
@@ -94,6 +105,45 @@ internal sealed class AgentActionSession
 
     public Dictionary<string, CreatedArtifact> CreatedArtifacts { get; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> GetChangedFilePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evidence in Evidence)
+        {
+            if (evidence.Success &&
+                (evidence.OperationKind is
+                    OperationKind.FileWrite or
+                    OperationKind.ScriptContent) &&
+                !string.IsNullOrWhiteSpace(evidence.FilePath))
+            {
+                paths.Add(evidence.FilePath);
+            }
+        }
+
+        foreach (var artifact in CreatedArtifacts.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(artifact.Path) &&
+                !IsScreenshotArtifactPath(artifact.Path))
+            {
+                paths.Add(artifact.Path);
+            }
+        }
+
+        return paths.ToList();
+    }
+
+    private static bool IsScreenshotArtifactPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return normalized.Contains(
+                   "/.nebula/screenshots/",
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith(
+                   ".nebula/screenshots/",
+                   StringComparison.OrdinalIgnoreCase);
+    }
 
     public int StepNumber { get; private set; } = 1;
 
@@ -261,10 +311,16 @@ internal sealed class AgentActionSession
     public void RecordArtifact(
         string path,
         string contentHash,
-        CommandClassification classification)
+        CommandClassification classification,
+        string? displayName = null,
+        double diffPercent = 0.0)
     {
-        CreatedArtifacts[Path.GetFullPath(path)] =
-            new CreatedArtifact(path, contentHash, classification);
+        CreatedArtifacts[Path.GetFullPath(path)] = new CreatedArtifact(
+            path,
+            contentHash,
+            classification,
+            string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim(),
+            diffPercent);
     }
 
     public bool TryGetArtifact(
@@ -873,11 +929,13 @@ internal sealed class AgentActionSession
             .Select(artifact => new AgentArtifactRecord(
                 Guid.NewGuid(),
                 runId,
-                Path.GetFileName(artifact.Path) ?? artifact.Path,
+                artifact.DisplayName
+                    ?? Path.GetFileName(artifact.Path)
+                    ?? artifact.Path,
                 artifact.Path,
                 artifact.ContentHash,
                 DateTimeOffset.UtcNow,
-                0.0))
+                artifact.DiffPercent))
             .ToList();
     }
 
@@ -927,13 +985,21 @@ internal sealed class AgentActionSession
             report.AppendLine();
         }
 
-        var changedFiles = Evidence
-            .Where(value => value.Success &&
-                value.OperationKind is OperationKind.FileWrite or OperationKind.ScriptContent)
-            .Select(value => value.FilePath)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        if (!string.IsNullOrWhiteSpace(SmokeTestSummary))
+        {
+            report.AppendLine("## Smoke tests");
+            report.AppendLine(SmokeTestSummary);
+            report.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(VisualVerificationSummary))
+        {
+            report.AppendLine("## Verificacao visual");
+            report.AppendLine(VisualVerificationSummary);
+            report.AppendLine();
+        }
+
+        var changedFiles = GetChangedFilePaths();
         report.AppendLine($"## Arquivos alterados ({changedFiles.Count})");
         report.AppendLine(changedFiles.Count == 0
             ? "Nenhum arquivo foi alterado."
@@ -1223,7 +1289,9 @@ internal sealed class AgentActionSession
 internal sealed record CreatedArtifact(
     string Path,
     string ContentHash,
-    CommandClassification Classification);
+    CommandClassification Classification,
+    string? DisplayName = null,
+    double DiffPercent = 0.0);
 
 internal sealed record ApprovalRecord(
     Guid StepId,

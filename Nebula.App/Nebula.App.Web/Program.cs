@@ -71,7 +71,10 @@ builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions
 });
 
 builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
-    timeoutSeconds: builder.Configuration.GetValue("Nebula:LlmTimeoutSeconds", 300)));
+    timeoutSeconds: builder.Configuration.GetValue("Nebula:LlmTimeoutSeconds", 300),
+    loadTimeoutSeconds: builder.Configuration.GetValue(
+        "Nebula:LlmLoadTimeoutSeconds",
+        LlamaClient.DefaultLoadTimeoutSeconds)));
 builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
     commandRunner: new ProcessRuntimeCommandRunner()));
 
@@ -166,7 +169,27 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     SandboxCpuLimit =
         builder.Configuration.GetValue(
             "Nebula:Sandbox:CpuLimit",
-            0d)
+            0d),
+    SmokeTestEnabled =
+        builder.Configuration.GetValue(
+            "Nebula:SmokeTest:Enabled",
+            true),
+    SmokeTestTimeoutSeconds =
+        builder.Configuration.GetValue(
+            "Nebula:SmokeTest:TimeoutSeconds",
+            NebulaRuntimeSettings.DefaultSmokeTestTimeoutSeconds),
+    ScreenshotEnabled =
+        builder.Configuration.GetValue(
+            "Nebula:Screenshot:Enabled",
+            true),
+    ScreenshotDiffThresholdPercent =
+        builder.Configuration.GetValue(
+            "Nebula:Screenshot:DiffThresholdPercent",
+            0.1),
+    ScreenshotCaptureDelayMs =
+        builder.Configuration.GetValue(
+            "Nebula:Screenshot:CaptureDelayMs",
+            1000)
 });
 builder.Services.AddScoped<NebulaWorkspaceState>();
 builder.Services.AddSingleton<DatabaseInitializationState>();
@@ -330,6 +353,8 @@ builder.Services.AddScoped<ISmokeTestService, SmokeTestService>();
 builder.Services.AddScoped<IPortDetectionService, PortDetectionService>();
 builder.Services.Configure<PullRequestOptions>(
     builder.Configuration.GetSection("Nebula:PullRequest"));
+builder.Services.Configure<ScreenshotOptions>(
+    builder.Configuration.GetSection("Nebula:Screenshot"));
 builder.Services.AddScoped<IPullRequestService, PullRequestService>();
 builder.Services.AddScoped<IMigrationService, MigrationService>();
 builder.Services.AddScoped<IScreenshotService, ScreenshotService>();
@@ -388,6 +413,9 @@ builder.Services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner
     userMemoryService: provider.GetRequiredService<IUserMemoryService>(),
     errorFixService: provider.GetService<IErrorFixService>(),
     environmentValidator: provider.GetService<IEnvironmentValidator>(),
+    portDetectionService: provider.GetService<IPortDetectionService>(),
+    smokeTestService: provider.GetService<ISmokeTestService>(),
+    screenshotService: provider.GetService<IScreenshotService>(),
     resultValidator: provider.GetService<IResultValidator>()));
 builder.Services.AddScoped<IManager>(provider => new Manager(
     provider.GetRequiredService<ILlamaClient>(),
@@ -497,9 +525,48 @@ var researchSearchEndpoint = app.MapGet(
                 result.SearchScore)).ToList()));
     });
 
+var screenshotKinds = new Dictionary<string, string>(
+    StringComparer.OrdinalIgnoreCase)
+{
+    ["baseline"] = string.Empty,
+    ["current"] = ".current",
+    ["diff"] = ".diff"
+};
+
+var screenshotEndpoint = app.MapGet(
+    "/api/screenshots/{kind}/{artifactId:guid}",
+    async (
+        string kind,
+        Guid artifactId,
+        IAgentRunStore agentRunStore,
+        CancellationToken cancellationToken) =>
+    {
+        if (!screenshotKinds.TryGetValue(kind, out var suffix))
+        {
+            return Results.NotFound();
+        }
+
+        var artifact = await agentRunStore.GetArtifactAsync(
+            artifactId,
+            cancellationToken);
+        if (artifact is null || string.IsNullOrWhiteSpace(artifact.Path))
+        {
+            return Results.NotFound();
+        }
+
+        var path = ResolveScreenshotPath(artifact.Path, suffix);
+        if (path is null || !File.Exists(path))
+        {
+            return Results.NotFound();
+        }
+
+        return Results.File(path, "image/png");
+    });
+
 if (webAuthOptions.Enabled)
 {
     researchSearchEndpoint.RequireAuthorization();
+    screenshotEndpoint.RequireAuthorization();
 }
 
 app.MapRazorComponents<App>()
@@ -510,6 +577,53 @@ app.MapRazorComponents<App>()
         typeof(Nebula.App.Web.Client._Imports).Assembly);
 
 app.Run();
+
+static string? ResolveScreenshotPath(string artifactPath, string suffix)
+{
+    var fullPath = Path.GetFullPath(artifactPath);
+    var marker =
+        $"{Path.DirectorySeparatorChar}.nebula" +
+        $"{Path.DirectorySeparatorChar}screenshots" +
+        $"{Path.DirectorySeparatorChar}";
+    var markerIndex = fullPath.IndexOf(marker, StringComparison.Ordinal);
+    if (markerIndex < 0)
+    {
+        return null;
+    }
+
+    var root = fullPath[..(markerIndex + marker.Length - 1)];
+    if (!PathContainment.IsUnder(fullPath, root) ||
+        IsReparsePoint(root) ||
+        IsReparsePoint(Directory.GetParent(root)?.FullName))
+    {
+        return null;
+    }
+
+    var directory = Path.GetDirectoryName(fullPath);
+    if (string.IsNullOrWhiteSpace(directory))
+    {
+        return null;
+    }
+
+    var name = Path.GetFileNameWithoutExtension(
+        Path.GetFileNameWithoutExtension(fullPath));
+    if (string.IsNullOrWhiteSpace(name))
+    {
+        return null;
+    }
+
+    return Path.Combine(directory, $"{name}{suffix}.png");
+}
+
+static bool IsReparsePoint(string? path)
+{
+    if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+    {
+        return true;
+    }
+
+    return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+}
 
 public sealed record ResearchSearchResponse(
     string Query,

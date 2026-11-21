@@ -38,7 +38,8 @@ public sealed record AgentRunFailedEvent(
 
 public sealed record AgentRunCancelledEvent(
     Guid RunId,
-    DateTimeOffset Timestamp
+    DateTimeOffset Timestamp,
+    ConversationTurn? FinalTurn = null
 ) : AgentRunEvent(RunId, Timestamp, 0, 0);
 
 public sealed record AgentRunStepStartedEvent(

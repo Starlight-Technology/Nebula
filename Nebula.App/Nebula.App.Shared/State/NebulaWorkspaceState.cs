@@ -165,6 +165,8 @@ public sealed class NebulaWorkspaceState(
         AutoApproveCommands = runtimeSettings.EffectiveAutoApproveCommands,
         AutoApproveCommandsConfigured = runtimeSettings.AutoApproveCommandsConfigured,
         CompactMode = runtimeSettings.CompactMode,
+        SmokeTestEnabled = runtimeSettings.SmokeTestEnabled,
+        SmokeTestTimeoutSeconds = runtimeSettings.SmokeTestTimeoutSeconds,
         ScreenshotEnabled = runtimeSettings.ScreenshotEnabled,
         ScreenshotDiffThresholdPercent = runtimeSettings.ScreenshotDiffThresholdPercent,
         ScreenshotViewportsText = runtimeSettings.ScreenshotViewportsText,
@@ -557,6 +559,8 @@ public sealed class NebulaWorkspaceState(
                 SandboxMemoryLimitMb = sandboxMemoryLimitMb,
                 SandboxCpuLimit = sandboxCpuLimit,
                 CompactMode = QuickSettings.CompactMode,
+                SmokeTestEnabled = QuickSettings.SmokeTestEnabled,
+                SmokeTestTimeoutSeconds = Math.Max(1, QuickSettings.SmokeTestTimeoutSeconds),
                 ScreenshotEnabled = QuickSettings.ScreenshotEnabled,
                 ScreenshotDiffThresholdPercent = QuickSettings.ScreenshotDiffThresholdPercent,
                 ScreenshotViewports = ParseScreenshotViewports(
@@ -2449,6 +2453,8 @@ public sealed class NebulaWorkspaceState(
         QuickSettings.SandboxMemoryLimitMb = RuntimeSettings.SandboxMemoryLimitMb;
         QuickSettings.SandboxCpuLimit = RuntimeSettings.SandboxCpuLimit;
         QuickSettings.CompactMode = RuntimeSettings.CompactMode;
+        QuickSettings.SmokeTestEnabled = RuntimeSettings.SmokeTestEnabled;
+        QuickSettings.SmokeTestTimeoutSeconds = RuntimeSettings.SmokeTestTimeoutSeconds;
         QuickSettings.ScreenshotEnabled = RuntimeSettings.ScreenshotEnabled;
         QuickSettings.ScreenshotDiffThresholdPercent = RuntimeSettings.ScreenshotDiffThresholdPercent;
         QuickSettings.ScreenshotViewportsText = RuntimeSettings.ScreenshotViewportsText;
@@ -2593,7 +2599,14 @@ public sealed class NebulaWorkspaceState(
     {
         try
         {
-            var status = await GitService.GetStatusAsync(ResolvedWorkspace.Root);
+            var gitService = GitService;
+            if (gitService is null)
+            {
+                IsGitRepository = false;
+                return;
+            }
+
+            var status = await gitService.GetStatusAsync(ResolvedWorkspace.Root);
             IsGitRepository = status.IsRepository;
         }
         catch
@@ -2764,6 +2777,10 @@ public sealed class QuickSettingsDraft
     public bool CompactMode { get; set; }
 
     public string AutonomyProfile { get; set; } = "normal";
+
+    public bool SmokeTestEnabled { get; set; } = true;
+
+    public int SmokeTestTimeoutSeconds { get; set; } = 10;
 
     public bool ScreenshotEnabled { get; set; }
 

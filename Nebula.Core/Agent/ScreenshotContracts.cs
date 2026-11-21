@@ -7,7 +7,9 @@ public sealed record ScreenshotCaptureRequest(
     int DelayMs = 1000,
     bool FullPage = true,
     string? ProjectKey = null,
-    string? Name = null);
+    string? Name = null,
+    string? BaselineRoot = null,
+    bool SaveBaseline = true);
 
 public sealed record ScreenshotResult(
     bool Success,
@@ -51,8 +53,18 @@ public interface IScreenshotService
     Task<ScreenshotResult> CaptureAsync(ScreenshotCaptureRequest request, CancellationToken cancellationToken = default);
     Task<VisualDiffResult> CompareAsync(byte[] baseline, byte[] current, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScreenshotBaseline>> GetBaselinesAsync(string projectKey, CancellationToken cancellationToken = default);
-    Task<ScreenshotResult?> GetBaselineAsync(string projectKey, string name, CancellationToken cancellationToken = default);
-    Task SaveBaselineAsync(string projectKey, string name, ScreenshotCaptureRequest request, byte[] imageData, CancellationToken cancellationToken = default);
+    Task<ScreenshotResult?> GetBaselineAsync(
+        string projectKey,
+        string name,
+        string? baselineRoot = null,
+        CancellationToken cancellationToken = default);
+    Task SaveBaselineAsync(
+        string projectKey,
+        string name,
+        ScreenshotCaptureRequest request,
+        byte[] imageData,
+        string? baselineRoot = null,
+        CancellationToken cancellationToken = default);
     Task DeleteBaselineAsync(string projectKey, string name, CancellationToken cancellationToken = default);
     Task<ScreenshotManifest?> GetManifestAsync(string projectKey, CancellationToken cancellationToken = default);
     Task SaveManifestAsync(string projectKey, ScreenshotManifest manifest, CancellationToken cancellationToken = default);

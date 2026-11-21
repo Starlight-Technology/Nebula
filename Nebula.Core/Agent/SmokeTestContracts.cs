@@ -37,7 +37,17 @@ public sealed record PortSuggestion(
 public interface ISmokeTestService
 {
     Task<SmokeTestResult> RunSmokeTestsAsync(SmokeTestRequest request, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<string>> DetectWebAppUrlsAsync(string workingDirectory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Detect candidate web app URLs for a workspace. When
+    /// <paramref name="includeFrameworkDefaults"/> is false only URLs explicitly
+    /// declared by the project (launchSettings, compose, package.json, env) are
+    /// returned, avoiding generic framework defaults that may not be running.
+    /// </summary>
+    Task<IReadOnlyList<string>> DetectWebAppUrlsAsync(
+        string workingDirectory,
+        bool includeFrameworkDefaults = true,
+        CancellationToken cancellationToken = default);
 }
 
 public interface IPortDetectionService

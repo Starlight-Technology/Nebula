@@ -4,8 +4,7 @@ using Nebula.Runner;
 namespace Nebula.Agent.Infrastructure;
 
 public sealed class MigrationService(
-    IShellExecutor executor,
-    ILogger logger) : IMigrationService
+    IShellExecutor executor) : IMigrationService
 {
     public async Task<MigrationResult> CreateMigrationAsync(MigrationRequest request, CancellationToken cancellationToken = default)
     {

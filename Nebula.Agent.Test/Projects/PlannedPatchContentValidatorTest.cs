@@ -58,6 +58,27 @@ public sealed class PlannedPatchContentValidatorTest
     }
 
     [Fact]
+    public void validate_must_accept_css_at_rules_without_braces()
+    {
+        var reason = PlannedPatchContentValidator.ValidateFile(
+            new PlannedPatchFile("styles.css", "@tailwind base;"));
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void validate_must_accept_real_script_with_placeholder_word_in_comment()
+    {
+        var reason = PlannedPatchContentValidator.ValidateFile(
+            new PlannedPatchFile(
+                "app.js",
+                "// Implement the click behavior\n" +
+                "function calculate() { return 1 + 1; }"));
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
     public void validate_must_reject_invalid_json()
     {
         var reason = PlannedPatchContentValidator.ValidateFile(
@@ -99,5 +120,52 @@ public sealed class PlannedPatchContentValidatorTest
 
         Assert.NotNull(reason);
         Assert.Contains("vazio", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("index.html", "HTML and JS code for calculator")]
+    [InlineData("script.js", "JavaScript code for calculator")]
+    [InlineData("app.js", "Implement the calculator here")]
+    [InlineData("styles.css", "CSS for the calculator")]
+    [InlineData("main.py", "Python code for calculator")]
+    [InlineData("Program.cs", "C# code for calculator")]
+    public void validate_must_reject_placeholder_code_files(
+        string path,
+        string content)
+    {
+        var reason = PlannedPatchContentValidator.ValidateFile(
+            new PlannedPatchFile(path, content));
+
+        Assert.NotNull(reason);
+        Assert.Contains("placeholder", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(path, reason);
+    }
+
+    [Fact]
+    public void validate_must_accept_real_calculator_files()
+    {
+        var reason = PlannedPatchContentValidator.Validate(
+        [
+            new PlannedPatchFile(
+                "index.html",
+                "<!doctype html><html><body><input id=\"display\">" +
+                "<button onclick=\"calculate()\">=</button>" +
+                "<script src=\"script.js\"></script></body></html>"),
+            new PlannedPatchFile(
+                "script.js",
+                "function calculate() { document.getElementById('display').value = 1 + 1; }"),
+            new PlannedPatchFile("styles.css", "body { font-family: sans-serif; }")
+        ]);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void validate_must_accept_plain_text_description_for_txt_file()
+    {
+        var reason = PlannedPatchContentValidator.ValidateFile(
+            new PlannedPatchFile("notes.txt", "HTML and JS code for calculator"));
+
+        Assert.Null(reason);
     }
 }

@@ -168,10 +168,14 @@
 
     private bool IsScreenshotDiff(AgentArtifactRecord artifact)
     {
-        return artifact.Name.Contains("screenshot", StringComparison.OrdinalIgnoreCase) ||
-               artifact.Name.Contains("diff", StringComparison.OrdinalIgnoreCase) ||
-               artifact.Path?.Contains("screenshot", StringComparison.OrdinalIgnoreCase) == true ||
-               artifact.Path?.Contains("diff", StringComparison.OrdinalIgnoreCase) == true;
+        var normalizedPath = artifact.Path?.Replace('\\', '/');
+        return !string.IsNullOrWhiteSpace(normalizedPath) &&
+               normalizedPath.Contains(
+                   ".nebula/screenshots/",
+                   StringComparison.OrdinalIgnoreCase) &&
+               normalizedPath.EndsWith(
+                   ".diff.png",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private double GetDiffPercent(AgentArtifactRecord artifact)

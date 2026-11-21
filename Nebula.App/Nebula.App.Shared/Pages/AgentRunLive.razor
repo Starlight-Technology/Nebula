@@ -271,10 +271,13 @@
     {
         if (EventStreamCts != null) return;
 
+        var orchestrator = WorkspaceState.Orchestrator;
+        if (orchestrator is null) return;
+
         EventStreamCts = new CancellationTokenSource();
         try
         {
-            await foreach (var evt in WorkspaceState.Orchestrator.SubscribeAsync(RunId, EventStreamCts.Token))
+            await foreach (var evt in orchestrator.SubscribeAsync(RunId, EventStreamCts.Token))
             {
                 if (IsDisposed) break;
                 ProcessEvent(evt);
@@ -296,7 +299,10 @@
         {
             case AgentRunStartedEvent started:
                 IsRunning = true;
-                Run = Run with { Status = "Running" };
+                if (Run is not null)
+                {
+                    Run = Run with { Status = "Running" };
+                }
                 break;
 
             case AgentRunStepStartedEvent stepStarted:
@@ -354,18 +360,55 @@
             case AgentRunCompletedEvent completed:
                 IsRunning = false;
                 Run = completed.FinalTurn != null ? BuildRunFromTurn(completed.FinalTurn) : Run;
-                TerminalRef?.AddCommandOutput($"[CONCLUIDO] {completed.FinalTurn?.Response ?? "Tarefa finalizada"}");
+                if (completed.FinalTurn?.IsCancelled == true ||
+                    completed.FinalTurn?.ActionStatus == ActionExecutionStatus.Cancelled)
+                {
+                    TerminalRef?.AddCommandOutput(
+                        "[CANCELADO] Execucao cancelada pelo usuario.",
+                        true);
+                }
+                else
+                {
+                    TerminalRef?.AddCommandOutput(
+                        $"[CONCLUIDO] {completed.FinalTurn?.Response ?? "Tarefa finalizada"}");
+                }
                 break;
 
             case AgentRunFailedEvent failed:
                 IsRunning = false;
-                Run = Run with { Status = "Failed" };
+                Run = failed.PartialTurn != null
+                    ? BuildRunFromTurn(failed.PartialTurn) with
+                    {
+                        Status = "Failed",
+                        IsCancelled = false,
+                        Response = failed.ErrorMessage
+                    }
+                    : Run is null
+                        ? null
+                        : Run with
+                        {
+                            Status = "Failed",
+                            FinishedAt = DateTimeOffset.UtcNow
+                        };
                 TerminalRef?.AddCommandOutput($"[FALHOU] {failed.ErrorMessage}", true);
                 break;
 
-            case AgentRunCancelledEvent:
+            case AgentRunCancelledEvent cancelled:
                 IsRunning = false;
-                Run = Run with { Status = "Cancelled" };
+                Run = cancelled.FinalTurn != null
+                    ? BuildRunFromTurn(cancelled.FinalTurn) with
+                    {
+                        Status = "Cancelled",
+                        IsCancelled = true
+                    }
+                    : Run is null
+                        ? null
+                        : Run with
+                        {
+                            Status = "Cancelled",
+                            IsCancelled = true,
+                            FinishedAt = DateTimeOffset.UtcNow
+                        };
                 TerminalRef?.AddCommandOutput("[CANCELADO] Execucao cancelada pelo usuario.", true);
                 break;
 
@@ -485,7 +528,7 @@
             Prompt: turn.Prompt,
             ModelName: turn.ModelName,
             Status: turn.ActionStatus?.ToString() ?? "Completed",
-            StartedAt: DateTimeOffset.UtcNow,
+            StartedAt: Run?.StartedAt ?? DateTimeOffset.UtcNow,
             FinishedAt: DateTimeOffset.UtcNow,
             Response: turn.Response,
             IsCancelled: turn.IsCancelled,
@@ -509,25 +552,19 @@
                 ApprovedByUser: c.ApprovedByUser,
                 AutoApproved: c.AutoApproved)).ToList(),
             CurrentPlan: turn.CurrentPlan,
-            Artifacts: turn.Artifacts?.Select(a => new AgentArtifactRecord(
-                Id: Guid.NewGuid(),
-                RunId: RunId,
-                Name: a.Name ?? "",
-                Path: a.Path,
-                ContentHash: a.ContentHash,
-                CreatedAt: DateTimeOffset.UtcNow,
-                DiffPercent: 0.0)).ToList() ?? [],
-            Approvals: turn.Approvals?.Select(a => new AgentApprovalRecord(
-                Id: Guid.NewGuid(),
-                RunId: RunId,
-                StepId: Guid.NewGuid(),
-                Objective: a.Objective,
-                Command: a.Command,
-                Decision: a.Decision,
-                ApprovedByUser: a.ApprovedByUser,
-                AutoApproved: a.AutoApproved,
-                CreatedAt: DateTimeOffset.UtcNow)).ToList() ?? [],
-            WorkspaceRoot: WorkspaceState.RuntimeSettings.WorkspaceRoot
+            Artifacts: turn.Artifacts?.Select(a => a with
+            {
+                RunId = RunId
+            }).ToList() ?? [],
+            Approvals: turn.Approvals?.Select(a => a with
+            {
+                RunId = RunId
+            }).ToList() ?? [],
+            WorkspaceRoot: Run?.WorkspaceRoot ??
+                WorkspaceState.RuntimeSettings.WorkspaceRoot,
+            Mode: Run?.Mode ?? InteractionMode.Agent,
+            ArchitectureOptions: Run?.ArchitectureOptions ?? [],
+            ParentRunId: Run?.ParentRunId
         );
     }
 
@@ -548,14 +585,17 @@
 
     private async Task CancelRun()
     {
-        if (Run == null || IsCancelling) return;
+        var orchestrator = WorkspaceState.Orchestrator;
+        var currentRun = Run;
+        if (orchestrator is null || currentRun is null || IsCancelling) return;
+
         IsCancelling = true;
         try
         {
-            await WorkspaceState.Orchestrator.CancelAsync(RunId);
+            await orchestrator.CancelAsync(RunId);
             EventStreamCts?.Cancel();
             IsRunning = false;
-            Run = Run with { Status = "Cancelled" };
+            Run = currentRun with { Status = "Cancelled" };
         }
         finally
         {

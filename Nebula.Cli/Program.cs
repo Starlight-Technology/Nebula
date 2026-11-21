@@ -164,12 +164,48 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             System.Globalization.CultureInfo.InvariantCulture,
             out var sandboxCpuLimit)
             ? sandboxCpuLimit
-            : 0
+            : 0,
+    SmokeTestEnabled =
+        !bool.TryParse(
+            configuration["Nebula:SmokeTest:Enabled"],
+            out var smokeTestEnabled) ||
+        smokeTestEnabled,
+    SmokeTestTimeoutSeconds =
+        int.TryParse(
+            configuration["Nebula:SmokeTest:TimeoutSeconds"],
+            out var smokeTestTimeout) && smokeTestTimeout > 0
+            ? smokeTestTimeout
+            : NebulaRuntimeSettings.DefaultSmokeTestTimeoutSeconds,
+    ScreenshotEnabled =
+        !bool.TryParse(
+            configuration["Nebula:Screenshot:Enabled"],
+            out var screenshotEnabled) ||
+        screenshotEnabled,
+    ScreenshotDiffThresholdPercent =
+        double.TryParse(
+            configuration["Nebula:Screenshot:DiffThresholdPercent"],
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var screenshotDiffThreshold) && screenshotDiffThreshold >= 0
+            ? screenshotDiffThreshold
+            : 0.1,
+    ScreenshotCaptureDelayMs =
+        int.TryParse(
+            configuration["Nebula:Screenshot:CaptureDelayMs"],
+            out var screenshotCaptureDelay) && screenshotCaptureDelay >= 0
+            ? screenshotCaptureDelay
+            : 1000
 });
 services.AddSingleton<ILlamaClient>(provider =>
 {
     var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
-    return new LlamaClient(timeoutSeconds: settings.LlmTimeoutSeconds);
+    return new LlamaClient(
+        timeoutSeconds: settings.LlmTimeoutSeconds,
+        loadTimeoutSeconds:
+            int.TryParse(
+                configuration["Nebula:LlmLoadTimeoutSeconds"],
+                out var llmLoadTimeout) && llmLoadTimeout > 0
+                ? llmLoadTimeout
+                : LlamaClient.DefaultLoadTimeoutSeconds);
 });
 services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
@@ -331,6 +367,8 @@ services.AddScoped<Nebula.Core.Agent.ISmokeTestService, Nebula.Agent.Infrastruct
 services.AddScoped<Nebula.Core.Agent.IPortDetectionService, Nebula.Agent.Infrastructure.PortDetectionService>();
 services.Configure<Nebula.Core.Agent.PullRequestOptions>(
     configuration.GetSection("Nebula:PullRequest"));
+services.Configure<Nebula.Core.Agent.ScreenshotOptions>(
+    configuration.GetSection("Nebula:Screenshot"));
 services.AddScoped<Nebula.Core.Agent.IPullRequestService, Nebula.Agent.Infrastructure.PullRequestService>();
 services.AddScoped<Nebula.Core.Agent.IMigrationService, Nebula.Agent.Infrastructure.MigrationService>();
 services.AddScoped<Nebula.Core.Agent.IScreenshotService, Nebula.Agent.Infrastructure.ScreenshotService>();
@@ -384,7 +422,10 @@ services.AddScoped<IAgentActionRunner>(provider => new AgentActionRunner(
     workspaceCategoryPolicyService: provider.GetRequiredService<IWorkspaceCategoryPolicyService>(),
     knowledgeSearchService: provider.GetRequiredService<IKnowledgeSearchService>(),
     projectDocumentationIndexer: provider.GetRequiredService<IProjectDocumentationIndexer>(),
-    userMemoryService: provider.GetRequiredService<IUserMemoryService>()));
+    userMemoryService: provider.GetRequiredService<IUserMemoryService>(),
+    portDetectionService: provider.GetService<Nebula.Core.Agent.IPortDetectionService>(),
+    smokeTestService: provider.GetService<Nebula.Core.Agent.ISmokeTestService>(),
+    screenshotService: provider.GetService<Nebula.Core.Agent.IScreenshotService>()));
 
 services.AddScoped<IManager>(provider => new Manager(
     provider.GetRequiredService<ILlamaClient>(),

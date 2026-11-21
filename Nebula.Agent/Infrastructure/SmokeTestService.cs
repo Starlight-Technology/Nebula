@@ -1,12 +1,9 @@
 using System.Text.Json;
-using System.Net.Http.Json;
 using Nebula.Core.Agent;
-using Nebula.Runner;
 
 namespace Nebula.Agent.Infrastructure;
 
 public sealed class SmokeTestService(
-    IShellExecutor executor,
     ILogger logger,
     IHttpClientFactory httpClientFactory) : ISmokeTestService
 {
@@ -15,7 +12,10 @@ public sealed class SmokeTestService(
         var checks = new List<SmokeTestCheck>();
         var urls = request.ExplicitUrls?.Count > 0 
             ? request.ExplicitUrls 
-            : await DetectWebAppUrlsAsync(request.WorkingDirectory, cancellationToken);
+            : await DetectWebAppUrlsAsync(
+                request.WorkingDirectory,
+                includeFrameworkDefaults: true,
+                cancellationToken);
 
         if (urls.Count == 0)
         {
@@ -108,7 +108,10 @@ public sealed class SmokeTestService(
         }
     }
 
-    public async Task<IReadOnlyList<string>> DetectWebAppUrlsAsync(string workingDirectory, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> DetectWebAppUrlsAsync(
+        string workingDirectory,
+        bool includeFrameworkDefaults = true,
+        CancellationToken cancellationToken = default)
     {
         var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -167,8 +170,11 @@ public sealed class SmokeTestService(
                 }
             }
 
-            // 5. Common default URLs for known frameworks
-            urls.UnionWith(GetDefaultFrameworkUrls(workingDirectory));
+            // 5. Common default URLs for known frameworks (only when requested)
+            if (includeFrameworkDefaults)
+            {
+                urls.UnionWith(GetDefaultFrameworkUrls(workingDirectory));
+            }
         }
         catch (Exception ex)
         {

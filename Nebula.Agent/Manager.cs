@@ -531,9 +531,9 @@ public class Manager : IManager
                 return failedTurn;
             }
 
-            if (evt is AgentRunCancelledEvent)
+            if (evt is AgentRunCancelledEvent cancelled)
             {
-                var cancelledTurn = new ConversationTurn
+                var cancelledTurn = cancelled.FinalTurn ?? new ConversationTurn
                 {
                     ConversationId = activeConversationId,
                     RequestId = Guid.NewGuid(),

@@ -148,6 +148,22 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             .ToList();
     }
 
+    public async Task<IReadOnlyList<AgentRun>> GetInterruptedRunsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var entities = await context.AgentRuns
+            .Include(value => value.Steps)
+            .Include(value => value.Artifacts)
+            .Include(value => value.Approvals)
+            .Where(value => value.FinishedAt == null
+                && AgentRunStates.InterruptedCandidates.Contains(value.Status))
+            .OrderByDescending(value => value.StartedAt)
+            .ToListAsync(cancellationToken);
+        return entities
+            .Select(Map)
+            .ToList();
+    }
+
     public async Task<Guid?> GetRunIdByStepIdAsync(
         Guid stepId,
         CancellationToken cancellationToken = default)
@@ -156,6 +172,30 @@ public sealed class PostgresAgentRunStore(PostgresContext context) : IAgentRunSt
             .Where(value => value.Id == stepId)
             .Select(value => (Guid?)value.RunId)
             .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<AgentArtifactRecord?> GetArtifactAsync(
+        Guid artifactId,
+        CancellationToken cancellationToken = default)
+    {
+        var entity = await context.AgentArtifacts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                artifact => artifact.Id == artifactId,
+                cancellationToken);
+        if (entity is null)
+        {
+            return null;
+        }
+
+        return new AgentArtifactRecord(
+            entity.Id,
+            entity.RunId,
+            entity.Name,
+            entity.Path,
+            entity.ContentHash,
+            entity.CreatedAt,
+            0.0);
     }
 
     public async Task<IReadOnlyList<AgentRun>> GetRunsByConversationAsync(

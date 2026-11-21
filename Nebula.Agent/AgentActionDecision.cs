@@ -114,9 +114,26 @@ public sealed class AgentToolAction
 
     public OperationKind OperationKind { get; set; } = OperationKind.Unknown;
 
+    /// <summary>
+    /// Optional tool name (read, write, edit, patch, shell, scaffold, migration,
+    /// glob, grep). When present the runner maps it to the compatible
+    /// OperationKind and the existing execution pipeline.
+    /// </summary>
+    public string? Tool { get; set; }
+
     public string? Content { get; set; }
 
     public string? TargetPath { get; set; }
+
+    public string? OldString { get; set; }
+
+    public string? NewString { get; set; }
+
+    public string? Pattern { get; set; }
+
+    public string? Include { get; set; }
+
+    public int? MaxResults { get; set; }
 
     public string? TemplateId { get; set; }
 

@@ -163,9 +163,14 @@ public sealed class AgentRunOrchestrator : IAgentRunOrchestrator
 
     public Task CancelAsync(Guid runId)
     {
-        _statusCache.TryUpdate(runId,
-            new AgentRunStatus(runId, "Cancelled", 0, 0, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
-            _statusCache.GetValueOrDefault(runId));
+        if (_statusCache.TryGetValue(runId, out var current))
+        {
+            _statusCache.TryUpdate(
+                runId,
+                new AgentRunStatus(runId, "Cancelled", 0, 0, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                current);
+        }
+
         return Task.CompletedTask;
     }
 

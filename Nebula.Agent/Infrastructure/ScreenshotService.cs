@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Microsoft.Playwright;
 using Nebula.Core.Agent;
+using Nebula.Core.Configuration;
 using Nebula.Runner;
 using SkiaSharp;
 using System.Security.Cryptography;
@@ -10,6 +11,7 @@ namespace Nebula.Agent.Infrastructure;
 
 public sealed class ScreenshotService(
     IOptions<ScreenshotOptions> options,
+    NebulaRuntimeSettings runtimeSettings,
     ILogger logger,
     IShellExecutor executor) : IScreenshotService
 {
@@ -22,7 +24,7 @@ public sealed class ScreenshotService(
 
     public async Task<ScreenshotResult> CaptureAsync(ScreenshotCaptureRequest request, CancellationToken cancellationToken = default)
     {
-        if (!_options.Enabled)
+        if (!_options.Enabled || !runtimeSettings.ScreenshotEnabled)
         {
             return new ScreenshotResult(false, null, null, "Screenshot capture is disabled", request.Url, request.Viewport, DateTimeOffset.UtcNow);
         }
@@ -41,65 +43,81 @@ public sealed class ScreenshotService(
                 ViewportSize = ParseViewport(request.Viewport)
             });
 
-            page.SetDefaultTimeout(_options.DefaultTimeoutMs);
-
-            var response = await page.GotoAsync(request.Url, new PageGotoOptions
+            try
             {
-                WaitUntil = WaitUntilState.NetworkIdle,
-                Timeout = _options.DefaultTimeoutMs
-            });
+                page.SetDefaultTimeout(_options.DefaultTimeoutMs);
 
-            if (response == null || !response.Ok)
-            {
-                return new ScreenshotResult(false, null, null, $"Failed to navigate: {response?.Status}", request.Url, request.Viewport, DateTimeOffset.UtcNow);
-            }
-
-            if (request.DelayMs > 0)
-            {
-                await page.WaitForTimeoutAsync(request.DelayMs);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.Selector))
-            {
-                try
+                var response = await page.GotoAsync(request.Url, new PageGotoOptions
                 {
-                    await page.WaitForSelectorAsync(request.Selector, new PageWaitForSelectorOptions { Timeout = 5000 });
-                }
-                catch
-                {
-                    logger.Log($"[SCREENSHOT] Selector '{request.Selector}' not found on {request.Url}");
-                }
-            }
+                    WaitUntil = WaitUntilState.NetworkIdle,
+                    Timeout = _options.DefaultTimeoutMs
+                });
 
-            byte[] screenshotBytes;
-            if (request.FullPage)
-            {
-                screenshotBytes = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
-            }
-            else if (!string.IsNullOrWhiteSpace(request.Selector))
-            {
-                var element = await page.QuerySelectorAsync(request.Selector);
-                if (element != null)
+                if (response == null || !response.Ok)
                 {
-                    screenshotBytes = await element.ScreenshotAsync();
+                    return new ScreenshotResult(false, null, null, $"Failed to navigate: {response?.Status}", request.Url, request.Viewport, DateTimeOffset.UtcNow);
                 }
-                else
+
+                if (request.DelayMs > 0)
+                {
+                    await page.WaitForTimeoutAsync(request.DelayMs);
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.Selector))
+                {
+                    try
+                    {
+                        await page.WaitForSelectorAsync(request.Selector, new PageWaitForSelectorOptions { Timeout = 5000 });
+                    }
+                    catch
+                    {
+                        logger.Log($"[SCREENSHOT] Selector '{request.Selector}' not found on {request.Url}");
+                    }
+                }
+
+                byte[] screenshotBytes;
+                if (request.FullPage)
                 {
                     screenshotBytes = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
                 }
+                else if (!string.IsNullOrWhiteSpace(request.Selector))
+                {
+                    var element = await page.QuerySelectorAsync(request.Selector);
+                    if (element != null)
+                    {
+                        screenshotBytes = await element.ScreenshotAsync();
+                    }
+                    else
+                    {
+                        screenshotBytes = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
+                    }
+                }
+                else
+                {
+                    screenshotBytes = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = false });
+                }
+
+                var hash = ComputeHash(screenshotBytes);
+                var projectKey = request.ProjectKey ?? await GetProjectKeyFromUrl(request.Url);
+                var name = request.Name ?? GenerateNameFromUrl(request.Url);
+
+                if (request.SaveBaseline)
+                {
+                    await SaveBaselineAsync(
+                        projectKey,
+                        name,
+                        request,
+                        screenshotBytes,
+                        request.BaselineRoot,
+                        cancellationToken);
+                }
+
+                return new ScreenshotResult(true, screenshotBytes, hash, null, request.Url, request.Viewport, DateTimeOffset.UtcNow);
             }
-            else
+            finally
             {
-                screenshotBytes = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = false });
+                await page.CloseAsync();
             }
-
-            var hash = ComputeHash(screenshotBytes);
-            var projectKey = request.ProjectKey ?? await GetProjectKeyFromUrl(request.Url);
-            var name = request.Name ?? GenerateNameFromUrl(request.Url);
-
-            await SaveBaselineAsync(projectKey, name, request, screenshotBytes, cancellationToken);
-
-            return new ScreenshotResult(true, screenshotBytes, hash, null, request.Url, request.Viewport, DateTimeOffset.UtcNow);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -149,7 +167,7 @@ public sealed class ScreenshotService(
             }
 
             var diffPercent = CalculatePixelDifference(baselineBitmap, currentBitmap);
-            var hasChanges = diffPercent > _options.DiffThresholdPercent;
+            var hasChanges = diffPercent > runtimeSettings.ScreenshotDiffThresholdPercent;
 
             using var diffImage = SKImage.FromBitmap(diffBitmap);
             using var diffData = diffImage.Encode(SKEncodedImageFormat.Png, 100);
@@ -210,9 +228,13 @@ public sealed class ScreenshotService(
         return baselines;
     }
 
-    public async Task<ScreenshotResult?> GetBaselineAsync(string projectKey, string name, CancellationToken cancellationToken = default)
+    public async Task<ScreenshotResult?> GetBaselineAsync(
+        string projectKey,
+        string name,
+        string? baselineRoot = null,
+        CancellationToken cancellationToken = default)
     {
-        var projectDir = GetProjectBaselineDir(projectKey);
+        var projectDir = GetProjectBaselineDir(projectKey, baselineRoot);
         var filePath = Path.Combine(projectDir, $"{name}.png");
 
         if (!File.Exists(filePath))
@@ -226,9 +248,15 @@ public sealed class ScreenshotService(
         return new ScreenshotResult(true, bytes, hash, null, "", "", DateTimeOffset.UtcNow);
     }
 
-    public async Task SaveBaselineAsync(string projectKey, string name, ScreenshotCaptureRequest request, byte[] imageData, CancellationToken cancellationToken = default)
+    public async Task SaveBaselineAsync(
+        string projectKey,
+        string name,
+        ScreenshotCaptureRequest request,
+        byte[] imageData,
+        string? baselineRoot = null,
+        CancellationToken cancellationToken = default)
     {
-        var projectDir = GetProjectBaselineDir(projectKey);
+        var projectDir = GetProjectBaselineDir(projectKey, baselineRoot);
         Directory.CreateDirectory(projectDir);
 
         var filePath = Path.Combine(projectDir, $"{name}.png");
@@ -236,14 +264,20 @@ public sealed class ScreenshotService(
 
         var hash = ComputeHash(imageData);
 
-        var manifest = await GetManifestAsync(projectKey, cancellationToken) ?? new ScreenshotManifest(projectKey, new Dictionary<string, ScreenshotManifestEntry>());
+        var manifest = await GetManifestFromDirAsync(
+                projectDir,
+                projectKey,
+                cancellationToken)
+            ?? new ScreenshotManifest(
+                projectKey,
+                new Dictionary<string, ScreenshotManifestEntry>());
         manifest.Screenshots[name] = new ScreenshotManifestEntry(
             hash,
             request.Url,
             request.Viewport,
             DateTimeOffset.UtcNow);
 
-        await SaveManifestAsync(projectKey, manifest, cancellationToken);
+        await SaveManifestToDirAsync(projectDir, manifest, cancellationToken);
 
         logger.Log($"[SCREENSHOT] Saved baseline '{name}' for project '{projectKey}' (hash: {hash[..8]})");
     }
@@ -265,14 +299,30 @@ public sealed class ScreenshotService(
         }
     }
 
-    public async Task<ScreenshotManifest?> GetManifestAsync(string projectKey, CancellationToken cancellationToken = default)
+    public Task<ScreenshotManifest?> GetManifestAsync(string projectKey, CancellationToken cancellationToken = default)
     {
         var projectDir = GetProjectBaselineDir(projectKey);
+        return GetManifestFromDirAsync(projectDir, projectKey, cancellationToken);
+    }
+
+    public Task SaveManifestAsync(string projectKey, ScreenshotManifest manifest, CancellationToken cancellationToken = default)
+    {
+        var projectDir = GetProjectBaselineDir(projectKey);
+        return SaveManifestToDirAsync(projectDir, manifest, cancellationToken);
+    }
+
+    private static async Task<ScreenshotManifest?> GetManifestFromDirAsync(
+        string projectDir,
+        string projectKey,
+        CancellationToken cancellationToken)
+    {
         var manifestPath = Path.Combine(projectDir, "manifest.json");
 
         if (!File.Exists(manifestPath))
         {
-            return new ScreenshotManifest(projectKey, new Dictionary<string, ScreenshotManifestEntry>());
+            return new ScreenshotManifest(
+                projectKey,
+                new Dictionary<string, ScreenshotManifestEntry>());
         }
 
         try
@@ -282,17 +332,23 @@ public sealed class ScreenshotService(
         }
         catch
         {
-            return new ScreenshotManifest(projectKey, new Dictionary<string, ScreenshotManifestEntry>());
+            return new ScreenshotManifest(
+                projectKey,
+                new Dictionary<string, ScreenshotManifestEntry>());
         }
     }
 
-    public async Task SaveManifestAsync(string projectKey, ScreenshotManifest manifest, CancellationToken cancellationToken = default)
+    private static async Task SaveManifestToDirAsync(
+        string projectDir,
+        ScreenshotManifest manifest,
+        CancellationToken cancellationToken)
     {
-        var projectDir = GetProjectBaselineDir(projectKey);
         Directory.CreateDirectory(projectDir);
 
         var manifestPath = Path.Combine(projectDir, "manifest.json");
-        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(
+            manifest,
+            new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(manifestPath, json, cancellationToken);
     }
 
@@ -373,11 +429,24 @@ public sealed class ScreenshotService(
         }
     }
 
-    private string GetProjectBaselineDir(string projectKey)
+    private string GetProjectBaselineDir(string projectKey, string? baselineRoot = null)
     {
-        var basePath = Path.IsPathRooted(_options.BaselineStoragePath)
-            ? _options.BaselineStoragePath
-            : Path.Combine(Environment.CurrentDirectory, _options.BaselineStoragePath);
+        string basePath;
+        if (!string.IsNullOrWhiteSpace(baselineRoot))
+        {
+            basePath = baselineRoot;
+        }
+        else if (Path.IsPathRooted(_options.BaselineStoragePath))
+        {
+            basePath = _options.BaselineStoragePath;
+        }
+        else
+        {
+            basePath = Path.Combine(
+                Environment.CurrentDirectory,
+                _options.BaselineStoragePath);
+        }
+
         return Path.Combine(basePath, projectKey);
     }
 

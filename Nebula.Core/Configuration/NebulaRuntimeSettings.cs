@@ -32,6 +32,7 @@ public sealed class NebulaRuntimeSettings
     public const string DefaultWebResearchProvider = "Free";
     public const string DefaultAccelerationProfile = "auto";
     public const string DefaultSandboxImage = "mcr.microsoft.com/powershell:lts";
+    public const int DefaultSmokeTestTimeoutSeconds = 10;
 
     public NebulaRuntimeSettings()
     {
@@ -98,6 +99,10 @@ public sealed class NebulaRuntimeSettings
     public bool EnableResultValidation { get; set; } = true;
 
     public bool EnableEnvironmentValidation { get; set; } = true;
+
+    public bool SmokeTestEnabled { get; set; } = true;
+
+    public int SmokeTestTimeoutSeconds { get; set; } = DefaultSmokeTestTimeoutSeconds;
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 
@@ -177,6 +182,8 @@ public sealed class NebulaRuntimeSettings
         MaxConsecutiveErrorRetries = Math.Max(1, snapshot.MaxConsecutiveErrorRetries);
         EnableResultValidation = snapshot.EnableResultValidation;
         EnableEnvironmentValidation = snapshot.EnableEnvironmentValidation;
+        SmokeTestEnabled = snapshot.SmokeTestEnabled;
+        SmokeTestTimeoutSeconds = Math.Max(1, snapshot.SmokeTestTimeoutSeconds);
         SandboxMode = Enum.IsDefined(snapshot.SandboxMode)
             ? snapshot.SandboxMode
             : SandboxMode.Disabled;
@@ -215,6 +222,8 @@ public sealed class NebulaRuntimeSettings
             MaxConsecutiveErrorRetries = MaxConsecutiveErrorRetries,
             EnableResultValidation = EnableResultValidation,
             EnableEnvironmentValidation = EnableEnvironmentValidation,
+            SmokeTestEnabled = SmokeTestEnabled,
+            SmokeTestTimeoutSeconds = SmokeTestTimeoutSeconds,
             SandboxMode = SandboxMode,
             SandboxConfigured = true,
             SandboxImage = NormalizeSandboxImage(SandboxImage),
@@ -377,6 +386,11 @@ public sealed class NebulaRuntimeSettingsSnapshot
     public bool EnableResultValidation { get; set; } = true;
 
     public bool EnableEnvironmentValidation { get; set; } = true;
+
+    public bool SmokeTestEnabled { get; set; } = true;
+
+    public int SmokeTestTimeoutSeconds { get; set; } =
+        NebulaRuntimeSettings.DefaultSmokeTestTimeoutSeconds;
 
     public SandboxMode SandboxMode { get; set; } = SandboxMode.Disabled;
 

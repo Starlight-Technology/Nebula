@@ -261,6 +261,37 @@
             <CoronaCard Class="nebula-settings-card">
                 <section class="nebula-tab-panel">
                     <div class="nebula-section-title">
+                        <h3>Smoke tests</h3>
+                        <p>Verifica se a aplicacao web local responde antes de concluir tarefas de codigo.</p>
+                    </div>
+
+                    <label class="nebula-settings-option nebula-settings-option--wide @(WorkspaceState.QuickSettings.SmokeTestEnabled ? "is-selected" : null)">
+                        <input type="checkbox"
+                               checked="@WorkspaceState.QuickSettings.SmokeTestEnabled"
+                               disabled="@WorkspaceState.IsSavingSettings"
+                               @onchange="@((ChangeEventArgs args) => WorkspaceState.QuickSettings.SmokeTestEnabled = args.Value is true)" />
+                        <span>
+                            <strong>Executar smoke tests no Definition of Done</strong>
+                            <small>Quando a app local estiver acessivel, URLs que responderem com erro reprovam o DoD. Se nenhuma URL responder, o smoke test e ignorado.</small>
+                        </span>
+                    </label>
+
+                    <label class="nebula-settings-field">
+                        <span>Timeout por verificacao (s)</span>
+                        <input type="number"
+                               min="1"
+                               max="120"
+                               step="1"
+                               @bind="WorkspaceState.QuickSettings.SmokeTestTimeoutSeconds"
+                               disabled="@WorkspaceState.IsSavingSettings" />
+                        <small>Tempo maximo de espera por URL (default: 10s)</small>
+                    </label>
+                </section>
+            </CoronaCard>
+
+            <CoronaCard Class="nebula-settings-card">
+                <section class="nebula-tab-panel">
+                    <div class="nebula-section-title">
                         <h3>Captura de Screenshots</h3>
                         <p>Captura automatica de screenshots apos mudancas em arquivos frontend para comparacao visual.</p>
                     </div>

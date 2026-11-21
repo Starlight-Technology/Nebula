@@ -4,8 +4,7 @@ using Nebula.Runner;
 namespace Nebula.Agent.Infrastructure;
 
 public sealed class PortDetectionService(
-    IShellExecutor executor,
-    ILogger logger) : IPortDetectionService
+    IShellExecutor executor) : IPortDetectionService
 {
     private static readonly int[] CommonPorts = 
     [

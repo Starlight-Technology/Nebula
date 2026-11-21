@@ -11,7 +11,9 @@ public class LlamaClient : ILlamaClient
 {
     private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
     private const string DefaultModel = "deepseek-r1:7b";
+    public const int DefaultLoadTimeoutSeconds = 180;
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(300);
+    private static readonly TimeSpan DefaultLoadTimeout = TimeSpan.FromSeconds(DefaultLoadTimeoutSeconds);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -19,16 +21,26 @@ public class LlamaClient : ILlamaClient
     };
 
     private readonly HttpClient httpClient;
+    private readonly TimeSpan requestTimeout;
+    private readonly TimeSpan loadTimeout;
     private IReadOnlyList<LlamaModelInfo> cachedModels = [];
     private string selectedModel;
     private bool modelNotFoundFallbackAttempted;
 
-    public LlamaClient(HttpClient? httpClient = null, string? defaultModel = null, string? llamaUrl = null, int timeoutSeconds = 0)
+    public LlamaClient(
+        HttpClient? httpClient = null,
+        string? defaultModel = null,
+        string? llamaUrl = null,
+        int timeoutSeconds = 0,
+        int loadTimeoutSeconds = 0)
     {
-        var timeout = timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : DefaultRequestTimeout;
+        requestTimeout = timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : DefaultRequestTimeout;
+        loadTimeout = loadTimeoutSeconds > 0
+            ? TimeSpan.FromSeconds(loadTimeoutSeconds)
+            : DefaultLoadTimeout;
         this.httpClient = httpClient ?? new HttpClient
         {
-            Timeout = timeout
+            Timeout = requestTimeout
         };
         LlamaUrl = llamaUrl
             ?? Environment.GetEnvironmentVariable("LLAMA_URL")
@@ -147,12 +159,13 @@ public class LlamaClient : ILlamaClient
 
         var jsonFormat = format
             ?? (ShouldUseJsonFormat(prompt) ? "json" : null);
+        var requestModel = string.IsNullOrWhiteSpace(modelName) ? SelectedModel : modelName.Trim();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl)
         {
             Content = JsonContent.Create(new LlamaGenerateRequest
             {
-                Model = string.IsNullOrWhiteSpace(modelName) ? SelectedModel : modelName.Trim(),
+                Model = requestModel,
                 Prompt = prompt,
                 Stream = true,
                 Think = think,
@@ -167,8 +180,23 @@ public class LlamaClient : ILlamaClient
             })
         };
 
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        await EnsureSuccessAsync(response);
+        await EnsureModelLoadedAsync(requestModel, cancellationToken);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(BuildRequestTimeoutMessage(requestModel), ex);
+        }
+
+        using var responseScope = response;
+        await EnsureSuccessAsync(response, requestModel);
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -432,7 +460,9 @@ public class LlamaClient : ILlamaClient
         }
     }
 
-    private static async Task EnsureSuccessAsync(HttpResponseMessage response)
+    private static async Task EnsureSuccessAsync(
+        HttpResponseMessage response,
+        string? modelName = null)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -440,10 +470,133 @@ public class LlamaClient : ILlamaClient
         }
 
         var details = await response.Content.ReadAsStringAsync();
+        if (modelName is not null && IsModelLoadFailure(details))
+        {
+            throw new InvalidOperationException(BuildModelLoadFailureMessage(modelName, details));
+        }
+
         throw new InvalidOperationException(
             string.IsNullOrWhiteSpace(details)
                 ? $"Ollama returned HTTP {(int)response.StatusCode}."
                 : $"Ollama returned HTTP {(int)response.StatusCode}: {details}");
+    }
+
+    private async Task EnsureModelLoadedAsync(string modelName, CancellationToken cancellationToken)
+    {
+        if (await IsModelLoadedAsync(modelName, cancellationToken))
+        {
+            return;
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, LlamaUrl)
+        {
+            Content = JsonContent.Create(new LlamaGenerateRequest
+            {
+                Model = modelName,
+                Prompt = "ok",
+                Stream = false,
+                Think = false,
+                Options = new LlamaGenerateOptions
+                {
+                    NumPredict = 1
+                }
+            })
+        };
+
+        using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        loadCts.CancelAfter(loadTimeout);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                loadCts.Token);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(BuildLoadTimeoutMessage(modelName), ex);
+        }
+
+        using (response)
+        {
+            await EnsureSuccessAsync(response, modelName);
+        }
+    }
+
+    private async Task<bool> IsModelLoadedAsync(
+        string modelName,
+        CancellationToken cancellationToken)
+    {
+        using var psCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        psCts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            using var response = await httpClient.GetAsync(BuildApiUrl("ps"), psCts.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync<LlamaTagsResponse>(
+                JsonOptions,
+                psCts.Token);
+            return (payload?.Models ?? [])
+                .Any(model => ModelNamesMatch(model.Name, modelName));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private string BuildLoadTimeoutMessage(string modelName)
+    {
+        return $"Ollama nao conseguiu carregar o modelo '{modelName}' em " +
+               $"{loadTimeout.TotalSeconds:F0}s. O modelo pode ser grande demais para a " +
+               "memoria/CPU disponivel ou a inicializacao travou. Use um modelo menor ou " +
+               "com menos parametros, libere memoria ou verifique os logs do Ollama.";
+    }
+
+    private string BuildRequestTimeoutMessage(string modelName)
+    {
+        return $"Ollama nao respondeu para o modelo '{modelName}' em " +
+               $"{requestTimeout.TotalSeconds:F0}s. O prompt pode ser grande demais para a " +
+               "CPU disponivel ou o modelo pode estar carregando. Aumente " +
+               "Nebula:LlmTimeoutSeconds ou use um modelo menor.";
+    }
+
+    private static string BuildModelLoadFailureMessage(string modelName, string details)
+    {
+        var trimmed = details.Length > 400 ? details[..400] : details;
+        return $"Ollama nao conseguiu carregar o modelo '{modelName}': {trimmed}. " +
+               "Use um modelo menor ou libere memoria antes de tentar novamente.";
+    }
+
+    private static bool IsModelLoadFailure(string details)
+    {
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            return false;
+        }
+
+        string[] markers =
+        [
+            "timed out waiting for llama-server",
+            "failed to load model",
+            "error loading model",
+            "unable to load model",
+            "not enough memory",
+            "out of memory",
+            "insufficient memory",
+            "failed to allocate",
+            "requires more system memory"
+        ];
+
+        return markers.Any(marker =>
+            details.Contains(marker, StringComparison.OrdinalIgnoreCase));
     }
 
     private string BuildApiUrl(string endpoint)
