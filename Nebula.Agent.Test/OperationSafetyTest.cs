@@ -166,17 +166,15 @@ public sealed class OperationSafetyTest
     }
 
     [Fact]
-    public void deterministic_classifier_with_custom_workspace_must_allow_local_writes_inside_it()
+    public async Task deterministic_classifier_with_custom_workspace_must_allow_local_writes_inside_it()
     {
         using var workspace = new TempTestWorkspace();
         const string fileName = "nota.txt";
         var classifier = new DeterministicCommandClassifier(
             workspaceRoot: workspace.Path);
 
-        var classification = classifier.ClassifyAsync(
-            $"echo 'nota' > {Path.Combine(workspace.Path, fileName)}")
-            .GetAwaiter()
-            .GetResult();
+        var classification = await classifier.ClassifyAsync(
+            $"echo 'nota' > {Path.Combine(workspace.Path, fileName)}");
 
         Assert.Equal(CommandIntent.SafeWriteLocal, classification.Intent);
     }

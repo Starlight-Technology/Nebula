@@ -138,7 +138,7 @@ public sealed class MigrationService(
             return new MigrationResult(true, null, migrationName, null, cmd, null);
         }
 
-        var result = await RunWithTimeoutAsync(cmd, request.WorkingDirectory, 120, cancellationToken);
+        var result = await RunCommandAsync(cmd, request.WorkingDirectory, cancellationToken);
 
         if (!result.Success)
         {
@@ -202,7 +202,7 @@ public sealed class MigrationService(
             return new MigrationResult(true, null, request.MigrationName, null, cmd, null);
         }
 
-        var result = await RunWithTimeoutAsync(cmd, request.WorkingDirectory, 120, cancellationToken);
+        var result = await RunCommandAsync(cmd, request.WorkingDirectory, cancellationToken);
 
         if (!result.Success)
         {
@@ -215,7 +215,7 @@ public sealed class MigrationService(
     private async Task<MigrationResult> ApplyEfCoreMigrationsAsync(string workingDirectory, CancellationToken cancellationToken)
     {
         var cmd = "dotnet ef database update --no-build";
-        var result = await RunWithTimeoutAsync(cmd, workingDirectory, 180, cancellationToken);
+        var result = await RunCommandAsync(cmd, workingDirectory, cancellationToken);
 
         return new MigrationResult(
             result.Success,
@@ -258,7 +258,7 @@ public sealed class MigrationService(
             return new MigrationResult(false, null, null, null, null, "Nenhuma ferramenta de migracao Node.js detectada");
         }
 
-        var result = await RunWithTimeoutAsync(cmd, workingDirectory, 180, cancellationToken);
+        var result = await RunCommandAsync(cmd, workingDirectory, cancellationToken);
 
         return new MigrationResult(
             result.Success,
@@ -272,7 +272,7 @@ public sealed class MigrationService(
     private async Task<IReadOnlyList<PendingMigrationInfo>> GetPendingEfCoreMigrationsAsync(string workingDirectory, CancellationToken cancellationToken)
     {
         var cmd = "dotnet ef migrations list --no-build";
-        var result = await RunWithTimeoutAsync(cmd, workingDirectory, 60, cancellationToken);
+        var result = await RunCommandAsync(cmd, workingDirectory, cancellationToken);
 
         if (!result.Success)
         {
@@ -322,7 +322,7 @@ public sealed class MigrationService(
             return [];
         }
 
-        var result = await RunWithTimeoutAsync(cmd, workingDirectory, 60, cancellationToken);
+        var result = await RunCommandAsync(cmd, workingDirectory, cancellationToken);
 
         if (!result.Success)
         {
@@ -352,19 +352,16 @@ public sealed class MigrationService(
         return pending;
     }
 
-    private async Task<ShellCommandResult> RunWithTimeoutAsync(string command, string workingDirectory, int timeoutSeconds, CancellationToken cancellationToken)
+    private async Task<ShellCommandResult> RunCommandAsync(string command, string workingDirectory, CancellationToken cancellationToken)
     {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
         try
         {
             if (executor is IDetailedShellExecutor detailedExecutor)
             {
-                return await detailedExecutor.RunCommandDetailedAsync(command, workingDirectory, cts.Token);
+                return await detailedExecutor.RunCommandDetailedAsync(command, workingDirectory, cancellationToken);
             }
 
-            var output = await executor.RunCommandAsync(command, cts.Token);
+            var output = await executor.RunCommandAsync(command, cancellationToken);
             return new ShellCommandResult
             {
                 Command = command,
@@ -374,17 +371,9 @@ public sealed class MigrationService(
                 Timestamp = DateTimeOffset.UtcNow
             };
         }
-        catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new ShellCommandResult
-            {
-                Command = command,
-                WorkingDirectory = workingDirectory,
-                StandardOutput = string.Empty,
-                StandardError = "Timeout: comando excedeu o tempo limite",
-                ExitCode = -1,
-                Timestamp = DateTimeOffset.UtcNow
-            };
+            throw;
         }
         catch (Exception ex)
         {

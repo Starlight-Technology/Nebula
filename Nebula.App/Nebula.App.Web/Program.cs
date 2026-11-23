@@ -70,11 +70,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions
     options.JSInteropDefaultCallTimeout = TimeSpan.FromMinutes(5);
 });
 
-builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
-    timeoutSeconds: builder.Configuration.GetValue("Nebula:LlmTimeoutSeconds", 300),
-    loadTimeoutSeconds: builder.Configuration.GetValue(
-        "Nebula:LlmLoadTimeoutSeconds",
-        LlamaClient.DefaultLoadTimeoutSeconds)));
+builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
 builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
     commandRunner: new ProcessRuntimeCommandRunner()));
 
@@ -125,11 +121,11 @@ builder.Services.AddScoped(_ => new NebulaRuntimeSettings
     CommandTimeoutSeconds =
         builder.Configuration.GetValue(
             "Nebula:CommandTimeoutSeconds",
-            300),
+            0),
     ScriptTimeoutSeconds =
         builder.Configuration.GetValue(
             "Nebula:ScriptTimeoutSeconds",
-            300),
+            0),
     MaxVerificationRetries =
         builder.Configuration.GetValue(
             "Nebula:MaxVerificationRetries",

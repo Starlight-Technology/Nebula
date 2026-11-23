@@ -9,10 +9,6 @@ public sealed class DeterministicVerificationService(
     IShellExecutor executor,
     ILogger logger) : IDeterministicVerificationService
 {
-    private static readonly TimeSpan BuildTimeout = TimeSpan.FromSeconds(120);
-    private static readonly TimeSpan ParseTimeout = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan LintTimeout = TimeSpan.FromSeconds(120);
-
     private const int MaxOutputLength = 3000;
 
     public async Task<DeterministicVerificationResult> VerifyAsync(
@@ -54,10 +50,7 @@ public sealed class DeterministicVerificationService(
                     "No deterministic verification command available for the detected stack.");
             }
 
-            var timeout = command.Contains("py_compile", StringComparison.OrdinalIgnoreCase)
-                ? ParseTimeout
-                : BuildTimeout;
-            var result = await RunCommandAsync(command, workingDirectory, timeout, cancellationToken);
+            var result = await RunCommandAsync(command, workingDirectory, cancellationToken);
 
             var outputSummary = Truncate(result.CombinedOutput, MaxOutputLength);
             logger.Log(
@@ -87,7 +80,6 @@ public sealed class DeterministicVerificationService(
             var lintResult = await RunCommandAsync(
                 stack.LintCommand,
                 workingDirectory,
-                LintTimeout,
                 cancellationToken);
 
             var lintOutput = Truncate(lintResult.CombinedOutput, MaxOutputLength);
@@ -106,14 +98,9 @@ public sealed class DeterministicVerificationService(
                     ? outputSummary
                     : $"Lint/format check failed ({stack.LintCommand}).\n\n{lintOutput}");
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return new DeterministicVerificationResult(
-                DeterministicVerificationVerdict.Error,
-                null,
-                null,
-                null,
-                "Deterministic verification timed out.");
+            throw;
         }
         catch (Exception ex)
         {
@@ -130,21 +117,17 @@ public sealed class DeterministicVerificationService(
     private async Task<ShellCommandResult> RunCommandAsync(
         string command,
         string workingDirectory,
-        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(timeout);
-
         if (executor is IDetailedShellExecutor detailedExecutor)
         {
             return await detailedExecutor.RunCommandDetailedAsync(
                 command,
                 workingDirectory,
-                timeoutSource.Token);
+                cancellationToken);
         }
 
-        var output = await executor.RunCommandAsync(command, timeoutSource.Token);
+        var output = await executor.RunCommandAsync(command, cancellationToken);
         return new ShellCommandResult
         {
             Command = command,

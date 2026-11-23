@@ -1,6 +1,6 @@
 # AGENTS.md - Nebula Repository Guide
 
-Last verified: 2026-11-14 (agent tool catalog and full solution build/tests
+Last verified: 2026-11-22 (timeout removal, full solution build/tests
 re-run) on integration branch `reconcile/b-into-a-20261025`.
 
 This guide is for coding agents working in the Nebula repository. It is based on
@@ -90,7 +90,7 @@ Use these categories when describing Nebula:
 | Conversation history/context | Implemented | `ConversationContextService`, `NebulaContextBuilder`, conversation state/message repositories. |
 | Persistent agent run/task session store | Implemented | `AgentRun`/`AgentStepRecord`/`AgentArtifactRecord`/`AgentApprovalRecord` + `IAgentRunStore`/`PostgresAgentRunStore` (tables `agent_runs`, `agent_step_records`, `agent_artifacts`, `agent_approvals`), checkpoints no meio do loop, `GetUnfinishedRunsAsync`, `GetInterruptedRunsAsync`, `GetRunIdByStepIdAsync`; `agent_runs.WorkspaceRoot` (migração `add_agent_run_workspace_root`) restaurado em `Manager.ResumeTaskAsync`; `agent_runs.ParentRunId` (migração `add_agent_run_parent_run_id`) liga continuacoes ao run de origem. Falhas e cancelamentos do `AgentRunBackgroundService` agora persistem `Status` `Failed`/`Cancelled` + `FinishedAt`/`Response`, e o startup reconcilia runs ativos interrompidos (`Running`, `Planning`, `Executing`, `Retrying`, `Observing`, `Correcting`) com janela de 30 s para evitar corrida com runs recem-criados; `AwaitingApproval`/`Blocked` sao preservados. |
 | Placeholder script rejection | Implemented | `PlannedPatchContentValidator` rejeita conteúdo claramente placeholder em arquivos de código (ex.: `HTML and JS code for calculator`) tanto em `FileWrite`/`ScriptContent` quanto em `PlannedPatch`; o prompt do planner proíbe `echo`/`cat`/redirecionamento para criar arquivos e exige conteúdo real completo. |
-| LLM model load diagnostics | Implemented | `LlamaClient` consulta `/api/ps`; quando o modelo pedido não está carregado, faz um warm-up minimo (`num_predict=1`) limitado por `LlmLoadTimeoutSeconds` (default 180) para falhar rápido e com mensagem clara se o Ollama não conseguir carregar (ex.: `nemotron-3.5-lightning`). Se o modelo já está carregado, a requisição real usa apenas `LlmTimeoutSeconds` (default 300), evitando cortar prompts grandes durante o processamento. Também reconhece corpos de falha como `timed out waiting for llama-server`/`out of memory`. |
+| LLM model load diagnostics | Implemented | `LlamaClient` consulta `/api/ps`; quando o modelo pedido não está carregado, faz um warm-up minimo (`num_predict=1`) para falhar com mensagem clara se o Ollama não conseguir carregar (ex.: `nemotron-3.5-lightning`). O `HttpClient` do LLM usa `Timeout.InfiniteTimeSpan`; load, warm-up, `/api/ps` e geração não têm timeout, então máquinas lentas podem levar horas. O cancelamento do usuário continua funcionando via `CancellationToken`. Também reconhece corpos de falha como `timed out waiting for llama-server`/`out of memory`. |
 | Learning from local/user sources | Implemented | `LearningEngine`, `LearningOrchestrator`, `LearningSourceReader`, knowledge tests. |
 | RAG no Chat mode | Implemented | `ConversationContextService.AugmentWithKnowledgeAsync` injeta conhecimento armazenado (`IKnowledgeQueryService.AnswerAsync`) no `ModelPrompt` do Chat como bloco `[knowledge]` (max 3000 chars, truncado), somente em `InteractionMode.Chat`; log `[CHAT] Injected ...`; falha nao fatal volta ao prompt original. |
 | LLM como extractor no path padrao | Implemented | `IKnowledgeExtractor` nos 3 roots e registrado como `LlamaKnowledgeExtractor` (via DI factory) com `fallbackExtractor: new KnowledgeExtractor()` deterministico; se o LLM falhar (offline, JSON invalido) cai no fallback determinístico. |
@@ -110,7 +110,7 @@ Use these categories when describing Nebula:
 | Database migrations with explicit approval | Implemented | `OperationKind.Migration` + `AgentToolAction.MigrationAction/MigrationFramework/MigrationName/MigrationContext`; `AgentActionRunner.ExecuteMigrationAsync` runs `Create`/`Apply` only after a manual `AgentApprovedAction` (scope forced to `Once`) and never through auto-approve, allowlist, conversation or category scopes; `List` is read-only and allowed. `MigrationService` supports EF Core and Node.js, validates names/contexts, and `DryRun` returns the planned command without executing. See `Nebula.Agent/Infrastructure/MigrationService.cs` and `Nebula.Core/Agent/MigrationContracts.cs`. |
 | Multi-file planned patches | Implemented | `OperationKind.PlannedPatch` + `AgentToolAction.PlannedFiles` (`plannedFiles` [{path, content}] no JSON de decisao), `IPlannedPatchApplier`/`PlannedPatchApplier` (raiz restrita a workspace/temp, arquivos relativos ao target, path traversal bloqueado, sem fallback para o cwd em caminho invalido), validacao de conteudo (`PlannedPatchContentValidator`) e classificacao agregada por arquivo (`FileWriteSafetyClassifier`); extensao de script ou arquivo fora das raizes pedem aprovacao antes de aplicar (revisao visivel nas Notes do card). |
 | Agent tool catalog | Implemented | `IAgentToolRegistry`/`AgentToolRegistry` define `read`, `write`, `edit`, `patch`, `shell`, `scaffold`, `migration`, `glob` e `grep`; `AgentToolAction.Tool` (opcional) e validado no `ValidateDecision`, mapeado para o `OperationKind` compativel e o schema/prompt listam as ferramentas. `edit` faz substituicao exata e unica e reusa o pipeline de `FileWrite` (inclusive aprovacao/replay); `glob`/`grep` sao buscas read-only limitadas ao workspace, ignoram `bin`/`obj`/`node_modules`/`.git` e aplicam limites de arquivos/tamanho/resultados. Native tool calling e `toolCalls` multi-acao ainda nao existem. |
-| Self-programming loop (DoD, lint/format, timeouts, diff review, overwrite guard, repair loop) | Implemented | `RequireDeterministicVerification` (gate no `VerifyCompletionDeterministicallyAsync`), `WorkspaceStack.LintCommand` (`.NET` `dotnet format --verify-no-changes --no-restore`; Node `npm run lint` quando o script existe; falha reprova o DoD e `dotnet format` e permitido pela policy para corrigir), `CommandTimeoutSeconds`/`ScriptTimeoutSeconds` (`CreateToolCancellationToken` com falha clara e retry), `IGitDiffService`/`GitDiffService` (read-only: `rev-parse`, `diff --name-only`, `diff --stat`) com secoes de diff e aviso de alteracoes fora da acao no `FinalReport`, `ConcurrentModificationGuard` (arquivo alterado apos `RunStartedUtc` pede aprovacao antes de sobrescrever, incluindo patches), `MaxVerificationRetries` (repair loop: falha do DoD volta para o agente corrigir; limite de correcoes seguidas configuravel). |
+| Self-programming loop (DoD, lint/format, timeouts, diff review, overwrite guard, repair loop) | Implemented | `RequireDeterministicVerification` (gate no `VerifyCompletionDeterministicallyAsync`), `WorkspaceStack.LintCommand` (`.NET` `dotnet format --verify-no-changes --no-restore`; Node `npm run lint` quando o script existe; falha reprova o DoD e `dotnet format` e permitido pela policy para corrigir), `CommandTimeoutSeconds`/`ScriptTimeoutSeconds` quando configurados (`CreateToolCancellationToken` com falha clara e retry; default `0` desliga), `IGitDiffService`/`GitDiffService` (read-only: `rev-parse`, `diff --name-only`, `diff --stat`) com secoes de diff e aviso de alteracoes fora da acao no `FinalReport`, `ConcurrentModificationGuard` (arquivo alterado apos `RunStartedUtc` pede aprovacao antes de sobrescrever, incluindo patches), `MaxVerificationRetries` (repair loop: falha do DoD volta para o agente corrigir; limite de correcoes seguidas configuravel). |
 | Optional per-workspace container sandbox | Implemented | `SandboxMode` (`Disabled`/`Docker`, default `Disabled`) em `NebulaRuntimeSettings` + `ICommandSandbox`/`DockerCommandSandbox` (`Nebula.Runner/CommandSandbox.cs`); comandos `TerminalCommand`/`ScriptExecution` que a policy marcaria como `AskApproval` (sem override manual/auto) executam isolados quando habilitado: `docker`/`podman run --rm --network none --cap-drop ALL --security-opt no-new-privileges` + limites opcionais `SandboxMemoryLimitMb`/`SandboxCpuLimit`, bind do workspace como `/workspace:rw` (Podman no Linux usa `:rw,Z`), imagem default `mcr.microsoft.com/powershell:lts`; `SandboxRuntime` (`Auto`/`Docker`/`Podman`) e resolvido por `ISandboxRuntimeLocator`/`SandboxRuntimeLocator` (Auto prefere Docker e depois Podman; runtime explicito nao faz fallback) e a ausencia de runtime falha antes da execucao, sem cair para o host; antes de rodar, desembrulha wrappers host (`powershell -Command "..."`/`bash -c "..."`) e traduz paths absolutos do workspace para `/workspace`; com sandbox habilitado, criacoes de arquivos (`FileWrite`/`PlannedPatch`) com alvo no workspace sao permitidas automaticamente (a execucao isolada ocorre no container), mas material sensivel (`.env`, credenciais, tokens), alvos fora do workspace/temp e o guard de modificacao concorrente continuam exigindo aprovacao ou bloqueio; shells inelegiveis (Cmd/Unknown) e o restante do fluxo de aprovacao continuam como antes; `CommandExecution.Sandboxed` marca a execucao. Settings: `Nebula:Sandbox:Mode|Runtime|Image|MemoryLimitMb|CpuLimit` (web/CLI) e `NEBULA_SANDBOX_MODE|RUNTIME|IMAGE|MEMORY_LIMIT_MB|CPU_LIMIT` (MAUI). |
 | Sandbox settings persistence and profile policy | Implemented | Settings UI ("Sandbox de comandos") exposes mode/image/memory/CPU/scope; `ISandboxSettingsStore`/`PostgresSandboxSettingsStore` persist `sandbox_settings` keyed by `(UserId, Workspace)` with global fallback (`Workspace = ""`); `NebulaWorkspaceState` applies localStorage v1 (ignoring sandbox fields when `SandboxConfigured` is false), then DB exact/global overrides, otherwise server/env defaults, and saves DB + localStorage (DB failure is non-fatal; saving scope global deletes the workspace override); `NebulaRuntimeSettings.SandboxModeFloor` comes from server `Nebula:Sandbox:Mode` and `ResolveSandboxMode` prevents Conservative/Standard from disabling Docker while Autonomous/Lab may override it; sandbox images are restricted to Docker-reference characters (no leading `-`, whitespace, or shell metacharacters) and invalid values fall back to the default image; migration `add_sandbox_settings`; DI in Web/MAUI; tests cover policy, floor, snapshot, store roundtrip/fallback/upsert/delete and Settings UI. |
 | Container sandbox sidecar (compose) | Implemented | `Nebula.Sandbox` exposes authenticated `/run` and `/health`; Web/CLI use `Nebula:Sandbox:SidecarUrl`/`SidecarToken` to delegate sandbox execution, while `docker-compose.sandbox.yml` runs the sidecar with the host runtime socket and `${HOME}/nebula-tmp:/tmp:z`; the sidecar maps `/tmp` to the host root and mounts the host path into the execution container, so scripts created by the agent in its workspace can run without mounting a socket into `nebula-web`. Sidecar requires `NEBULA_SANDBOX_TOKEN` and an active socket (`NEBULA_SANDBOX_RUNTIME`/`NEBULA_SANDBOX_SOCKET`; default rootless Podman), runs as `1000:1000` with `userns_mode=keep-id`, and uses `label=type:container_runtime_t` for the socket mount; `/health` probes the runtime. Docker overrides identity/userns/SELinux via `NEBULA_SANDBOX_USER`/`NEBULA_SANDBOX_USERNS_MODE`/`NEBULA_SANDBOX_SECURITY_OPT`. |
@@ -609,8 +609,9 @@ Closing a task uses a deterministic Definition of Done:
    DoD with a clear message; the agent can then fix formatting with `dotnet format`
    (explicitly allowed by the deterministic command classifier).
 3. `CommandTimeoutSeconds` (terminal commands) and `ScriptTimeoutSeconds` (script
-   execution) bound runtime; a timed-out tool call produces a clear failure,
-   records evidence with exit code `-1`, and the agent can retry. `0` disables.
+   execution) bound runtime when set; both default to `0` (no timeout), so weak
+   machines can run long builds and scripts. A configured timeout produces a clear
+   failure, records evidence with exit code `-1`, and the agent can retry.
 4. After the run, `IGitDiffService` (`GitDiffService`, read-only git commands
    outside the safety pipeline) appends `## Diff do working tree`,
    `## Arquivos alterados no working tree`, and a warning section listing files
@@ -704,7 +705,7 @@ Defaults:
 
 - Generate URL: `http://localhost:11434/api/generate`
 - Model: `deepseek-r1:7b`
-- Timeout: 5 minutes
+- Timeout: none; requests run until completion or cancellation
 
 Environment/config inputs:
 
@@ -944,12 +945,12 @@ contain local secrets and should be treated carefully.
 | `Nebula:ResponseLanguageName` | Response language name | Runtime setting |
 | `Nebula:AutoApproveCommands` | Auto-approve approval-required commands | Development-only safety-sensitive setting |
 | `Nebula:RequireDeterministicVerification` | DoD gate: require deterministic build/test verification before completion | true (env: `NEBULA_REQUIRE_DETERMINISTIC_VERIFICATION`) |
-| `Nebula:CommandTimeoutSeconds` | Max runtime for terminal commands before kill + retry | 300 (env: `NEBULA_COMMAND_TIMEOUT_SECONDS`; 0 disables) |
-| `Nebula:ScriptTimeoutSeconds` | Max runtime for script executions before kill + retry | 300 (env: `NEBULA_SCRIPT_TIMEOUT_SECONDS`; 0 disables) |
+| `Nebula:CommandTimeoutSeconds` | Max runtime for terminal commands before kill + retry | 0 = no timeout, default (env: `NEBULA_COMMAND_TIMEOUT_SECONDS`) |
+| `Nebula:ScriptTimeoutSeconds` | Max runtime for script executions before kill + retry | 0 = no timeout, default (env: `NEBULA_SCRIPT_TIMEOUT_SECONDS`) |
 | `Nebula:MaxVerificationRetries` | Repair loop limit: consecutive DoD verification failures allowed before failing the run | 2 (env: `NEBULA_MAX_VERIFICATION_RETRIES`; 0 = no dedicated limit) |
 | `Nebula:MaxConsecutiveErrorRetries` | Max consecutive retries for the same error signature before escalation | 3 (env: `Nebula__MaxConsecutiveErrorRetries`) |
-| `Nebula:LlmTimeoutSeconds` | Total HTTP timeout for an LLM request/stream | 300 |
-| `Nebula:LlmLoadTimeoutSeconds` | Max time for the model warm-up/load when the model is not already loaded (`/api/ps`); does not bound prompt processing of an already-loaded model | 180 (Web/CLI env: `Nebula__LlmLoadTimeoutSeconds`; MAUI env: `NEBULA_LLM_LOAD_TIMEOUT_SECONDS`) |
+| `Nebula:LlmTimeoutSeconds` | Obsolete/ignored; LLM requests have no timeout | Removed |
+| `Nebula:LlmLoadTimeoutSeconds` | Obsolete/ignored; model load/warm-up has no timeout | Removed |
 | `Nebula:Web:AuthToken` | Web local operator token (at least 32 characters) | Empty (env: `NEBULA_WEB_AUTH_TOKEN`; required by compose) |
 | `NEBULA_WEB_AUTH_TOKEN` | Web local operator token; Development without it disables auth, Production/Staging fails fast | Empty |
 | `NEBULA_WEB_BIND` / `NEBULA_WEB_PORT` | Compose bind address and published web port | `127.0.0.1` / `8081` |
@@ -1253,13 +1254,25 @@ Validation result on 2026-11-13 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
 
 - `Nebula.Agent.Test`: 761 passed, 0 failed (includes `AgentRunBackgroundServiceTest`
   for Failed/Cancelled persistence and startup reconciliation of active runs,
-  Llama load-timeout/warm-up diagnostics, placeholder-content rejection,
+  Llama warm-up diagnostics, placeholder-content rejection,
   `GetInterruptedRunsAsync` storage, and the ProjectScaffold guard regression for
   frontend/file requests).
 - `Nebula.App.Test`: 38 passed, 0 failed.
 - `Nebula.App.Web.Test`: 24 passed, 0 failed.
 - `dotnet build Nebula.slnx --no-restore -m:1` with the Java/Android properties
   succeeded with 0 errors (2 pre-existing NU1903 warnings).
+
+Validation result on 2026-11-22 (toolbox `dotnet-dev`, .NET SDK 10.0.401):
+
+- `Nebula.Agent.Test`: 775 passed, 0 failed (includes no-timeout coverage for
+  the LLM client, deterministic verification and the test runner).
+- `Nebula.App.Test`: 40 passed, 0 failed.
+- `Nebula.App.Web.Test`: 24 passed, 0 failed.
+- `dotnet build Nebula.slnx --no-restore -m:1` with the Java/Android properties
+  succeeded with 0 errors (2 pre-existing NU1903 warnings).
+- LLM/Ollama, command/script, build/test and migration timeouts are disabled by
+  default; smoke tests, screenshots, web research and sandbox limits still use
+  explicit timeouts.
 
 Validation result on 2026-11-14 (toolbox `dotnet-dev`, .NET SDK 10.0.111):
 
@@ -1485,7 +1498,7 @@ These are current gaps or cautions confirmed by inspection.
   of learned commands is not confirmed in current repository state.
 - Persistent `AgentRun` storage is implemented (checkpoints, plan, artifacts, approvals, parent-run links via `agent_runs.ParentRunId`). Resume support exists via `IManager.ResumeTaskAsync` and the `/agent-runs` screen; approval overrides use `ICommandApprovalService`.
 - Project scaffolding is implemented with curated templates (`ProjectScaffold`). Multi-file planned patches (`PlannedPatch`) are implemented with review before apply for risky files. The built-in agent tool catalog (`IAgentToolRegistry`) covers `read`/`write`/`edit`/`patch`/`shell`/`scaffold`/`migration`/`glob`/`grep`; a generic plugin catalog, native tool calling and multi-action `toolCalls` are still not confirmed.
-- The self-programming loop is implemented (DoD gate, lint/format check by stack, timeouts by command type, read-only git diff review in the `FinalReport`, concurrent-modification guard, `MaxVerificationRetries` repair loop). The DoD setting is global rather than per-task-type; the git diff review is appended on the normal (non-approved-action) run path.
+- The self-programming loop is implemented (DoD gate, lint/format check by stack, configurable timeouts that default to disabled, read-only git diff review in the `FinalReport`, concurrent-modification guard, `MaxVerificationRetries` repair loop). The DoD setting is global rather than per-task-type; the git diff review is appended on the normal (non-approved-action) run path.
 - Fase 8 services are now wired: `SmokeTestService` gates the DoD (explicit project URLs only), `PortDetectionService` enriches `EADDRINUSE` failures, and `ScreenshotService` captures baseline/current/diff artifacts after frontend changes. The Web host serves `/api/screenshots/{baseline|current|diff}/{artifactId}` and the `ArtifactPanel` renders the comparison; MAUI has no HTTP host for those endpoints and visual regression is still not asserted automatically. `MigrationService` has an agent caller and tests, and `PullRequestService` is wired to the `/git` PR card with tests. `GitServiceTest` covers selective file revert; the other `GitService` flows still have no direct tests.
 - `AutonomyProfile` defaults are applied by `NebulaRuntimeSettings.EffectiveAutoApproveCommands`/`EffectiveAutoApproveCategories` in both `AgentActionRunner` and `PolicySimulator`. Explicit `AutoApproveCommands` values are preserved via `AutoApproveCommandsConfigured`; profile categories act as a floor merged with explicitly configured categories.
 - Redaction is centralized for Chat/UI/`AgentActionSession`, the custom console logger, and `Microsoft.Extensions.Logging` message/exception formatting; structured log scope values are not redacted.

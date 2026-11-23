@@ -33,7 +33,7 @@ public sealed class TestRunnerService(
         };
     }
 
-    public async Task<TestRunResult> RunAllTestsAsync(string workingDirectory, TestFramework framework, int timeoutSeconds = 300, CancellationToken cancellationToken = default)
+    public async Task<TestRunResult> RunAllTestsAsync(string workingDirectory, TestFramework framework, int timeoutSeconds = 0, CancellationToken cancellationToken = default)
     {
         return framework switch
         {
@@ -237,17 +237,20 @@ public sealed class TestRunnerService(
 
     private async Task<ShellCommandResult> RunWithTimeoutAsync(string command, string workingDirectory, int timeoutSeconds, CancellationToken cancellationToken)
     {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        using var timeoutCts = timeoutSeconds > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : null;
+        timeoutCts?.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        var commandToken = timeoutCts?.Token ?? cancellationToken;
 
         try
         {
             if (executor is IDetailedShellExecutor detailedExecutor)
             {
-                return await detailedExecutor.RunCommandDetailedAsync(command, workingDirectory, cts.Token);
+                return await detailedExecutor.RunCommandDetailedAsync(command, workingDirectory, commandToken);
             }
 
-            var output = await executor.RunCommandAsync(command, cts.Token);
+            var output = await executor.RunCommandAsync(command, commandToken);
             return new ShellCommandResult
             {
                 Command = command,
@@ -257,7 +260,11 @@ public sealed class TestRunnerService(
                 Timestamp = DateTimeOffset.UtcNow
             };
         }
-        catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts is not null)
         {
             return new ShellCommandResult
             {

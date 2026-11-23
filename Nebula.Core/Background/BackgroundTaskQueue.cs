@@ -20,6 +20,7 @@ public sealed class BackgroundTaskQueue : IBackgroundTaskQueue
     {
         await _signal.WaitAsync(cancellationToken);
         _workItems.TryDequeue(out var workItem);
-        return workItem;
+        return workItem ?? throw new InvalidOperationException(
+            "Background task queue signaled without a work item.");
     }
 }

@@ -195,18 +195,7 @@ services.AddSingleton(_ => new NebulaRuntimeSettings
             ? screenshotCaptureDelay
             : 1000
 });
-services.AddSingleton<ILlamaClient>(provider =>
-{
-    var settings = provider.GetRequiredService<NebulaRuntimeSettings>();
-    return new LlamaClient(
-        timeoutSeconds: settings.LlmTimeoutSeconds,
-        loadTimeoutSeconds:
-            int.TryParse(
-                configuration["Nebula:LlmLoadTimeoutSeconds"],
-                out var llmLoadTimeout) && llmLoadTimeout > 0
-                ? llmLoadTimeout
-                : LlamaClient.DefaultLoadTimeoutSeconds);
-});
+services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
 services.AddSingleton<IShellExecutor, ShellExecutor>();
 services.AddSingleton<ISandboxRuntimeLocator, SandboxRuntimeLocator>();
 services.AddScoped<ICommandSandbox>(provider =>

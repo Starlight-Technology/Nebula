@@ -75,7 +75,7 @@ public sealed class PortDetectionServiceTest
             .Setup(value => value.RunCommandAsync(
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string?)null);
+            .ReturnsAsync(string.Empty);
 
         return new PortDetectionService(executor.Object);
     }

@@ -5,7 +5,7 @@ public sealed record TestRunRequest(
     IReadOnlyList<string> ChangedFiles,
     TestFramework Framework,
     bool RunAllIfNoMapping = false,
-    int TimeoutSeconds = 300);
+    int TimeoutSeconds = 0);
 
 public sealed record TestRunResult(
     bool Success,
@@ -54,7 +54,7 @@ public sealed record TestProjectMapping(
 public interface ITestRunnerService
 {
     Task<TestRunResult> RunTargetedTestsAsync(TestRunRequest request, CancellationToken cancellationToken = default);
-    Task<TestRunResult> RunAllTestsAsync(string workingDirectory, TestFramework framework, int timeoutSeconds = 300, CancellationToken cancellationToken = default);
+    Task<TestRunResult> RunAllTestsAsync(string workingDirectory, TestFramework framework, int timeoutSeconds = 0, CancellationToken cancellationToken = default);
     Task<TestFramework> DetectFrameworkAsync(string workingDirectory, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TestProjectMapping>> DiscoverTestProjectsAsync(string workingDirectory, CancellationToken cancellationToken = default);
     IReadOnlyList<string> MapChangedFilesToTests(IReadOnlyList<string> changedFiles, IReadOnlyList<TestProjectMapping> mappings);

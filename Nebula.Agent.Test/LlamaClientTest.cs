@@ -185,19 +185,19 @@ public class LlamaClientTest
     }
 
     [Fact]
-    public async Task get_response_async_must_fail_fast_when_model_load_timeout_expires()
+    public async Task get_response_async_must_ignore_external_httpclient_timeout()
     {
-        var client = new LlamaClient(
-            new HttpClient(new LoadTimeoutHttpMessageHandler()),
-            defaultModel: "nemotron-3.5-lightning:latest",
-            loadTimeoutSeconds: 1);
+        var handler = new DelayedGenerateHttpMessageHandler(
+            TimeSpan.FromMilliseconds(150));
+        var httpClient = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromMilliseconds(50)
+        };
+        var client = new LlamaClient(httpClient, defaultModel: "slow-model");
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.GetResponseAsync("Explique o projeto"));
+        var response = await client.GetResponseAsync("Explique o projeto");
 
-        Assert.Contains("nao conseguiu carregar", error.Message);
-        Assert.Contains("nemotron-3.5-lightning:latest", error.Message);
-        Assert.Contains("memoria", error.Message);
+        Assert.Equal("Resposta lenta", response);
     }
 
     [Fact]
@@ -297,7 +297,7 @@ public class LlamaClientTest
         }
     }
 
-    private sealed class LoadTimeoutHttpMessageHandler : HttpMessageHandler
+    private sealed class DelayedGenerateHttpMessageHandler(TimeSpan delay) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -305,11 +305,17 @@ public class LlamaClientTest
         {
             if (IsPsRequest(request))
             {
-                return PsResponse();
+                return PsResponse("slow-model");
             }
 
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            await Task.Delay(delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"response":"Resposta lenta","done":true}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
         }
     }
 }
