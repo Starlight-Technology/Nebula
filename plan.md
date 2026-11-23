@@ -8,8 +8,8 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - `[~]` Parcial: existe codigo/servico/UI, mas falta wiring, teste, enforcement ou prova E2E.
 - `[ ]` Planejado ou nao encontrado no codigo atual.
 
-Ultima reconciliacao: 2026-11-14; ultima validacao de redaction/build/testes:
-2026-11-14. Baseado em inspecao do codigo e nos builds/testes registrados em
+Ultima reconciliacao: 2026-11-22; ultima validacao de build/testes:
+2026-11-22. Baseado em inspecao do codigo e nos builds/testes registrados em
 `AGENTS.md`; nao e prova de runtime.
 
 ## Principios
@@ -46,7 +46,7 @@ Ultima reconciliacao: 2026-11-14; ultima validacao de redaction/build/testes:
 ## Fase 3 - Execucao robusta de scripts e ferramentas
 
 - [x] Criar um executor detalhado unico para comandos, scripts, escrita de arquivo e leitura de arquivo.
-- [x] Adicionar suporte a timeouts configuraveis por tipo de comando (`CommandTimeoutSeconds` para terminais e `ScriptTimeoutSeconds` para scripts, com falha clara e retry quando estourado).
+- [x] Adicionar suporte a timeouts configuraveis por tipo de comando (`CommandTimeoutSeconds` para terminais e `ScriptTimeoutSeconds` para scripts, com falha clara e retry quando estourado; default `0` desliga o timeout para maquinas lentas).
 - [x] Capturar stdout e stderr em streaming para a UI durante execucao longa (`IShellOutputObserver` + `IStreamingShellExecutor` no `ShellExecutor` por linha, fuso de linhas consecutivas por comando em `session.EmitStreamOutput` e `ActionExecutionEventKind.StreamOutput` renderizado como evento no Chat).
 - [x] Detectar prompts interativos e interromper com mensagem clara quando o comando exigir input manual (`InteractivePromptDetector` no `ShellExecutor`: leitura incremental de stdout/stderr, padroes como `[y/N]`, `Press any key`, `Continue?`, `Password:`; graca de 250 ms para processo sair sozinho; encerra com exit code -1 e orienta reformular o comando de forma nao-interativa; stdin redirecionado vazio para comandos nao-interativos).
 - [x] Adicionar sandbox opcional por workspace para execucao de comandos mais arriscados (comandos `TerminalCommand` que a policy marcaria como `AskApproval` executam dentro de container Docker isolado quando habilitado: `SandboxMode`/`SandboxImage`/`SandboxMemoryLimitMb`/`SandboxCpuLimit` em `NebulaRuntimeSettings`; `DockerCommandSandbox` usa `--rm --network none --cap-drop ALL --security-opt no-new-privileges`, monta o workspace como `/workspace:rw`, sem limites quando nao configurados; shells inelegiveis (Cmd/Unknown), outras operacoes e o fluxo com aprovacao manual/auto continuam como antes; `CommandExecution.Sandboxed` marca a execucao e a nota registra o sandbox).

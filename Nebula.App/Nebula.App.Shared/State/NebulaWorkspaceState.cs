@@ -548,7 +548,6 @@ public sealed class NebulaWorkspaceState(
                 CommandTimeoutSeconds = RuntimeSettings.CommandTimeoutSeconds,
                 ScriptTimeoutSeconds = RuntimeSettings.ScriptTimeoutSeconds,
                 MaxVerificationRetries = RuntimeSettings.MaxVerificationRetries,
-                LlmTimeoutSeconds = RuntimeSettings.LlmTimeoutSeconds,
                 MaxConsecutiveErrorRetries = RuntimeSettings.MaxConsecutiveErrorRetries,
                 EnableResultValidation = RuntimeSettings.EnableResultValidation,
                 EnableEnvironmentValidation = RuntimeSettings.EnableEnvironmentValidation,

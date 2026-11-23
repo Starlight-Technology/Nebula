@@ -177,7 +177,7 @@ public sealed class AgentRunOrchestratorTest
         Assert.Equal("ls -la", captured.Request.ApprovedAction.Command);
         Assert.Equal(OperationKind.TerminalCommand, captured.Request.ApprovedAction.OperationKind);
         Assert.Equal("/tmp/file.txt", captured.Request.ApprovedAction.TargetPath);
-        Assert.Equal(1, captured.Request.ApprovedAction.PlannedFiles.Count);
+        Assert.Single(captured.Request.ApprovedAction!.PlannedFiles!);
         Assert.Equal(ApprovalScope.Workspace, captured.Request.ApprovedAction.Scope);
         Assert.Equal(InteractionMode.Agent, captured.Request.Mode);
         Assert.Contains("Executar comando aprovado", captured.Request.Prompt);

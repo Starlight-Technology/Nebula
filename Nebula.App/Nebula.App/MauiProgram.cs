@@ -62,17 +62,7 @@ public static class MauiProgram
         builder.Services.AddBlazorWebViewDeveloperTools();
 #endif
 
-        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient(
-            timeoutSeconds: int.TryParse(
-                Environment.GetEnvironmentVariable("NEBULA_LLM_TIMEOUT_SECONDS"),
-                out var llmTimeout) && llmTimeout > 0
-                ? llmTimeout
-                : 300,
-            loadTimeoutSeconds: int.TryParse(
-                Environment.GetEnvironmentVariable("NEBULA_LLM_LOAD_TIMEOUT_SECONDS"),
-                out var llmLoadTimeout) && llmLoadTimeout > 0
-                ? llmLoadTimeout
-                : LlamaClient.DefaultLoadTimeoutSeconds));
+        builder.Services.AddSingleton<ILlamaClient>(_ => new LlamaClient());
         builder.Services.AddSingleton<IHostHardwareProbe>(_ => new HostHardwareProbe(
             commandRunner: new ProcessRuntimeCommandRunner()));
 
@@ -127,15 +117,15 @@ public static class MauiProgram
             CommandTimeoutSeconds =
                 int.TryParse(
                     Environment.GetEnvironmentVariable("NEBULA_COMMAND_TIMEOUT_SECONDS"),
-                    out var commandTimeout) && commandTimeout > 0
+                    out var commandTimeout) && commandTimeout >= 0
                     ? commandTimeout
-                    : 300,
+                    : 0,
             ScriptTimeoutSeconds =
                 int.TryParse(
                     Environment.GetEnvironmentVariable("NEBULA_SCRIPT_TIMEOUT_SECONDS"),
-                    out var scriptTimeout) && scriptTimeout > 0
+                    out var scriptTimeout) && scriptTimeout >= 0
                     ? scriptTimeout
-                    : 300,
+                    : 0,
             MaxVerificationRetries =
                 int.TryParse(
                     Environment.GetEnvironmentVariable("NEBULA_MAX_VERIFICATION_RETRIES"),

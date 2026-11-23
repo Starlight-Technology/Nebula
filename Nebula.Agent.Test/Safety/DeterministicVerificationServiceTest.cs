@@ -115,6 +115,42 @@ public sealed class DeterministicVerificationServiceTest
     }
 
     [Fact]
+    public async Task verify_must_not_add_an_internal_timeout()
+    {
+        var executor = new Mock<IShellExecutor>();
+        CancellationToken capturedToken = default;
+        executor
+            .As<IDetailedShellExecutor>()
+            .Setup(detail => detail.RunCommandDetailedAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, string, CancellationToken>((command, _, token) =>
+            {
+                capturedToken = token;
+                return Task.FromResult(new ShellCommandResult
+                {
+                    Command = command,
+                    WorkingDirectory = "C:\\repo",
+                    StandardOutput = "build ok",
+                    ExitCode = 0
+                });
+            });
+
+        var service = new DeterministicVerificationService(
+            new WorkspaceDetectorByKind(WorkspaceStackKind.DotNet),
+            executor.Object,
+            new TestLogger());
+
+        var result = await service.VerifyAsync(
+            "C:\\repo",
+            [FileWriteEvidence()]);
+
+        Assert.Equal(DeterministicVerificationVerdict.Passed, result.Verdict);
+        Assert.False(capturedToken.CanBeCanceled);
+    }
+
+    [Fact]
     public async Task verify_must_return_error_when_executor_throws()
     {
         var executor = new Mock<IShellExecutor>();

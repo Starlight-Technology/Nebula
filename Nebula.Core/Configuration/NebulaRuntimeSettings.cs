@@ -86,11 +86,9 @@ public sealed class NebulaRuntimeSettings
 
     public bool RequireDeterministicVerification { get; set; } = true;
 
-    public int CommandTimeoutSeconds { get; set; } = 300;
+    public int CommandTimeoutSeconds { get; set; }
 
-    public int ScriptTimeoutSeconds { get; set; } = 300;
-
-    public int LlmTimeoutSeconds { get; set; } = 300;
+    public int ScriptTimeoutSeconds { get; set; }
 
     public int MaxVerificationRetries { get; set; } = 2;
 
@@ -178,7 +176,6 @@ public sealed class NebulaRuntimeSettings
         CommandTimeoutSeconds = Math.Max(0, snapshot.CommandTimeoutSeconds);
         ScriptTimeoutSeconds = Math.Max(0, snapshot.ScriptTimeoutSeconds);
         MaxVerificationRetries = Math.Max(0, snapshot.MaxVerificationRetries);
-        LlmTimeoutSeconds = Math.Max(1, snapshot.LlmTimeoutSeconds);
         MaxConsecutiveErrorRetries = Math.Max(1, snapshot.MaxConsecutiveErrorRetries);
         EnableResultValidation = snapshot.EnableResultValidation;
         EnableEnvironmentValidation = snapshot.EnableEnvironmentValidation;
@@ -218,7 +215,6 @@ public sealed class NebulaRuntimeSettings
             CommandTimeoutSeconds = CommandTimeoutSeconds,
             ScriptTimeoutSeconds = ScriptTimeoutSeconds,
             MaxVerificationRetries = MaxVerificationRetries,
-            LlmTimeoutSeconds = LlmTimeoutSeconds,
             MaxConsecutiveErrorRetries = MaxConsecutiveErrorRetries,
             EnableResultValidation = EnableResultValidation,
             EnableEnvironmentValidation = EnableEnvironmentValidation,
@@ -373,13 +369,11 @@ public sealed class NebulaRuntimeSettingsSnapshot
 
     public bool RequireDeterministicVerification { get; set; } = true;
 
-    public int CommandTimeoutSeconds { get; set; } = 300;
+    public int CommandTimeoutSeconds { get; set; }
 
-    public int ScriptTimeoutSeconds { get; set; } = 300;
+    public int ScriptTimeoutSeconds { get; set; }
 
     public int MaxVerificationRetries { get; set; } = 2;
-
-    public int LlmTimeoutSeconds { get; set; } = 300;
 
     public int MaxConsecutiveErrorRetries { get; set; } = 3;
 

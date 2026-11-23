@@ -3,17 +3,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Nebula.Core.Configuration;
-
 namespace Nebula.Llama.Client;
 
 public class LlamaClient : ILlamaClient
 {
     private const string DefaultGenerateUrl = "http://localhost:11434/api/generate";
     private const string DefaultModel = "deepseek-r1:7b";
-    public const int DefaultLoadTimeoutSeconds = 180;
-    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(300);
-    private static readonly TimeSpan DefaultLoadTimeout = TimeSpan.FromSeconds(DefaultLoadTimeoutSeconds);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -21,8 +16,6 @@ public class LlamaClient : ILlamaClient
     };
 
     private readonly HttpClient httpClient;
-    private readonly TimeSpan requestTimeout;
-    private readonly TimeSpan loadTimeout;
     private IReadOnlyList<LlamaModelInfo> cachedModels = [];
     private string selectedModel;
     private bool modelNotFoundFallbackAttempted;
@@ -30,18 +23,10 @@ public class LlamaClient : ILlamaClient
     public LlamaClient(
         HttpClient? httpClient = null,
         string? defaultModel = null,
-        string? llamaUrl = null,
-        int timeoutSeconds = 0,
-        int loadTimeoutSeconds = 0)
+        string? llamaUrl = null)
     {
-        requestTimeout = timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : DefaultRequestTimeout;
-        loadTimeout = loadTimeoutSeconds > 0
-            ? TimeSpan.FromSeconds(loadTimeoutSeconds)
-            : DefaultLoadTimeout;
-        this.httpClient = httpClient ?? new HttpClient
-        {
-            Timeout = requestTimeout
-        };
+        this.httpClient = httpClient ?? new HttpClient();
+        this.httpClient.Timeout = Timeout.InfiniteTimeSpan;
         LlamaUrl = llamaUrl
             ?? Environment.GetEnvironmentVariable("LLAMA_URL")
             ?? DefaultGenerateUrl;
@@ -182,20 +167,10 @@ public class LlamaClient : ILlamaClient
 
         await EnsureModelLoadedAsync(requestModel, cancellationToken);
 
-        HttpResponseMessage response;
-        try
-        {
-            response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-        }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new InvalidOperationException(BuildRequestTimeoutMessage(requestModel), ex);
-        }
-
-        using var responseScope = response;
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         await EnsureSuccessAsync(response, requestModel);
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -503,38 +478,20 @@ public class LlamaClient : ILlamaClient
             })
         };
 
-        using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        loadCts.CancelAfter(loadTimeout);
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                loadCts.Token);
-        }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new InvalidOperationException(BuildLoadTimeoutMessage(modelName), ex);
-        }
-
-        using (response)
-        {
-            await EnsureSuccessAsync(response, modelName);
-        }
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        await EnsureSuccessAsync(response, modelName);
     }
 
     private async Task<bool> IsModelLoadedAsync(
         string modelName,
         CancellationToken cancellationToken)
     {
-        using var psCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        psCts.CancelAfter(TimeSpan.FromSeconds(10));
-
         try
         {
-            using var response = await httpClient.GetAsync(BuildApiUrl("ps"), psCts.Token);
+            using var response = await httpClient.GetAsync(BuildApiUrl("ps"), cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 return false;
@@ -542,7 +499,7 @@ public class LlamaClient : ILlamaClient
 
             var payload = await response.Content.ReadFromJsonAsync<LlamaTagsResponse>(
                 JsonOptions,
-                psCts.Token);
+                cancellationToken);
             return (payload?.Models ?? [])
                 .Any(model => ModelNamesMatch(model.Name, modelName));
         }
@@ -550,22 +507,6 @@ public class LlamaClient : ILlamaClient
         {
             return false;
         }
-    }
-
-    private string BuildLoadTimeoutMessage(string modelName)
-    {
-        return $"Ollama nao conseguiu carregar o modelo '{modelName}' em " +
-               $"{loadTimeout.TotalSeconds:F0}s. O modelo pode ser grande demais para a " +
-               "memoria/CPU disponivel ou a inicializacao travou. Use um modelo menor ou " +
-               "com menos parametros, libere memoria ou verifique os logs do Ollama.";
-    }
-
-    private string BuildRequestTimeoutMessage(string modelName)
-    {
-        return $"Ollama nao respondeu para o modelo '{modelName}' em " +
-               $"{requestTimeout.TotalSeconds:F0}s. O prompt pode ser grande demais para a " +
-               "CPU disponivel ou o modelo pode estar carregando. Aumente " +
-               "Nebula:LlmTimeoutSeconds ou use um modelo menor.";
     }
 
     private static string BuildModelLoadFailureMessage(string modelName, string details)
