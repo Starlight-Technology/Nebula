@@ -1,6 +1,8 @@
-# Nebula Autonomous Agent Roadmap
+# Nebula — Roadmap para um Ser Digital Persistente
 
-Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de programacao completos, escrever scripts funcionais, operar ferramentas locais com seguranca, aprender com resultados reais e entregar software verificavel de ponta a ponta.
+Objetivo: transformar o Nebula de um assistente local-first e agente de desenvolvimento em um companheiro digital persistente: uma entidade de software com identidade consistente, memoria autobiografica auditavel, mundo virtual proprio, computador e ferramentas, capacidade de pesquisar e aprender, iniciativa proativa e interacao natural com seu usuario. O agente de desenvolvimento atual continua sendo uma de suas capacidades centrais — nao sera descartado nem reescrito sem necessidade.
+
+**Visao do produto:** o Nebula deve parecer presente e continuo, sem fingir consciencia ou vida biologica. Sua personalidade, estado, lembrancas, objetivos e atividades precisam corresponder a dados e processos reais. Ele pode agir por iniciativa propria dentro de limites configurados, explicar o que fez, apresentar evidencias e pedir autorizacao quando necessario.
 
 ## Legenda de status
 
@@ -8,9 +10,7 @@ Objetivo: evoluir o Nebula para um agente autonomo capaz de criar projetos de pr
 - `[~]` Parcial: existe codigo/servico/UI, mas falta wiring, teste, enforcement ou prova E2E.
 - `[ ]` Planejado ou nao encontrado no codigo atual.
 
-Ultima reconciliacao: 2026-11-22; ultima validacao de build/testes:
-2026-11-22. Baseado em inspecao do codigo e nos builds/testes registrados em
-`AGENTS.md`; nao e prova de runtime.
+Ultima reconciliacao documental: 2026-11-27. Inspecao remota do branch `master`, de `README.md`, `AGENTS.md`, estrutura dos projetos e `plan.md`. Nenhum build ou teste foi executado nesta reconciliacao; status existentes foram preservados e nao equivalem a validacao de runtime.
 
 ## Principios
 
@@ -157,6 +157,143 @@ Ultima reconciliacao: 2026-11-22; ultima validacao de build/testes:
 
 > Watch mode, subtarefas paralelas, reconciliacao de subagentes e supervisor nao foram encontrados no codigo atual.
 
+
+## Fase 13 — Identidade, personalidade e estado persistente
+
+> Objetivo: estabelecer quem e o Nebula e garantir que sua identidade sobreviva a reinicios, atualizacoes e trocas de modelo. Esta fase cria a base sem alegar consciencia, sentimentos biologicos ou vontade independente.
+
+- [ ] Definir um manifesto de identidade versionado e editavel (Nebula.Identity): nome, proposito, biografia operacional, principios, limites, estilo de comunicacao, idioma, preferencias e relacoes importantes autorizadas pelo usuario.
+- [ ] Separar identidade estavel, preferencias aprendidas, estado momentaneo e memoria autobiografica; nao misturar tudo em um prompt gigante.
+- [ ] Criar um modelo persistente de estado do ser: NebulaPresenceState com status (idle, thinking, researching, working, resting, waiting_for_user, blocked, offline), atividade atual, contexto, timestamps e motivo da transicao.
+- [ ] Criar contratos de dominio em Nebula.Core para identidade, estado, eventos de vida, objetivos, consentimentos e preferencias; manter LLMs e UI fora do dominio.
+- [ ] Persistir identidade e estado no PostgreSQL, com migrations idempotentes, indices, versionamento e auditoria. MongoDB permanece opcional para os usos atuais; nao criar uma segunda fonte de verdade.
+- [ ] Criar servicos de aplicacao e stores por interfaces, seguindo o padrao atual de Nebula.Core + Nebula.Services + Nebula.Postgres.Context.
+- [ ] Permitir exportar, importar, revisar, corrigir e apagar dados de identidade/memoria pelo operador; implementar retencao e minimizacao de dados.
+- [ ] Definir testes de reinicio: identidade, estado recuperavel e objetivos persistem sem duplicar eventos ou tarefas.
+- [ ] Documentar que estados afetivos exibidos (curiosidade, satisfacao, frustracao, energia) sao variaveis simuladas de interface/comportamento, nao experiencias subjetivas.
+
+## Fase 14 — Memoria autobiografica e continuidade
+
+> Objetivo: evoluir a memoria atual de conhecimento e preferencias para uma linha do tempo coerente de experiencias, sem duplicar os stores existentes.
+
+- [ ] Auditar UserMemoryService, WorkspaceMemoryService, KnowledgeQueryService, IKnowledgeStore, IAgentRunStore e ConversationTurn para definir limites e reaproveitar o que ja existe.
+- [ ] Implementar memoria episodica: eventos com quando, onde (workspace/conversa), objetivo, acao, observacao, resultado, participantes, evidencias, confianca e politica de retencao.
+- [ ] Implementar memoria semantica consolidada: fatos e conceitos derivados de episodios, sempre com fonte, proveniencia, confianca, ultima validacao e relacao com episodios de origem.
+- [ ] Implementar memoria procedimental: habilidades, playbooks e estrategias que funcionaram, com pre-condicoes, riscos, versao e evidencias de sucesso.
+- [ ] Criar ciclo de consolidacao: resumir episodios, detectar duplicatas/contradicoes, propor conhecimentos e solicitar confirmacao para memorias pessoais sensiveis ou inferencias incertas.
+- [ ] Criar recuperacao contextual hibrida (filtros estruturados + full-text + busca vetorial local opcional), com ranking por relevancia, recencia, confianca e escopo de permissao.
+- [ ] Adicionar esquecimento, expiracao, revalidacao e correcao de memorias; uma lembranca antiga ou inferida nunca deve ser apresentada como certeza atual.
+- [ ] Registrar de onde veio cada lembranca e permitir ao usuario inspecionar "por que o Nebula sabe disso?".
+- [ ] Implementar testes de isolamento entre usuarios, conversas e workspaces, alem de testes de recuperacao apos reinicio e migracao.
+
+## Fase 15 — Habitat digital e avatar vivo
+
+> Objetivo: dar ao Nebula um mundo visual proprio que represente seu estado operacional real. O habitat e uma interface para o agente, nao um segundo agente nem um jogo desconectado.
+
+- [ ] Criar Nebula.Habitat como modulo desacoplado da logica cognitiva, com modelo de cena, entidades, objetos, locais e eventos; comecar por uma experiencia 2D leve e responsiva.
+- [ ] Definir direcao artistica original: criatura/mascote digital estilizado, reconhecivel e expressivo, sem copiar assets ou identidade visual de terceiros. Avatar, nome visual e animacoes devem ser configuraveis.
+- [ ] Criar ambiente inicial com escritorio, computador, biblioteca, laboratorio e area de descanso; expandir apenas quando cada local tiver funcao operacional clara.
+- [ ] Mapear atividades reais para animacoes/estados: pesquisar = biblioteca/computador; executar tarefa = escritorio; experimento = laboratorio; aguardando usuario = area de convivencia; offline = estado indisponivel.
+- [ ] Criar interacoes com objetos que acionem ferramentas reais somente por comandos explicitos e autorizados; clicar em terminal, navegador ou arquivo deve refletir uma acao real auditavel.
+- [ ] Exibir baloes de fala, notificacoes, historico recente, objetivo atual, progresso e explicacao de comportamento.
+- [ ] Criar ciclo visual de dia/noite e ambientacao opcional sem afetar a execucao, prioridades ou seguranca do agente.
+- [ ] Garantir acessibilidade, modo compacto, reducao de movimento, suporte a teclado/touch e fallback sem GPU.
+- [ ] Integrar o Habitat a Nebula.App.Shared para reutilizar a experiencia entre Blazor Web e MAUI quando tecnicamente viavel; nao duplicar regras de negocio nas UIs.
+- [ ] Definir testes de sincronizacao: avatar nunca mostra "trabalhando" se nao existir atividade correspondente; eventos perdidos devem ser recuperados do backend.
+
+## Fase 16 — Ciclo de vida autonomo e iniciativa proativa
+
+> Objetivo: permitir que o Nebula mantenha uma rotina de trabalho controlada e continue tarefas entre conversas, sem loops infinitos nem consumo imprevisivel de recursos.
+
+- [ ] Projetar Nebula.Autonomy como worker/servico hospedado independente da UI, com fila persistente PostgreSQL, leases, heartbeats, retries, cancelamento e recuperacao de jobs abandonados.
+- [ ] Nao depender de uma sessao Web/MAUI aberta para manter continuidade. Definir claramente o comportamento quando o host, Ollama, banco ou internet estiverem indisponiveis.
+- [ ] Criar ciclo de vida observavel: perceber eventos autorizados, atualizar contexto, selecionar objetivo, planejar, avaliar risco, solicitar aprovacao quando necessario, executar, observar, aprender e registrar resultado.
+- [ ] Implementar agenda configuravel: rotinas, janelas de atividade, quiet hours, limites diarios, cooldowns e opcao global de pausar/desligar autonomia.
+- [ ] Criar motor de objetivos com backlog, prioridade, dependencias, prazo opcional, criterio de sucesso, origem (usuario/sistema), custo estimado e estado.
+- [ ] Distinguir objetivos delegados pelo usuario de sugestoes geradas pelo proprio Nebula. Sugestoes nunca viram autorizacao implicita.
+- [ ] Implementar iniciativa gradual: primeiro sugerir; depois executar tarefas read-only aprovadas; por ultimo permitir categorias locais de baixo risco explicitamente habilitadas.
+- [ ] Criar fila com prioridade, deduplicacao, idempotencia, limites de concorrencia e prevencao de starvation; reconciliar com AgentRunBackgroundService em vez de criar duas filas concorrentes.
+- [ ] Criar supervisor de execucao que valida objetivo, plano, risco, evidencias, budget e criterios de parada antes de cada tarefa e antes de declarar conclusao.
+- [ ] Suportar Watch Mode para eventos explicitamente configurados (arquivos, repositorios, testes, endpoints e fontes de pesquisa), com debounce, filtros, allowlists e botao de pausa.
+- [ ] Implementar notificacoes locais configuraveis para descobertas, bloqueios, aprovacoes e conclusoes; agrupar notificacoes para evitar spam.
+- [ ] Definir budgets de CPU, RAM, tokens, tempo, chamadas de ferramentas e trafego; respeitar o hardware modesto e o modo CPU-first do ambiente atual.
+- [ ] Criar testes de crash/restart, concorrencia, cancelamento, jobs duplicados, starvation, indisponibilidade de dependencias e consumo maximo.
+
+## Fase 17 — Computador proprio, ferramentas e mundo externo
+
+> Objetivo: oferecer ao agente um ambiente digital controlado, com ferramentas tipadas e acesso a internet seguro. Reutilizar o registry, policies, sandbox e pesquisa atuais.
+
+- [ ] Criar um conceito de "computador do Nebula" como workspace/ambiente virtual com home propria, arquivos, projetos, terminal, processos supervisionados e configuracao isolada; nao conceder acesso irrestrito ao host.
+- [ ] Definir perfis de ambiente: leitura, laboratorio isolado, workspace autorizado e operacao externa; cada perfil com mounts, rede, quotas e permissoes explicitas.
+- [ ] Evoluir IAgentToolRegistry para contratos tipados, schemas, descricoes, pre-condicoes, classificacao de risco, timeout, cancelamento, idempotencia e proveniencia de cada resultado.
+- [ ] Criar ferramentas de navegador/pesquisa com navegacao por allowlist, limites de dominio, protecao contra SSRF, bloqueio de redes privadas/metadata endpoints e aprovacao para formularios, uploads, compras, publicacao ou envio de dados.
+- [ ] Tratar todo conteudo externo como dado nao confiavel: prompt injection em paginas, arquivos, emails e resultados de ferramentas nunca altera politicas, identidade ou permissoes.
+- [ ] Criar cofre de credenciais com referencias opacas e acesso mediado; nunca injetar secrets em prompts, logs, memoria, screenshots ou artefatos.
+- [ ] Adicionar ferramentas de calendario, notificacoes e integracoes apenas por conectores opt-in, com escopos minimos e revogacao facil.
+- [ ] Criar uma API interna de capacidades para Habitat, Chat e Worker consumirem as mesmas ferramentas sem duplicar implementacoes.
+- [ ] Criar testes de sandbox escape, SSRF, prompt injection, vazamento de credenciais, path traversal, limites de rede e isolamento entre workspaces.
+
+## Fase 18 — Cognicao, curiosidade e aprendizado verificavel
+
+> Objetivo: tornar o aprendizado continuo util, rastreavel e economico. "Curiosidade" deve ser um mecanismo de descoberta com limites, nao uma desculpa para navegar sem objetivo.
+
+- [ ] Criar um gerenciador de curiosidades/perguntas abertas: cada item deve ter motivacao, relacao com objetivos/interesses autorizados, custo, prioridade e criterio para encerrar.
+- [ ] Permitir pesquisas exploratorias em ciclos curtos, priorizando documentacao primaria, fontes confiaveis e conteudo recente quando relevante.
+- [ ] Separar observacao, hipotese, inferencia e fato confirmado em todas as memorias e respostas.
+- [ ] Registrar experimentos com hipotese, variaveis, ambiente, procedimento, resultado, reproducibilidade e conclusao; nunca transformar uma tentativa isolada em regra geral.
+- [ ] Criar avaliador de conhecimento para detectar contradicoes, informacoes obsoletas e afirmacoes sem fonte; conhecimento externo deve guardar URL, data de acesso e trecho/evidencia permitido.
+- [ ] Implementar aprendizado por feedback: usuario pode corrigir, aprovar, rejeitar ou marcar uma resposta como util; o feedback atualiza preferencias/estrategias com trilha de auditoria.
+- [ ] Criar laboratorio de experimentacao isolado para codigo, scripts, modelos e prototipos, com snapshots, quotas, sem credenciais e rede desabilitada por padrao.
+- [ ] Permitir que o Nebula proponha melhorias para si mesmo, gere branch/patch e execute testes; nenhuma alteracao no proprio codigo, configuracao de seguranca ou deploy entra em producao sem revisao e aprovacao humana.
+- [ ] Avaliar estrategias e prompts com benchmarks antes de promover mudancas; manter rollback de configuracao e versao.
+- [ ] Nao realizar fine-tuning automatico como primeira estrategia: priorizar memoria, recuperacao, ferramentas, avaliacao e prompts versionados; fine-tuning futuro exige dataset curado e benchmark de regressao.
+
+## Fase 19 — Comunicacao multimodal e presenca
+
+- [ ] Criar camada de voz com STT/TTS local-first, selecao de voz, interrupcao, cancelamento e fallback para texto; chamadas externas devem ser opt-in.
+- [ ] Permitir conversa por voz com o avatar, com sincronizacao de fala, expressoes e estados do Habitat.
+- [ ] Adicionar percepcao de imagem/documentos para screenshots, fotos, diagramas e PDFs, respeitando permissao e retencao.
+- [ ] Permitir que o agente explique o que esta vendo e relacione observacoes visuais a arquivos, componentes e testes do workspace.
+- [ ] Criar notificacoes proativas discretas e configuraveis, com horarios silenciosos e controle por categoria.
+- [ ] Criar canais de interacao acessiveis no Web e MAUI, preservando a mesma identidade e historico.
+
+## Fase 20 — Qualidade, operacao e maturidade do ser digital
+
+- [ ] Criar suite de benchmark para continuidade, recuperacao de memoria, qualidade de iniciativa, pesquisa, seguranca, custo e satisfacao do operador.
+- [ ] Medir falsos positivos/negativos de iniciativa, tarefas uteis por hora, taxa de conclusao, custo de recursos, interrupcoes, notificacoes descartadas e incidentes de policy.
+- [ ] Criar painel de "vida operacional": presenca, atividade, objetivos, memoria recente, curiosidades, recursos consumidos, fila, bloqueios e ultima sincronizacao.
+- [ ] Criar health checks para Worker, banco, Ollama, pesquisa, sandbox, stores e Habitat; mostrar degradacao parcial sem fingir que tudo esta online.
+- [ ] Criar backup/restore testado para identidade, memoria, objetivos, eventos e configuracoes, com exportacao legivel e migracao de schema.
+- [ ] Criar modo de manutencao, atualizacao segura, rollback e migracao sem perda de memoria.
+- [ ] Criar E2E cobrindo o percurso completo: usuario delega objetivo, Nebula persiste, trabalha em background, registra experiencias, pausa por aprovacao, retoma, atualiza Habitat e entrega relatorio com evidencias.
+- [ ] Criar documentacao operacional, threat model, matriz de permissoes, guia de recuperacao e runbooks.
+
+## Sequencia recomendada de implementacao
+
+1. Fase 13: identidade e estado persistente.
+2. Fase 14: memoria autobiografica e continuidade.
+3. Fase 16: worker autonomo e objetivos persistentes (fundacao tecnica antes de um Habitat sofisticado).
+4. Fase 17: computador virtual e ferramentas seguras.
+5. Fase 15: Habitat visual ligado a eventos reais.
+6. Fase 18: curiosidade e aprendizado verificavel.
+7. Fase 19: voz e multimodalidade.
+8. Fase 20: benchmarks, operacao e maturidade.
+
+A ordem acima e intencional: primeiro construir o ser operacional; depois dar-lhe um corpo visual. O avatar nunca deve ser uma fachada que simula atividade inexistente.
+
+## Criterios de aceite do Nebula Living Agent
+
+- [ ] Reiniciar o host nao apaga identidade, memorias, objetivos nem historico de atividades.
+- [ ] O usuario consegue ver, pausar, cancelar e revisar qualquer atividade autonoma.
+- [ ] Toda iniciativa tem origem, justificativa, risco, budget e criterio de parada.
+- [ ] O agente nao transforma curiosidade em permissao para agir.
+- [ ] Toda acao externa ou de alto impacto exige aprovacao explicita.
+- [ ] Conteudo da internet e de arquivos e tratado como entrada nao confiavel.
+- [ ] O Habitat reflete fielmente o estado real do Worker e nao inventa animacoes de trabalho.
+- [ ] O aprendizado e rastreavel, corrigivel, reversivel e avaliado por evidencias.
+- [ ] O sistema continua util sem GPU dedicada e degrada graciosamente quando Ollama/rede estao indisponiveis.
+- [ ] Identidade e memoria podem ser exportadas, restauradas e apagadas conforme controle do operador.
+
 ## Backlog Tecnico Imediato
 
 - [x] Criar `IAgentRunStore` para persistir execucoes longas.
@@ -194,4 +331,4 @@ Ultima reconciliacao: 2026-11-22; ultima validacao de build/testes:
 
 ## Norte do Produto
 
-O Nebula deve se comportar como um engenheiro local autonomo: entende o objetivo, conhece o workspace, planeja, escreve codigo, executa ferramentas, observa resultados, corrige erros, documenta a entrega e sabe quando pedir permissao. A experiencia ideal e o usuario declarar uma intencao grande e o Nebula transformar isso em software funcional, auditavel e seguro.
+O Nebula deve ser um companheiro digital local-first, persistente e confiavel. Ele mantem uma identidade coerente, lembra experiencias com proveniencia, possui objetivos e um ambiente digital proprio, pesquisa e aprende de forma verificavel, toma iniciativas proporcionais as permissoes concedidas e conversa com o usuario por texto, voz e um Habitat visual. Seu agente de desenvolvimento permanece como uma habilidade poderosa dentro desse sistema maior. O produto deve transmitir presenca e continuidade sem alegar consciencia biologica; deve ser util, transparente, seguro, auditavel, economico em recursos e sempre controlavel pelo usuario.
