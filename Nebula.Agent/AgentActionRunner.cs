@@ -58,6 +58,19 @@ public sealed class AgentActionRunner : IAgentActionRunner
         @"\b(?:index|script|style|app|main|program|page|site|calc|calculator)\.[A-Za-z0-9]+\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex[] FileWriteTargetRegexes =
+    [
+        new(
+            @"\b(?:write-file|touch|truncate)\s+(?<path>""[^""]+""|'[^']+'|\S+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(
+            @"(?:^|\s)>{1,2}\s*(?<path>""[^""]+""|'[^']+'|\S+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(
+            @"\b(?:set-content|out-file|add-content)\b(?:\s+-path)?\s+(?<path>""[^""]+""|'[^']+'|\S+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled)
+    ];
+
     private static readonly Regex FrontendImplementationRegex = new(
         @"\b(?:html|css|javascript|ecmascript|front-?end|web\s*page|p[aá]gina\s+web|website|web\s*site)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -5415,6 +5428,37 @@ public sealed class AgentActionRunner : IAgentActionRunner
             : path.Replace('/', '\\');
     }
 
+    private static bool TryExtractFileWriteTarget(
+        string? command,
+        out string targetPath)
+    {
+        targetPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return false;
+        }
+
+        foreach (var regex in FileWriteTargetRegexes)
+        {
+            var match = regex.Match(command);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var candidate = match.Groups["path"].Value
+                .Trim()
+                .Trim('\'', '"');
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                targetPath = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string? TryExtractScriptPath(
         string? targetPath,
         string command,
@@ -6161,7 +6205,7 @@ public sealed class AgentActionRunner : IAgentActionRunner
             - grep: provide pattern (regular expression); optional include glob, targetPath and maxResults. It only searches inside the workspace.
             For PlannedPatch (DEFAULT for new code and multi-file code changes): provide targetPath as the root directory and plannedFiles with one {path, content} object per file; path must be relative to that root (e.g. "src/App.cs"). Every plannedFiles[].content must be the COMPLETE file, including closing tags and braces. Never emit partial or truncated content. If a file is too large for one response, split it into multiple PlannedPatch steps instead of shortening it. Before returning, check that every HTML file has </html> and every CSS/JS file has balanced braces.
             For ScriptContent (runnable scripts): provide content, targetPath with actual .py/.cs path, and language.
-            For FileWrite (a single text/data file, such as README, notes, JSON or config): provide content and targetPath with the actual path.
+            For FileWrite (a single text/data file, such as README, notes, JSON or config): provide content and targetPath with the actual path. targetPath is REQUIRED; never put the path only in command and never use plannedFiles for FileWrite.
             For FileRead: provide targetPath with the exact absolute path of the requested file, based on the workspace context or working directory (command is optional). Never invent a path or use a placeholder.
             For TerminalCommand/ScriptExecution: provide the command.
             For ProjectScaffold (ONLY explicit new-project-from-template requests): provide templateId (e.g. dotnet-console, dotnet-api, python-script, python-package, node-cli) and targetPath as the project directory. Do not use it when the user asks for specific files or frontend HTML/CSS/JS content; use PlannedPatch instead. Use the Available project templates list above when present.
@@ -6602,6 +6646,43 @@ public sealed class AgentActionRunner : IAgentActionRunner
             ValidateToolArguments(decision.Action, tool);
         }
 
+        var writesSingleFile =
+            decision.Action.OperationKind is OperationKind.FileWrite or OperationKind.ScriptContent ||
+            (decision.Action.OperationKind == OperationKind.Unknown &&
+             !string.IsNullOrWhiteSpace(decision.Action.Content));
+        if (writesSingleFile)
+        {
+            if (string.IsNullOrWhiteSpace(decision.Action.TargetPath))
+            {
+                var inferredTarget = decision.Action.PlannedFiles is { Count: 1 }
+                    ? decision.Action.PlannedFiles[0].RelativePath
+                    : null;
+                if (string.IsNullOrWhiteSpace(inferredTarget) &&
+                    TryExtractFileWriteTarget(decision.Action.Command, out var commandTarget))
+                {
+                    inferredTarget = commandTarget;
+                }
+
+                if (!string.IsNullOrWhiteSpace(inferredTarget))
+                {
+                    decision.Action.TargetPath = NormalizePathSeparators(
+                        inferredTarget.Trim());
+                    ValidatePathArgument(decision.Action.TargetPath, "targetPath");
+                }
+            }
+
+            // plannedFiles belongs to PlannedPatch; a FileWrite that also carries
+            // them must not be rejected because of a patch-only path rule.
+            decision.Action.PlannedFiles = null;
+
+            if (string.IsNullOrWhiteSpace(decision.Action.TargetPath))
+            {
+                throw new ArgumentException(
+                    "The ReAct decision for FileWrite/ScriptContent requires targetPath " +
+                    "with the actual file path. Put the file path in targetPath, not only in command.");
+            }
+        }
+
         if (decision.Action.OperationKind == OperationKind.ProjectScaffold)
         {
             ValidateProjectScaffoldIntent(decision.Action, requestObjective);
@@ -6629,7 +6710,8 @@ public sealed class AgentActionRunner : IAgentActionRunner
             }
         }
 
-        if (decision.Action.PlannedFiles is { Count: > 0 } plannedFiles)
+        if (decision.Action.OperationKind == OperationKind.PlannedPatch &&
+            decision.Action.PlannedFiles is { Count: > 0 } plannedFiles)
         {
             var normalizedFiles = new List<PlannedPatchFile>(plannedFiles.Count);
             foreach (var file in plannedFiles)

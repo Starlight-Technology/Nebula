@@ -2226,6 +2226,77 @@ public sealed class AgentActionRunnerTest
     }
 
     [Fact]
+    public async Task run_async_must_infer_file_write_target_from_write_file_command()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "note.txt");
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                command: $"write-file \"{targetPath}\"",
+                content: "hello from command path",
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create note.txt", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(targetPath));
+        Assert.Equal("hello from command path", await File.ReadAllTextAsync(targetPath));
+    }
+
+    [Fact]
+    public async Task run_async_must_ignore_planned_files_on_file_write()
+    {
+        using var workspace = new TempTestWorkspace();
+        var targetPath = Path.Combine(workspace.Path, "note.txt");
+        const string content = "hello with stray planned files";
+
+        var decisions = new Queue<string>(
+        [
+            StructuredActionDecision(
+                "I need to create the note file.",
+                "Create note.txt",
+                OperationKind.FileWrite,
+                content: content,
+                targetPath: targetPath,
+                plannedFiles:
+                [
+                    new PlannedPatchFile(targetPath, content)
+                ],
+                workingDirectory: workspace.Path),
+            CompleteDecision(
+                "The note file was created.",
+                "Created note.txt.")
+        ]);
+        var llamaClientMock = CreateLlamaClientMock();
+        SetupDecisionSequence(llamaClientMock, decisions);
+
+        var runner = CreateRunner(llamaClientMock);
+
+        var result = await runner.RunAsync(
+            CreateRequest("Create note.txt", workspace.Path),
+            progress: null);
+
+        Assert.Equal(ActionExecutionStatus.Completed, result.ActionStatus);
+        Assert.True(File.Exists(targetPath));
+        Assert.Equal(content, await File.ReadAllTextAsync(targetPath));
+    }
+
+    [Fact]
     public async Task run_async_must_request_approval_for_non_allowlisted_write_without_sandbox()
     {
         using var workspace = new TempTestWorkspace();
