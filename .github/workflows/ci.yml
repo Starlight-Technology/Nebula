@@ -52,4 +52,6 @@ jobs:
         run: dotnet test Nebula.App.Test/Nebula.App.Test.csproj --no-build -v minimal
 
       - name: Validate docker compose
+        env:
+          NEBULA_WEB_AUTH_TOKEN: ci-validation-placeholder-not-a-secret
         run: docker compose config >/dev/null && echo "compose OK"
